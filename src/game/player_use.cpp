@@ -1,0 +1,1255 @@
+#ifndef KISAK_SP 
+#error This file is for SinglePlayer only 
+#endif
+
+#include "player_use.h"
+#include "g_local.h"
+#include <script/scr_const.h>
+#include "g_main.h"
+#include "sentient.h"
+#include <script/scr_vm.h>
+#include <server/sv_game.h>
+#include <server/sv_public.h>
+#include "actor_grenade.h"
+#include "turret.h"
+#include <aim_assist/aim_target.h>
+#include "actor_events.h"
+#include "bullet.h"
+
+
+void __cdecl Player_UseEntity(gentity_s *playerEnt, gentity_s *useEnt)
+{
+    int eType; // r11
+    int handler; // r10
+    void(__cdecl * touch)(gentity_s *, gentity_s *, gentity_s *); // r11
+    gentity_s *v7; // r5
+
+    if (!playerEnt)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\player_use.cpp", 48, 0, "%s", "playerEnt");
+    if (!playerEnt->client)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\player_use.cpp", 49, 0, "%s", "playerEnt->client");
+    if (!useEnt)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\player_use.cpp", 50, 0, "%s", "useEnt");
+    if (!useEnt->r.inuse)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\player_use.cpp", 52, 0, "%s", "useEnt->r.inuse");
+    eType = useEnt->s.eType;
+    if (eType == 2)
+    {
+        Scr_AddEntity(playerEnt);
+        Scr_Notify(useEnt, scr_const.touch, 1u);
+        handler = useEnt->handler;
+        useEnt->active = 1;
+        touch = (void(__cdecl *)(gentity_s *, gentity_s *, gentity_s *))entityHandlers[handler].touch;
+        if (touch)
+        {
+            v7 = 0;
+        LABEL_16:
+            touch(useEnt, playerEnt, v7);
+        }
+    }
+    else
+    {
+        if (eType == 14)
+            Sentient_StealClaimNode(playerEnt->sentient, useEnt->sentient);
+        Scr_AddEntity(playerEnt);
+        Scr_Notify(useEnt, scr_const.trigger, 1u);
+        touch = entityHandlers[useEnt->handler].use;
+        if (touch)
+        {
+            v7 = playerEnt;
+            goto LABEL_16;
+        }
+    }
+    playerEnt->client->useHoldEntity.setEnt(NULL);
+}
+
+int __cdecl Player_ActivateCmd(gentity_s *ent)
+{
+    int result; // r3
+    gentity_s *v3; // r4
+    gclient_s *client; // r11
+    int pm_flags; // r10
+    int weaponstate; // r10
+    int cursorHintEntIndex; // r11
+
+    if (!ent)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\player_use.cpp", 90, 0, "%s", "ent");
+    if (!ent->r.inuse)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\player_use.cpp", 91, 0, "%s", "ent->r.inuse");
+    if (!ent->client)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\player_use.cpp", 92, 0, "%s", "ent->client");
+    if (!Scr_IsSystemActive())
+        return 0;
+    ent->client->useHoldEntity.setEnt(NULL);
+    v3 = G_IsVehicleUnusable(ent);
+    if (v3)
+    {
+        Player_UseEntity(ent, v3);
+        return 1;
+    }
+    client = ent->client;
+    if (ent->active)
+    {
+        if ((client->ps.weapFlags & 0x800) == 0)
+        {
+            result = 1;
+            ent->active = (client->ps.eFlags & 0x300) == 0 ? 0 : 2;
+            return result;
+        }
+    }
+    else
+    {
+        pm_flags = client->ps.pm_flags;
+        if ((pm_flags & 4) == 0 && (pm_flags & 0x8000) == 0)
+        {
+            weaponstate = client->ps.weaponstate;
+            if (weaponstate < 15 || weaponstate > 20)
+            {
+                cursorHintEntIndex = client->ps.cursorHintEntIndex;
+                if (cursorHintEntIndex == ENTITYNUM_NONE)
+                    return 0;
+                if (!g_entities[cursorHintEntIndex].r.inuse)
+                    MyAssertHandler(
+                        "c:\\trees\\cod3\\cod3src\\src\\game\\player_use.cpp",
+                        134,
+                        0,
+                        "%s",
+                        "g_entities[ ent->client->ps.cursorHintEntIndex ].r.inuse");
+                ent->client->useHoldEntity.setEnt(&g_entities[ent->client->ps.cursorHintEntIndex]);
+                ent->client->useHoldTime = level.time;
+            }
+        }
+    }
+    return 1;
+}
+
+void __cdecl Player_ActivateHoldCmd(gentity_s *ent)
+{
+    gclient_s *client; // r11
+    gentity_s *useEnt; // r30
+    unsigned int v4; // r3
+
+    if (!ent)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\player_use.cpp", 150, 0, "%s", "ent");
+    if (!ent->client)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\player_use.cpp", 151, 0, "%s", "ent->client");
+    if (Scr_IsSystemActive())
+    {
+        if (ent->client->useHoldEntity.isDefined())
+        {
+            client = ent->client;
+            if (level.time - client->useHoldTime >= g_useholdtime->current.integer)
+            {
+                useEnt = client->useHoldEntity.ent();
+
+                iassert(useEnt->s.number == ent->client->useHoldEntity.entnum());
+                iassert(useEnt->r.inuse);
+
+                Player_UseEntity(ent, useEnt);
+            }
+        }
+    }
+}
+
+void __cdecl Player_UpdateActivate(gentity_s *ent)
+{
+    char v2; // r28
+    gclient_s *client; // r11
+
+    iassert(ent);
+    iassert(ent->client);
+
+    v2 = 0;
+    ent->client->ps.weapFlags &= ~1u;
+    if (ent->client->useHoldEntity.isDefined())
+    {
+        client = ent->client;
+        if ((client->oldbuttons & 0x20) != 0 && (client->buttons & 0x20) == 0)
+        {
+        LABEL_13:
+            ent->client->ps.weapFlags |= 1u;
+            return;
+        }
+    }
+    if ((ent->client->latched_buttons & 0x28) != 0)
+        v2 = Player_ActivateCmd(ent);
+    if (!ent->client->useHoldEntity.isDefined() && !v2)
+    {
+        if ((ent->client->latched_buttons & 0x20) == 0)
+            return;
+        goto LABEL_13;
+    }
+    if ((ent->client->buttons & 0x28) != 0)
+        Player_ActivateHoldCmd(ent);
+    ent->client->useButtonDone = 1;
+}
+
+int __cdecl compare_use(float *pe1, float *pe2)
+{
+    return (int)(float)(pe1[1] - pe2[1]);
+}
+
+int __cdecl Player_GetUseList(gentity_s *ent, useList_t *useList, int prevHintEntIndex)
+{
+    int v6; // r22
+    gclient_s *client; // r29
+    int numEnts; // r3
+    unsigned int v11; // r27
+    useList_t *v12; // r30
+    int *v13; // r23
+    int i; // r18
+    gentity_s *gEnt; // r31
+    int eType; // r10
+    actor_s *actor; // r11
+    double value; // fp31
+    int v19; // r11
+    double v20; // fp11
+    double v21; // fp0
+    double v22; // fp12
+    double v23; // fp12
+    double v24; // fp31
+    bool v26; // mr_fpscr49
+    double v28; // fp11
+    double v29; // fp12
+    double v30; // fp0
+    unsigned int v31; // r30
+    int v32; // r27
+    bool v33; // zf
+    float *p_score; // r31
+    unsigned int v35; // r28
+    const gentity_s *v36; // r3
+    double v37; // fp0
+    float traceEnd[3];
+    //float v39; // [sp+50h] [-2340h] BYREF
+    //float v40; // [sp+54h] [-233Ch]
+    //float v41; // [sp+58h] [-2338h]
+    float viewOrigin[3];
+    //float v42; // [sp+60h] [-2330h] BYREF
+    //float v43; // [sp+64h] [-232Ch]
+    //float v44; // [sp+68h] [-2328h]
+    float mins[3]; // [sp+70h] [-2320h] BYREF
+    //float v46; // [sp+74h] [-231Ch]
+    //float v47; // [sp+78h] [-2318h]
+    float maxs[3]; // [sp+80h] [-2310h] BYREF
+    //float v49; // [sp+84h] [-230Ch]
+    //float v50; // [sp+88h] [-2308h]
+    float areaMaxs[3]; // [sp+90h] [-2300h] BYREF
+    float forward[3];
+    //float v52; // [sp+A0h] [-22F0h] BYREF
+    //float v53; // [sp+A4h] [-22ECh]
+    //float v54; // [sp+A8h] [-22E8h]
+    float areaMins[3]; // [sp+B0h] [-22E0h] BYREF
+    int v56[MAX_GENTITIES];
+
+    v6 = 0;
+    client = ent->client;
+
+    // aislop
+    //_FP12 = (float)((float)192.0f - player_throwbackOuterRadius->current.value);
+    //__asm { fsel      f31, f12, f13, f0 }
+    //
+    //G_GetPlayerViewOrigin(&client->ps, &v42);
+    //G_GetPlayerViewDirection(ent, &v52, 0, 0);
+    //v45 = client->ps.origin[0] + (float)-15.0;
+    //v46 = client->ps.origin[1] + (float)-15.0;
+    //v47 = client->ps.origin[2] + (float)0.0;
+    //v48 = client->ps.origin[0] + (float)15.0;
+    //v49 = client->ps.origin[1] + (float)15.0;
+    //v50 = client->ps.origin[2] + (float)70.0;
+    //v55[0] = v42 - (float)_FP31;
+    //v55[1] = v43 - (float)_FP31;
+    //v51[0] = v42 + (float)_FP31;
+    //v55[2] = v44 - (float)96.0;
+    //v51[1] = v43 + (float)_FP31;
+    //v51[2] = v44 + (float)96.0;
+
+    {
+        float radius = player_throwbackOuterRadius->current.value;
+        float searchRadius = (radius <= 192.0f) ? 192.0f : radius;
+
+        G_GetPlayerViewOrigin(&client->ps, viewOrigin);
+        G_GetPlayerViewDirection(ent, forward, 0, 0);
+
+        mins[0] = client->ps.origin[0] - 15.0f;
+        mins[1] = client->ps.origin[1] - 15.0f;
+        mins[2] = client->ps.origin[2] + 0.0f;
+
+        maxs[0] = client->ps.origin[0] + 15.0f;
+        maxs[1] = client->ps.origin[1] + 15.0f;
+        maxs[2] = client->ps.origin[2] + 70.0f;
+
+        areaMins[0] = viewOrigin[0] - searchRadius;
+        areaMins[1] = viewOrigin[1] - searchRadius;
+        areaMins[2] = viewOrigin[2] - 96.0f;
+
+        areaMaxs[0] = viewOrigin[0] + searchRadius;
+        areaMaxs[1] = viewOrigin[1] + searchRadius;
+        areaMaxs[2] = viewOrigin[2] + 96.0f;
+    }
+
+    numEnts = CM_AreaEntities(areaMins, areaMaxs, v56, MAX_GENTITIES, 2113536);
+    v11 = 0;
+    if (numEnts > 0)
+    {
+        v12 = useList;
+        v13 = v56;
+        for (i = numEnts; i; --i)
+        {
+            gEnt = &g_entities[*v13];
+            if (ent == gEnt)
+                goto LABEL_41;
+            eType = gEnt->s.eType;
+            if (eType != 2 && (gEnt->r.contents & 0x200000) == 0)
+            {
+                actor = gEnt->actor;
+                if (!actor || !actor->useable)
+                    goto LABEL_41;
+            }
+            if (gEnt->classname == scr_const.trigger_use_touch)
+            {
+                if (gEnt->r.absmin[0] > maxs[0]
+                    || gEnt->r.absmax[0] < mins[0]
+                    || gEnt->r.absmin[1] > maxs[1]
+                    || gEnt->r.absmax[1] < mins[1]
+                    || gEnt->r.absmin[2] > maxs[2]
+                    || gEnt->r.absmax[2] < mins[2]
+                    || !SV_EntityContact(mins, maxs, gEnt))
+                {
+                    goto LABEL_41;
+                }
+                v12->score = -144.0;
+            }
+            else
+            {
+                if (eType == 3)
+                {
+                    if (prevHintEntIndex != gEnt->s.number)
+                    {
+                        value = player_throwbackInnerRadius->current.value;
+                        if (Vec2DistanceSq(gEnt->r.currentOrigin, ent->r.currentOrigin) > (double)(float)((float)value * (float)value))
+                            goto LABEL_41;
+                    }
+                    if (((gEnt->s.lerp.pos.trDelta[2] * gEnt->s.lerp.pos.trDelta[2])
+                        + ((gEnt->s.lerp.pos.trDelta[0] * gEnt->s.lerp.pos.trDelta[0])
+                            + (gEnt->s.lerp.pos.trDelta[1] * gEnt->s.lerp.pos.trDelta[1]))) > (bg_maxGrenadeIndicatorSpeed->current.value * bg_maxGrenadeIndicatorSpeed->current.value))
+                        goto LABEL_41;
+                }
+                v19 = gEnt->s.eType;
+                if (v19 == 3)
+                    v20 = player_throwbackOuterRadius->current.value;
+                else
+                    v20 = v19 == 11 ? 128.0 : 72.0;
+                v21 = (gEnt->r.absmin[2] + gEnt->r.absmax[2]);
+                traceEnd[1] = (gEnt->r.absmin[1] + gEnt->r.absmax[1]) * 0.5f;
+                v22 = (gEnt->r.absmin[0] + gEnt->r.absmax[0]) * 0.5f;
+                traceEnd[0] = (gEnt->r.absmin[0] + gEnt->r.absmax[0]) * 0.5f;
+                traceEnd[2] = v21 * 0.5f;
+                v23 = (v22 - viewOrigin[0]);
+
+                // aislop
+                //v24 = sqrtf((float)((float)((float)v23 * (float)v23)
+                //    + (float)((float)((float)(v41 - v44) * (float)(v41 - v44))
+                //        + (float)((float)(v40 - v43) * (float)(v40 - v43)))));
+                //_FP10 = -v24;
+                //v26 = v24 > v20;
+                //__asm { fsel      f11, f10, f29, f31 }
+                //v28 = (float)((float)1.0 / (float)_FP11);
+
+                {
+                    v24 = sqrtf(v23 * v23
+                        + (traceEnd[2] - viewOrigin[2]) * (traceEnd[2] - viewOrigin[2])
+                        + (traceEnd[1] - viewOrigin[1]) * (traceEnd[1] - viewOrigin[1]));
+
+                    // PPC: _FP10 = -v24; fsel f11, f10, f29, f31
+                    // fsel(-v24, 1.0, v24): since v24 = sqrtf >= 0, -v24 <= 0, so
+                    //   if v24 == 0: pick 1.0 (safe divisor)
+                    //   if v24 >  0: pick v24 (normal case)
+                    // Standard PPC reciprocal divide-by-zero guard.
+                    float denom = (v24 > 0.0f) ? v24 : 1.0f;
+
+                    v26 = v24 > v20;
+                    v28 = 1.0f / denom;
+                }
+
+                v29 = (float)((float)v28 * (float)v23);
+                if (v26
+                    || gEnt->classname == scr_const.trigger_use
+                    && gEnt->trigger.requireLookAt
+                    && (float)((float)(forward[0] * (float)v29)
+                        + (float)((float)(forward[2] * (float)((float)(traceEnd[2] - viewOrigin[2]) * (float)v28))
+                            + (float)(forward[1] * (float)((float)(traceEnd[1] - viewOrigin[1]) * (float)v28)))) < 0.75999999)
+                {
+                    goto LABEL_41;
+                }
+                v30 = (float)((float)-(float)((float)((float)((float)((float)(forward[0] * (float)v29)
+                    + (float)((float)(forward[2]
+                        * (float)((float)(traceEnd[2] - viewOrigin[2]) * (float)v28))
+                        + (float)(forward[1]
+                            * (float)((float)(traceEnd[1] - viewOrigin[1]) * (float)v28))))
+                    + (float)1.0)
+                    * (float)0.5)
+                    - (float)1.0)
+                    * (float)256.0);
+                v12->score = (float)-(float)((float)((float)((float)((float)(forward[0] * (float)v29)
+                    + (float)((float)(forward[2]
+                        * (float)((float)(traceEnd[2] - viewOrigin[2]) * (float)v28))
+                        + (float)(forward[1]
+                            * (float)((float)(traceEnd[1] - viewOrigin[1]) * (float)v28))))
+                    + (float)1.0)
+                    * (float)0.5)
+                    - (float)1.0)
+                    * (float)256.0;
+                if (gEnt->s.eType == 3)
+                    v12->score = (float)v30 - 512.0f;
+                if (gEnt->classname == scr_const.trigger_use)
+                    v12->score = v12->score - 256.0f;
+                if (gEnt->s.eType == ET_MG42)
+                    v12->score = v12->score - 128.0f;
+                if (gEnt->s.eType == 2 && !BG_CanItemBeGrabbed(&gEnt->s, &ent->client->ps, 0))
+                {
+                    ++v6;
+                    v12->score = v12->score + (float)10000.0;
+                }
+                v12->score = v12->score + (float)v24;
+            }
+            v12->ent = gEnt;
+            ++v11;
+            ++v12;
+        LABEL_41:
+            ++v13;
+        }
+    }
+    qsort(useList, v11, 8u, (int(__cdecl *)(const void *, const void *))compare_use);
+    v31 = v11 - v6;
+    v33 = (int)(v11 - v6) <= 0;
+    v32 = 0;
+    if (!v33)
+    {
+        p_score = &useList->score;
+        v35 = v31;
+        do
+        {
+            v36 = (const gentity_s *)*((unsigned int *)p_score - 1);
+            if (v36->classname != scr_const.trigger_use_touch)
+            {
+                traceEnd[0] = v36->r.absmin[0] + v36->r.absmax[0];
+                traceEnd[1] = v36->r.absmin[1] + v36->r.absmax[1];
+                traceEnd[2] = v36->r.absmin[2] + v36->r.absmax[2];
+
+                Vec3Scale(traceEnd, 0.5f, traceEnd);
+
+                if (v36->s.eType == ET_MG42)
+                    G_DObjGetWorldTagPos_CheckTagExists(v36, scr_const.tag_aim, traceEnd);
+
+                if (!G_TraceCapsuleComplete(viewOrigin, vec3_origin, vec3_origin, traceEnd, client->ps.clientNum, 17))
+                {
+                    ++v32;
+                    *p_score = *p_score + (float)10000.0;
+                }
+            }
+            --v35;
+            p_score += 2;
+        } while (v35);
+    }
+    qsort(useList, v31, 8u, (int(__cdecl *)(const void *, const void *))compare_use);
+    return v31 - v32;
+}
+
+void __cdecl G_UpdateFriendlyOverlay(gentity_s *ent)
+{
+    gentity_s *v2; // r30
+    actor_s *actor; // r11
+    const char *v4; // r3
+    const char *v5; // r3
+    const char *v6; // r3
+    unsigned int WeaponIndexForName; // r3
+    WeaponDef *WeaponDef; // r3
+    const char *v9; // r4
+    int v10; // r3
+    scr_vehicle_s *scr_vehicle; // r11
+    const char *v12; // r3
+    const char *v13; // r3
+    unsigned int lookAtText1; // r3
+    const char *v15; // r3
+    const char *v16; // r3
+
+    if (!ent->client->pLookatEnt.isDefined())
+        goto LABEL_18;
+    v2 = ent->client->pLookatEnt.ent();
+    actor = v2->actor;
+    if (!actor || !actor->properName)
+    {
+        if (v2->s.eType == 11)
+        {
+            if (!v2->scr_vehicle)
+                MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\player_use.cpp", 466, 0, "%s", "traceEnt->scr_vehicle");
+            scr_vehicle = v2->scr_vehicle;
+            if (scr_vehicle->lookAtText0)
+            {
+                v12 = SL_ConvertToString(scr_vehicle->lookAtText0);
+                v13 = va("%s", v12);
+                SV_SetConfigstring(CS_FRIEND_OVERLAY, v13);
+                lookAtText1 = v2->scr_vehicle->lookAtText1;
+                goto LABEL_12;
+            }
+            v9 = "none";
+        LABEL_19:
+            v10 = CS_FRIEND_OVERLAY;
+            goto LABEL_20;
+        }
+        if (v2->lookAtText0)
+        {
+            v15 = SL_ConvertToString(v2->lookAtText0);
+            v16 = va("%s", v15);
+            SV_SetConfigstring(CS_FRIEND_OVERLAY, v16);
+            lookAtText1 = v2->lookAtText1;
+        LABEL_12:
+            if (lookAtText1)
+            {
+                v9 = SL_ConvertToString(lookAtText1);
+                v10 = CS_FRIEND_OVERLAY_LAST;
+            }
+            else
+            {
+                v10 = CS_FRIEND_OVERLAY_LAST;
+                v9 = "none";
+            }
+            goto LABEL_20;
+        }
+    LABEL_18:
+        v9 = va("%s", "none");
+        goto LABEL_19;
+    }
+    v4 = SL_ConvertToString(actor->properName);
+    v5 = va("%s", v4);
+    SV_SetConfigstring(CS_FRIEND_OVERLAY, v5);
+    if (!ent->client)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\player_use.cpp", 455, 0, "%s", "ent->client");
+    v6 = SL_ConvertToString(v2->actor->weaponName);
+    WeaponIndexForName = G_GetWeaponIndexForName(v6);
+    WeaponDef = BG_GetWeaponDef(WeaponIndexForName);
+    v9 = va("%s", WeaponDef->szOverlayName);
+    v10 = CS_FRIEND_OVERLAY_LAST;
+LABEL_20:
+    SV_SetConfigstring(v10, v9);
+}
+
+int __cdecl Player_GetItemCursorHint(const gclient_s *client, const gentity_s *traceEnt)
+{
+    int index; // r31
+    unsigned int v5; // r30
+    WeaponDef *weapDef; // r31
+    WeaponDef *v7; // r3
+    weapType_t weapType; // r11
+    WeaponDef *v9; // r31
+    int result; // r3
+    weapInventoryType_t inventoryType; // r11
+    bool v12; // zf
+
+    iassert(traceEnt);
+    iassert(client);
+
+    index = traceEnt->s.index.item;
+    if (index >= 2048)
+        MyAssertHandler(
+            "c:\\trees\\cod3\\cod3src\\src\\game\\player_use.cpp",
+            513,
+            0,
+            "%s\n\t(index) = %i",
+            "(index < (128 * NUM_WEAP_ALTMODELS ))",
+            index);
+    if (bg_itemlist[index].giType != IT_WEAPON)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\player_use.cpp", 516, 0, "%s", "item->giType == IT_WEAPON");
+    v5 = index % 128;
+    weapDef = BG_GetWeaponDef(index % 128);
+    v7 = BG_GetWeaponDef(client->ps.weapon);
+    weapType = weapDef->weapType;
+    v9 = v7;
+    if (weapType == WEAPTYPE_GRENADE || BG_PlayerHasWeapon(&client->ps, v5))
+        return 0;
+    inventoryType = v9->inventoryType;
+    if (inventoryType == WEAPINVENTORY_PRIMARY)
+        return v5 + 4;
+    if (inventoryType == WEAPINVENTORY_ALTMODE)
+        return v5 + 4;
+    v12 = BG_PlayerWeaponCountPrimaryTypes(&client->ps) >= 2;
+    result = 0;
+    if (!v12)
+        return v5 + 4;
+    return result;
+}
+
+void __cdecl Player_SetTurretDropHint(gentity_s *ent)
+{
+    iassert(ent);
+    iassert(ent->client);
+    iassert(ent->active);
+
+    gclient_s* client = ent->client;
+
+    iassert((client->ps.eFlags & EF_TURRET_ACTIVE) != 0);
+    iassert(client->ps.viewlocked_entNum != ENTITYNUM_NONE);
+
+    gentity_s* turret = &level.gentities[client->ps.viewlocked_entNum];
+
+    iassert(turret->s.eType == ET_MG42);
+
+    if (*BG_GetWeaponDef(turret->s.weapon)->dropHintString)
+    {
+        client->ps.cursorHintEntIndex = ENTITYNUM_NONE;
+        client->ps.cursorHint = turret->s.weapon + 4;
+        client->ps.cursorHintString = BG_GetWeaponDef(turret->s.weapon)->dropHintStringIndex;
+    }
+}
+
+void __cdecl Player_UpdateCursorHints(gentity_s *ent)
+{
+    gclient_s *client; // r23
+    int v3; // r30
+    int scale; // r21
+    int cursorHintEntIndex; // r31
+    gclient_s *v6; // r10
+    int pm_flags; // r11
+    int weaponstate; // r11
+    int UseList; // r3
+    int v10; // r27
+    int v11; // r24
+    useList_t *v12; // r28
+    gentity_s *traceEnt; // r31
+    unsigned int weapon; // r3
+    int ItemCursorHint; // r3
+    int classname; // r11
+    int v17; // r10
+    bool v18; // cr34
+    int v19; // r8
+    useList_t v20[142]; // [sp+50h] [-4470h] BYREF
+
+    iassert(ent->client);
+
+    client = ent->client;
+    v3 = 0;
+    scale = -1;
+    cursorHintEntIndex = client->ps.cursorHintEntIndex;
+    client->ps.cursorHint = 0;
+    client->ps.cursorHintString = -1;
+    client->ps.cursorHintEntIndex = ENTITYNUM_NONE;
+
+    if (!BG_ThrowingBackGrenade(&client->ps))
+        client->ps.throwBackGrenadeTimeLeft = 0;
+
+    if (!g_reloading->current.integer && ent->health > 0)
+    {
+        G_UpdateFriendlyOverlay(ent);
+        if (!G_IsVehicleUnusable(ent))
+        {
+            if (ent->active)
+            {
+                if ((client->ps.eFlags & 0x300) != 0 && (client->ps.weapFlags & 0x800) == 0)
+                    Player_SetTurretDropHint(ent);
+            }
+            else
+            {
+                v6 = ent->client;
+                pm_flags = v6->ps.pm_flags;
+                if ((pm_flags & 4) == 0 && (pm_flags & 0x8000) == 0)
+                {
+                    weaponstate = client->ps.weaponstate;
+                    if ((weaponstate < 15 || weaponstate > 19) && !v6->bFrozen)
+                    {
+                        UseList = Player_GetUseList(ent, v20, cursorHintEntIndex);
+                        v10 = UseList;
+                        if (UseList)
+                        {
+                            v11 = 0;
+                            if (UseList > 0)
+                            {
+                                v12 = v20;
+                                while (2)
+                                {
+                                    traceEnt = v12->ent;
+                                    iassert(traceEnt);
+                                    iassert(traceEnt->r.inuse);
+
+                                    switch (traceEnt->s.eType)
+                                    {
+                                    case 0u:
+                                        classname = traceEnt->classname;
+                                        if (classname == scr_const.trigger_use || classname == scr_const.trigger_use_touch)
+                                        {
+                                            v11 = *(unsigned int *)traceEnt->s.un2;
+                                            if (v11)
+                                            {
+                                                if (traceEnt->s.un1.scale != 255)
+                                                    scale = traceEnt->s.un1.scale;
+                                            }
+                                        }
+                                        goto LABEL_47;
+                                    case 2u:
+                                        ItemCursorHint = Player_GetItemCursorHint(ent->client, traceEnt);
+                                        if (!ItemCursorHint)
+                                            goto LABEL_30;
+                                        v11 = ItemCursorHint;
+                                        goto LABEL_47;
+                                    case 3u:
+                                        if (!Actor_Grenade_InActorHands(traceEnt))
+                                        {
+                                            v17 = traceEnt->s.index.item;
+                                            v18 = traceEnt->nextthink == level.time;
+                                            client->ps.throwBackGrenadeTimeLeft = traceEnt->nextthink - level.time;
+                                            v11 = v17 - (v17 >> 7 << 7) + 4;
+                                            if (v18)
+                                                MyAssertHandler(
+                                                    "c:\\trees\\cod3\\cod3src\\src\\game\\player_use.cpp",
+                                                    682,
+                                                    0,
+                                                    "%s",
+                                                    "ps->throwBackGrenadeTimeLeft");
+                                        }
+                                        goto LABEL_47;
+                                    case 0xAu:
+                                        if (!G_IsTurretUsable(traceEnt, ent))
+                                            goto LABEL_30;
+                                        weapon = traceEnt->s.weapon;
+                                        v11 = weapon + 4;
+                                        goto LABEL_45;
+                                    case 0xBu:
+                                        if (!G_IsVehicleUsable(traceEnt, ent))
+                                            goto LABEL_30;
+                                        weapon = traceEnt->s.weapon;
+                                        v11 = 1;
+                                    LABEL_45:
+                                        if (*BG_GetWeaponDef(weapon)->szUseHintString)
+                                            scale = BG_GetWeaponDef(traceEnt->s.weapon)->iUseHintStringIndex;
+                                    LABEL_47:
+                                        client->ps.cursorHintEntIndex = traceEnt->s.number;
+                                        traceEnt->flags |= FL_CURSOR_HINT;
+                                        client->ps.cursorHint = v11;
+                                        client->ps.cursorHintString = scale;
+                                        if (!v11)
+                                            client->ps.cursorHintEntIndex = ENTITYNUM_NONE;
+                                        v19 = client->ps.cursorHintEntIndex;
+
+                                        if (v19 != ENTITYNUM_NONE && !g_entities[v19].r.inuse)
+                                            MyAssertHandler(
+                                                "c:\\trees\\cod3\\cod3src\\src\\game\\player_use.cpp",
+                                                710,
+                                                1,
+                                                "%s\n\t(ps->cursorHintEntIndex) = %i",
+                                                "(ps->cursorHintEntIndex == ((2176)-1) || g_entities[ps->cursorHintEntIndex].r.inuse)",
+                                                v19);
+                                        return;
+                                    case 0xEu:
+                                        iassert(traceEnt->actor);
+                                        v11 = 1;
+                                        if (traceEnt->actor->iUseHintString >= 0)
+                                            scale = traceEnt->actor->iUseHintString;
+                                        goto LABEL_47;
+                                    default:
+                                    LABEL_30:
+                                        ++v3;
+                                        ++v12;
+                                        if (v3 >= v10)
+                                            return;
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+gentity_s *__cdecl Player_UpdateLookAtEntityTrace(
+    trace_t *trace,
+    const float *start,
+    const float *end,
+    int entNum,
+    int contentMask,
+    unsigned __int8 *priorityMap,
+    float *forward)
+{
+    unsigned int EntityHitId; // r29
+    double v16; // fp9
+    double v17; // fp0
+    double v18; // fp8
+    double v19; // fp13
+    float v20[24]; // [sp+50h] [-60h] BYREF
+
+    iassert(trace);
+    iassert(priorityMap);
+
+
+    G_LocationalTrace(trace, start, end, entNum, contentMask, priorityMap);
+    EntityHitId = Trace_GetEntityHitId(trace);
+    if (EntityHitId >= 0x87E)
+        return nullptr;
+
+    v16 = forward[2];
+    v17 = (float)(trace->fraction * (float)15000.0);
+    v18 = start[2];
+    v19 = (float)((float)(forward[1] * (float)(trace->fraction * (float)15000.0)) + start[1]);
+    v20[0] = (float)(*forward * (float)(trace->fraction * (float)15000.0)) + *start;
+    v20[1] = v19;
+    v20[2] = (float)((float)v16 * (float)v17) + (float)v18;
+
+    if (SV_FX_GetVisibility(start, v20) < 0.000099999997)
+        return nullptr;
+    else
+        return &g_entities[EntityHitId];
+}
+
+int __cdecl Player_CheckAlmostStationary(gentity_s *ent, float *dir)
+{
+    gclient_s *client; // r29
+    float *currentOrigin; // r30
+    float *playerLOSCheckPos; // r31
+    double distSq; // fp1
+    int result; // r3
+    float dir2D[2]; // [sp+50h] [-30h] BYREF
+
+    iassert(ent->client);
+
+    dir2D[0] = dir[0];
+    dir2D[1] = dir[1];
+
+    client = ent->client;
+
+    Vec2Normalize(dir2D);
+
+    currentOrigin = ent->r.currentOrigin;
+    distSq = Vec2DistanceSq(client->playerLOSCheckPos, ent->r.currentOrigin);
+    playerLOSCheckPos = client->playerLOSCheckPos;
+    if (distSq > ai_playerLOSHalfWidth->current.value || ((client->playerLOSCheckDir[1] * dir2D[1]) + (client->playerLOSCheckDir[0] * dir2D[0])) < 0.98479998)
+    {
+        *playerLOSCheckPos = *currentOrigin;
+        client->playerLOSCheckPos[1] = currentOrigin[1];
+        client->playerLOSCheckDir[0] = dir2D[0];
+        client->playerLOSCheckDir[1] = dir2D[1];
+        client->playerLOSPosTime = level.time;
+    }
+    else
+    {
+        *playerLOSCheckPos = ((currentOrigin[0] - playerLOSCheckPos[0]) * 0.25f) + playerLOSCheckPos[0];
+        client->playerLOSCheckPos[1] = ((currentOrigin[1] - client->playerLOSCheckPos[1]) * 0.25f) + client->playerLOSCheckPos[1];
+        client->playerLOSCheckDir[0] = ((dir2D[0] - client->playerLOSCheckDir[0]) * 0.25f) + client->playerLOSCheckDir[0];
+        client->playerLOSCheckDir[1] = ((dir2D[1] - client->playerLOSCheckDir[1]) * 0.25f) + client->playerLOSCheckDir[1];
+        if (ai_playerLOSMinTime->current.integer + client->playerLOSPosTime <= level.time)
+        {
+            result = 1;
+            client->playerLOSPosTime = level.time;
+            return result;
+        }
+    }
+    return 0;
+}
+
+void __cdecl Player_DebugDrawLOS(const float *center, const float *dir, double dist2D, int debugDrawDuration)
+{
+    double yaw; // fp1
+    float maxs[3]; // [sp+50h] [-40h] BYREF
+    float mins[3]; // [sp+60h] [-30h] BYREF
+
+    mins[0] = (float)dist2D * (float)-0.5;
+    mins[1] = -ai_playerLOSHalfWidth->current.value;
+    mins[2] = -20.0;
+
+    maxs[0] = (float)dist2D * (float)0.5;
+    maxs[1] = ai_playerLOSHalfWidth->current.value;
+    maxs[2] = 20.0;
+
+    yaw = vectoyaw(dir);
+    G_DebugBox(center, mins, maxs, yaw, colorOrange, 0, debugDrawDuration);
+}
+
+void __cdecl Player_BanNodesInFront(gentity_s *ent, float dist, const float *start, const float *dir)
+{
+    double dist2D; // fp31
+    int v13; // r5
+    pathsort_t *v14; // r4
+    int iNodeCount; // r30
+    int duration; // r19
+    double v18; // fp31
+    pathsort_t *v19; // r22
+    pathnode_t *node; // r29
+    sentient_s *v21; // r3
+    sentient_s *nodeOwner; // r31
+    actor_s *actor; // r27
+    float endPoint[3]; // [sp+50h] [-E0h] BYREF
+    //float v26; // [sp+54h] [-DCh]
+    //float v27; // [sp+58h] [-D8h]
+    float center[3]; // [sp+60h] [-D0h] BYREF
+    pathsort_t nodes[4]; // [sp+70h] [-C0h] BYREF
+
+    iassert(Vec3IsNormalized(dir));
+    iassert(ent->sentient->eTeam != TEAM_DEAD);
+
+    endPoint[0] = (dist * dir[0]) + start[0];
+    endPoint[1] = (dist * dir[1]) + start[1];
+    endPoint[2] = (dist * dir[2]) + start[2];
+
+
+    dist2D = Vec2Distance(start, endPoint);
+    center[0] = (start[0] + endPoint[0]) * 0.5f;
+    center[1] = (start[1] + endPoint[1]) * 0.5f;
+    center[2] = (start[2] + endPoint[2]) * 0.5f;
+
+    iNodeCount = Path_NodesInCylinder(center, (dist2D * 0.5f), 80.0f, nodes, 4, 270332);
+
+    duration = ai_playerLOSMinTime->current.integer / 50;
+
+    if (ai_debugPlayerLOS->current.enabled)
+        Player_DebugDrawLOS(center, dir, dist2D, 1); // debug draw duration 1 is a guess
+
+    v18 = (float)(ai_playerLOSHalfWidth->current.value * ai_playerLOSHalfWidth->current.value);
+
+    if (iNodeCount > 0)
+    {
+        v19 = nodes;
+        do
+        {
+            node = v19->node;
+            if (PointToLineDistSq2D(v19->node->constant.vOrigin, start, endPoint) <= v18)
+            {
+                if (node->dynamic.pOwner.isDefined())
+                {
+                    v21 = node->dynamic.pOwner.sentient();
+                    nodeOwner = v21;
+                    if (v21)
+                    {
+                        if (v21->pClaimedNode == node)
+                        {
+                            if (Actor_PointNearNode(v21->ent->r.currentOrigin, node))
+                                goto LABEL_23;
+                            actor = nodeOwner->ent->actor;
+                            if (!actor)
+                                goto LABEL_23;
+                            if (nodeOwner->eTeam != ent->sentient->eTeam)
+                                goto LABEL_23;
+                            iassert(nodeOwner != ent->sentient);
+                            if (Actor_KeepClaimedNode(actor))
+                                goto LABEL_23;
+                            if (actor->numCoverNodesInGoal > 1)
+                            {
+                                Path_RelinquishNodeSoon(nodeOwner);
+                                node->dynamic.pOwner.setSentient(0);
+                            }
+                        }
+                    }
+                }
+                node->dynamic.inPlayerLOSTime = ai_playerLOSMinTime->current.integer + level.time;
+                if (ai_debugPlayerLOS->current.enabled)
+                    Path_DrawDebugNoLinks(node, (const float (*)[4])colorOrange, duration);
+            }
+        LABEL_23:
+            iNodeCount--;
+            ++v19;
+        } while (iNodeCount);
+    }
+}
+
+void __cdecl Player_BlockFriendliesInADS(gentity_s *ent, float dist, const float *start, const float *dir)
+{
+    int BestTarget; // r29
+    gclient_s *client; // r10
+    sentient_s *sentient; // r10
+    float end[3]; // [sp+50h] [-50h] BYREF
+
+    iassert(ent);
+    iassert(ent->client);
+
+    BestTarget = AimTarget_GetBestTarget(start, dir);
+    client = ent->client;
+    if (BestTarget == ENTITYNUM_NONE)
+    {
+        if (level.time - client->playerADSTargetTime > ai_playerADSTargetTime->current.integer)
+            return;
+    }
+    else
+    {
+        client->playerADSTargetTime = level.time;
+    }
+
+    sentient = ent->sentient;
+    end[0] = (dir[0] * dist) + start[0];
+    end[1] = (dir[1] * dist) + start[1];
+    end[2] = (dir[2] * dist) + start[2];
+    Actor_BroadcastLineEvent(ent, AI_EV_BULLET, 1 << sentient->eTeam, start, end, 0.0f);
+
+    if (ai_debugPlayerLOS->current.enabled)
+        G_DebugLine(ent->r.currentOrigin, g_entities[BestTarget].r.currentOrigin, colorCyan, 0);
+}
+
+void __cdecl Player_GrenadeThrowBlockFriendlies(
+    gentity_s *ent,
+    float dist,
+    const float *start,
+    const float *dir)
+{
+    float end[3]; // [sp+50h] [-50h] BYREF
+
+    iassert(ent);
+    iassert(ent->client);
+
+    if ((ent->client->ps.weapFlags & 2) != 0)
+    {
+        end[0] = (dir[0] * dist) + start[0];
+        end[1] = (dir[1] * dist) + start[1];
+        end[2] = (dir[2] * dist) + start[2];
+        Actor_BroadcastLineEvent(ent, AI_EV_BULLET, 1 << ent->sentient->eTeam, start, end, 0.0f);
+    }
+}
+
+void __cdecl Player_UpdateLookAtEntity(gentity_s *ent)
+{
+    gclient_s *client; // r21
+    unsigned int weapon; // r3
+    WeaponDef *weapDef; // r3
+    unsigned __int8 *prioMap; // r27
+    int number; // r6
+    gentity_s *traceEnt; // r31
+    gclient_s *v12; // r11
+    double value; // fp1
+    double v14; // fp30
+    double v15; // fp29
+    double v16; // fp28
+    const dvar_s *v17; // r11
+    double v18; // fp30
+    const dvar_s *v19; // r11
+    int v20; // r10
+    actor_s *actor; // r11
+    const dvar_s *v22; // r11
+    double v23; // fp30
+    double v24; // fp29
+    double v25; // fp28
+    double v26; // fp30
+    char v27; // r3
+    int weapFlags; // r11
+    const dvar_s *v29; // r11
+    double v30; // fp30
+    const dvar_s *v31; // r11
+    float start[3];
+    //float v32; // [sp+58h] [-E8h] BYREF
+    //float v33; // [sp+5Ch] [-E4h]
+    //float v34; // [sp+60h] [-E0h]
+    float forward[3];
+    //float v35; // [sp+68h] [-D8h] BYREF
+    //float v36; // [sp+6Ch] [-D4h]
+    //float v37; // [sp+70h] [-D0h]
+    float traceEnd[3]; // [sp+78h] [-C8h] BYREF
+    trace_t traceresult; // [sp+90h] [-B0h] BYREF
+
+    iassert(ent);
+    iassert(ent->client);
+    iassert(g_friendlyNameDist);
+    iassert(g_friendlyfireDist);
+
+    client = ent->client;
+    client->ps.weapFlags &= 0xFFFFFDE7;
+    ent->client->pLookatEnt.setEnt(NULL);
+    G_GetPlayerViewOrigin(&client->ps, start);
+    G_GetPlayerViewDirection(ent, forward, 0, 0);
+    if ((client->ps.eFlags & 0x20300) != 0)
+    {
+        iassert(client->ps.viewlocked_entNum != ENTITYNUM_NONE);
+        weapon = g_entities[client->ps.viewlocked_entNum].s.weapon;
+    }
+    else
+    {
+        weapon = ent->client->ps.weapon;
+    }
+    weapDef = BG_GetWeaponDef(weapon);
+    if (ent->client->ps.weapon && weapDef->bRifleBullet)
+        prioMap = riflePriorityMap;
+    else
+        prioMap = bulletPriorityMap;
+
+    iassert(!IS_NAN((start)[0]) && !IS_NAN((start)[1]) && !IS_NAN((start)[2]));
+    iassert(!IS_NAN((forward)[0]) && !IS_NAN((forward)[1]) && !IS_NAN((forward)[2]));
+    number = ent->s.number;
+    traceEnd[0] = (float)(forward[0] * (float)15000.0) + start[0];
+    traceEnd[1] = (float)(forward[1] * (float)15000.0) + start[1];
+    traceEnd[2] = (float)(forward[2] * (float)15000.0) + start[2];
+    traceEnt = Player_UpdateLookAtEntityTrace(&traceresult, start, traceEnd, number, 578873345, prioMap, forward);
+    if ((unsigned __int8)Player_CheckAlmostStationary(ent, forward))
+    {
+        // PPC: _FP12 = trace_distance - LOS_range; fsel f1, f12, f0, f13
+        // fsel(trace - LOS, LOS, trace) = (trace >= LOS) ? LOS : trace = min(trace, LOS)
+        float trace_distance = traceresult.fraction * 15000.0f;
+        float los_range = ai_playerLOSRange->current.value;
+        float dist = (trace_distance >= los_range) ? los_range : trace_distance;
+        Player_BanNodesInFront(ent, dist, start, forward);
+    }
+    v12 = ent->client;
+    if ((v12->ps.pm_flags & 0x10) != 0 && v12->ps.fWeaponPosFrac == 1.0)
+    {
+        value = ai_playerADS_LOSRange->current.value;
+        if (value != 0.0)
+            Player_BlockFriendliesInADS(ent, value, start, forward);
+    }
+    Player_GrenadeThrowBlockFriendlies(ent, ai_playerLOSRange->current.value, start, forward);
+    if (traceEnt)
+    {
+        if (traceEnt->classname != scr_const.trigger_lookat
+            || (ent->client->pLookatEnt.setEnt(traceEnt),
+                G_Trigger(traceEnt, ent),
+                (traceEnt = Player_UpdateLookAtEntityTrace(&traceresult, start, traceEnd, ent->s.number, 42002433, prioMap, forward)) != 0))
+        {
+            if ((traceEnt->r.contents & 0x4000) != 0)
+            {
+                if ((traceresult.surfaceFlags & 0x10) == 0)
+                {
+                    iassert(traceEnt->sentient);
+
+                    v14 = (float)(traceEnt->r.currentOrigin[0] - start[0]);
+                    v15 = (float)(traceEnt->r.currentOrigin[1] - start[1]);
+                    v16 = (float)(traceEnt->r.currentOrigin[2] - start[2]);
+                    if (((1 << traceEnt->sentient->eTeam) & ~(1 << Sentient_EnemyTeam(ent->sentient->eTeam))) != 0)
+                    {
+                        v17 = g_friendlyNameDist;
+                        if (g_friendlyNameDist->current.value > MAX_FRIENDLY_DIST)
+                        {
+                            MyAssertHandler(
+                                "c:\\trees\\cod3\\cod3src\\src\\game\\player_use.cpp",
+                                1024,
+                                0,
+                                "%s",
+                                "g_friendlyNameDist->current.value <= MAX_FRIENDLY_DIST");
+                            v17 = g_friendlyNameDist;
+                        }
+                        v18 = (float)((float)((float)v14 * (float)v14)
+                            + (float)((float)((float)v16 * (float)v16) + (float)((float)v15 * (float)v15)));
+                        if (v18 < (float)(v17->current.value * v17->current.value)
+                            && !ent->client->pLookatEnt.isDefined())
+                        {
+                            ent->client->pLookatEnt.setEnt(traceEnt);
+                        }
+                        v19 = g_friendlyfireDist;
+                        if (g_friendlyfireDist->current.value > MAX_FRIENDLY_DIST)
+                        {
+                            MyAssertHandler(
+                                "c:\\trees\\cod3\\cod3src\\src\\game\\player_use.cpp",
+                                1028,
+                                0,
+                                "%s",
+                                "g_friendlyfireDist->current.value <= MAX_FRIENDLY_DIST");
+                            v19 = g_friendlyfireDist;
+                        }
+                        if (v18 < (float)(v19->current.value * v19->current.value))
+                        {
+                            v20 = client->ps.weapFlags | 8;
+                            client->ps.weapFlags = v20;
+                            actor = traceEnt->actor;
+                            if (actor)
+                            {
+                                if (actor->bDontAvoidPlayer || (actor->Physics.iTraceMask & 0x2000000) == 0)
+                                    client->ps.weapFlags = v20 | 0x200;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        if (weapDef->enemyCrosshairRange > MAX_FRIENDLY_DIST)
+                            MyAssertHandler(
+                                "c:\\trees\\cod3\\cod3src\\src\\game\\player_use.cpp",
+                                1039,
+                                0,
+                                "%s",
+                                "weapDef->enemyCrosshairRange <= MAX_FRIENDLY_DIST");
+                        if ((float)((float)((float)v14 * (float)v14)
+                            + (float)((float)((float)v16 * (float)v16) + (float)((float)v15 * (float)v15))) < (double)(float)(weapDef->enemyCrosshairRange * weapDef->enemyCrosshairRange))
+                        {
+                            if (!ent->client->pLookatEnt.isDefined())
+                                ent->client->pLookatEnt.setEnt(traceEnt);
+                            client->ps.weapFlags |= 0x10u;
+                        }
+                    }
+                }
+                return;
+            }
+            if (traceEnt->s.eType != 11 || ent->client->pLookatEnt.isDefined())
+            {
+                if (traceEnt->lookAtText0 && !ent->client->pLookatEnt.isDefined())
+                {
+                    v29 = g_friendlyNameDist;
+                    v30 = (float)((float)((float)(traceEnt->r.currentOrigin[0] - start[0]) * (float)(traceEnt->r.currentOrigin[0] - start[0]))
+                        + (float)((float)((float)(traceEnt->r.currentOrigin[2] - start[2])
+                            * (float)(traceEnt->r.currentOrigin[2] - start[2]))
+                            + (float)((float)(traceEnt->r.currentOrigin[1] - start[1])
+                                * (float)(traceEnt->r.currentOrigin[1] - start[1]))));
+                    if (g_friendlyNameDist->current.value > MAX_FRIENDLY_DIST)
+                    {
+                        MyAssertHandler(
+                            "c:\\trees\\cod3\\cod3src\\src\\game\\player_use.cpp",
+                            1083,
+                            0,
+                            "%s",
+                            "g_friendlyNameDist->current.value <= MAX_FRIENDLY_DIST");
+                        v29 = g_friendlyNameDist;
+                    }
+                    if (v30 < (float)(v29->current.value * v29->current.value))
+                        ent->client->pLookatEnt.setEnt(traceEnt);
+                    if (traceEnt->s.eType == 5)
+                    {
+                        v31 = g_friendlyfireDist;
+                        if (g_friendlyfireDist->current.value > MAX_FRIENDLY_DIST)
+                        {
+                            MyAssertHandler(
+                                "c:\\trees\\cod3\\cod3src\\src\\game\\player_use.cpp",
+                                1089,
+                                0,
+                                "%s",
+                                "g_friendlyfireDist->current.value <= MAX_FRIENDLY_DIST");
+                            v31 = g_friendlyfireDist;
+                        }
+                        if (v30 < (float)(v31->current.value * v31->current.value))
+                        {
+                            weapFlags = client->ps.weapFlags;
+                        LABEL_83:
+                            client->ps.weapFlags = weapFlags | 8;
+                        }
+                    }
+                }
+            }
+            else
+            {
+                iassert(traceEnt->scr_vehicle);
+
+                v22 = g_friendlyNameDist;
+                v23 = (float)(traceEnt->r.currentOrigin[0] - start[0]);
+                v24 = (float)(traceEnt->r.currentOrigin[1] - start[1]);
+                v25 = (float)(traceEnt->r.currentOrigin[2] - start[2]);
+                if (g_friendlyNameDist->current.value > MAX_FRIENDLY_DIST)
+                {
+                    MyAssertHandler(
+                        "c:\\trees\\cod3\\cod3src\\src\\game\\player_use.cpp",
+                        1057,
+                        0,
+                        "%s",
+                        "g_friendlyNameDist->current.value <= MAX_FRIENDLY_DIST");
+                    v22 = g_friendlyNameDist;
+                }
+                v26 = (float)((float)((float)v23 * (float)v23)
+                    + (float)((float)((float)v25 * (float)v25) + (float)((float)v24 * (float)v24)));
+                if (v26 < (float)(v22->current.value * v22->current.value))
+                    ent->client->pLookatEnt.setEnt(traceEnt);
+                iassert(weapDef->enemyCrosshairRange <= MAX_FRIENDLY_DIST);
+
+                if (v26 < (float)(weapDef->enemyCrosshairRange * weapDef->enemyCrosshairRange) && (client->ps.eFlags & 0x20000) != 0)
+                {
+                    v27 = Sentient_EnemyTeam(ent->sentient->eTeam);
+                    weapFlags = client->ps.weapFlags;
+                    if (((1 << v27) & (1 << traceEnt->scr_vehicle->team)) != 0)
+                    {
+                        client->ps.weapFlags = weapFlags | 0x10;
+                        return;
+                    }
+                    goto LABEL_83;
+                }
+            }
+        }
+    }
+}
+

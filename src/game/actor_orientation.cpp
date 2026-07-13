@@ -1,0 +1,669 @@
+#ifndef KISAK_SP 
+#error This file is for SinglePlayer only 
+#endif
+
+#include "actor_orientation.h"
+#include "g_main.h"
+#include <universal/com_math.h>
+#include "actor_threat.h"
+#include "actor_senses.h"
+
+void __cdecl Actor_SetDesiredLookAngles(ai_orient_t *pOrient, double fPitch, double fYaw)
+{
+    if (!pOrient)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_orientation.cpp", 24, 0, "%s", "pOrient");
+    pOrient->fDesiredLookPitch = AngleNormalize360(fPitch);
+    pOrient->fDesiredLookYaw = AngleNormalize360(fYaw);
+}
+
+void __cdecl Actor_SetDesiredBodyAngle(ai_orient_t *pOrient, double fAngle)
+{
+    if (!pOrient)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_orientation.cpp", 41, 0, "%s", "pOrient");
+    pOrient->fDesiredBodyYaw = AngleNormalize360(fAngle);
+}
+
+void __cdecl Actor_SetDesiredAngles(ai_orient_t *pOrient, double fPitch, double fYaw)
+{
+    Actor_SetDesiredLookAngles(pOrient, fPitch, fYaw);
+    if (!pOrient)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_orientation.cpp", 41, 0, "%s", "pOrient");
+    pOrient->fDesiredBodyYaw = AngleNormalize360(fYaw);
+}
+
+void __cdecl Actor_SetLookAngles(actor_s *self, double fPitch, double fYaw)
+{
+    double v6; // fp1
+    double v7; // fp1
+    float v8[4]; // [sp+50h] [-30h] BYREF
+
+    if (!self)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_orientation.cpp", 70, 0, "%s", "self");
+    v6 = AngleNormalize360(fPitch);
+    self->fLookPitch = v6;
+    v8[0] = v6;
+    v7 = AngleNormalize360(fYaw);
+    self->fLookYaw = v7;
+    v8[1] = v7;
+    v8[2] = 0.0;
+    AngleVectors(v8, self->vLookForward, self->vLookRight, self->vLookUp);
+}
+
+void __cdecl Actor_SetBodyAngle(actor_s *self, double fAngle)
+{
+    gentity_s *ent; // r29
+
+    if (!self)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_orientation.cpp", 94, 0, "%s", "self");
+    ent = self->ent;
+    if (!ent)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_orientation.cpp", 97, 0, "%s", "ent");
+    ent->r.currentAngles[0] = 0.0;
+    ent->r.currentAngles[1] = AngleNormalize360(fAngle);
+    ent->r.currentAngles[2] = 0.0;
+}
+
+void __cdecl Actor_ChangeAngles(actor_s *self, double fPitch, double fYaw)
+{
+    ai_orient_t *p_CodeOrient; // r30
+    double v7; // fp29
+    double v8; // fp29
+
+    p_CodeOrient = &self->CodeOrient;
+    v7 = (float)(self->CodeOrient.fDesiredBodyYaw + (float)fYaw);
+    Actor_SetDesiredLookAngles(&self->CodeOrient, (float)(self->CodeOrient.fDesiredLookPitch + (float)fPitch), v7);
+    if (!p_CodeOrient)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_orientation.cpp", 41, 0, "%s", "pOrient");
+    p_CodeOrient->fDesiredBodyYaw = AngleNormalize360(v7);
+    v8 = (float)(self->ScriptOrient.fDesiredBodyYaw + (float)fYaw);
+    Actor_SetDesiredLookAngles(&self->ScriptOrient, (float)(self->ScriptOrient.fDesiredLookPitch + (float)fPitch), v8);
+    if (self == (actor_s *)-280)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_orientation.cpp", 41, 0, "%s", "pOrient");
+    self->ScriptOrient.fDesiredBodyYaw = AngleNormalize360(v8);
+    Actor_SetBodyAngle(self, (float)(self->ent->r.currentAngles[1] + (float)fYaw));
+    Actor_SetLookAngles(self, (float)(self->fLookPitch + (float)fPitch), (float)(self->fLookYaw + (float)fYaw));
+}
+
+void __cdecl Actor_UpdateLookAngles(actor_s *self)
+{
+    ai_orient_t *p_ScriptOrient; // r30
+    double v4; // fp31
+    long double v5; // fp2
+    double v6; // fp0
+    double v7; // fp25
+    double v8; // fp31
+    long double v9; // fp2
+    double v10; // fp0
+
+    double a2;
+
+    p_ScriptOrient = &self->ScriptOrient;
+    if (self->ScriptOrient.eMode == AI_ORIENT_INVALID)
+        p_ScriptOrient = &self->CodeOrient;
+    v4 = (float)((float)(p_ScriptOrient->fDesiredLookPitch - self->fLookPitch) * (float)0.0027777778);
+    a2 = (float)((float)((float)(p_ScriptOrient->fDesiredLookPitch - self->fLookPitch) * (float)0.0027777778) + (float)0.5);
+    v5 = floor(a2);
+    v6 = (float)((float)((float)v4 - (float)*(double *)&v5) * (float)360.0);
+    if (v6 <= 40.0)
+    {
+        if (v6 < -40.0)
+            v6 = -40.0;
+    }
+    else
+    {
+        v6 = 40.0;
+    }
+    v7 = (float)(self->fLookPitch + (float)v6);
+    v8 = (float)((float)(p_ScriptOrient->fDesiredLookYaw - self->fLookYaw) * (float)0.0027777778);
+    *(double *)&v5 = (float)((float)((float)(p_ScriptOrient->fDesiredLookYaw - self->fLookYaw) * (float)0.0027777778)
+        + (float)0.5);
+    v9 = floor(v5);
+    v10 = (float)((float)((float)v8 - (float)*(double *)&v9) * (float)360.0);
+    if (v10 <= 40.0)
+    {
+        if (v10 < -40.0)
+            v10 = -40.0;
+    }
+    else
+    {
+        v10 = 40.0;
+    }
+    Actor_SetLookAngles(self, v7, (float)(self->fLookYaw + (float)v10));
+}
+
+void __cdecl Actor_UpdateBodyAngle(actor_s *self)
+{
+    double fDesiredBodyYaw; // fp0
+    gentity_s *ent; // r11
+    double v5; // fp31
+    long double v6; // fp2
+    double v7; // fp31
+    double v8; // fp13
+    double v9; // fp0
+
+    double a2;
+
+    if (self->ScriptOrient.eMode)
+        fDesiredBodyYaw = self->ScriptOrient.fDesiredBodyYaw;
+    else
+        fDesiredBodyYaw = self->CodeOrient.fDesiredBodyYaw;
+    ent = self->ent;
+    self->fDesiredBodyYaw = fDesiredBodyYaw;
+    v5 = (float)((float)((float)fDesiredBodyYaw - ent->r.currentAngles[1]) * (float)0.0027777778);
+    a2 = (float)((float)((float)((float)fDesiredBodyYaw - ent->r.currentAngles[1]) * (float)0.0027777778) + (float)0.5);
+    v6 = floor(a2);
+    v7 = (float)((float)((float)v5 - (float)*(double *)&v6) * (float)360.0);
+    if (BG_ActorIsProne(&self->ProneInfo, level.time))
+        v8 = 0.035999998;
+    else
+        v8 = 0.30000001;
+    v9 = (float)((float)v8 * (float)50.0);
+    if (v7 > v9 || (v9 = (float)((float)v8 * (float)-50.0), v7 < v9))
+        v7 = v9;
+    Actor_SetBodyAngle(self, (float)(self->ent->r.currentAngles[1] + (float)v7));
+}
+
+void __cdecl Actor_FaceVector(ai_orient_t *pOrient, const float *v)
+{
+    float vAngle[3];
+
+    iassert(v[0] || v[1]);
+    vectoangles(v, vAngle);
+    Actor_SetDesiredLookAngles(pOrient, vAngle[0], vAngle[1]);
+    iassert(pOrient);
+    pOrient->fDesiredBodyYaw = AngleNormalize360(vAngle[1]);
+}
+
+void __cdecl Actor_FaceMotion(actor_s *self, ai_orient_t *pOrient)
+{
+    float vDir[3];
+    float forward[3];
+
+    iassert(self);
+
+    if (Actor_HasPath(self) && self->eAnimMode == AI_ANIM_MOVE_CODE)
+    {
+        if (self->moveMode
+            && Path_CompleteLookahead(&self->Path)
+            && self->Path.fLookaheadDist < 60.0f
+            && ((self->vLookForward[0] * self->Path.lookaheadDir[0])
+                + (self->vLookForward[1] * self->Path.lookaheadDir[1])) < 0.0f)
+        {
+            goto dont_change;
+        }
+        //if (ai_angularYawEnabled->current.enabled)
+        //{
+        //    vDir[0] = self->Physics.vWishDelta[0];
+        //    vDir[1] = self->Physics.vWishDelta[1];
+        //}
+        //else
+        {
+            Actor_GetMoveHistoryAverage(self, vDir);
+        }
+        if (vDir[0] == 0.0 && vDir[1] == 0.0
+            || !self->moveMode
+            && (Vec2Normalize(vDir),
+                YawVectors(pOrient->fDesiredBodyYaw, forward, 0),
+                ((forward[0] * vDir[0]) + (forward[1] * vDir[1])) >= 0.9f))
+        {
+        dont_change:
+            Actor_SetDesiredAngles(pOrient, self->ent->r.currentAngles[0], self->ent->r.currentAngles[1]);
+        }
+        else
+        {
+            Actor_FaceVector(pOrient, vDir);
+        }
+    }
+}
+
+void __cdecl Actor_SetAnglesToLikelyEnemyPath(actor_s *self)
+{
+    const pathnode_t *faceLikelyEnemyPathNode; // r10
+    gentity_s *ent; // r11
+    // KISAKFIX: v4/v5/v6 vec3 passed as &v4 to vectoangles. Pack into array.
+    float toEnemy[3]; // was v4 (BYREF) + v5 + v6
+
+    if (!self)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_orientation.cpp", 265, 0, "%s", "self");
+    if (!self->faceLikelyEnemyPathNode)
+        MyAssertHandler(
+            "c:\\trees\\cod3\\cod3src\\src\\game\\actor_orientation.cpp",
+            266,
+            0,
+            "%s",
+            "self->faceLikelyEnemyPathNode");
+    faceLikelyEnemyPathNode = self->faceLikelyEnemyPathNode;
+    ent = self->ent;
+    toEnemy[0] = faceLikelyEnemyPathNode->constant.vOrigin[0] - self->ent->r.currentOrigin[0];
+    toEnemy[1] = faceLikelyEnemyPathNode->constant.vOrigin[1] - ent->r.currentOrigin[1];
+    toEnemy[2] = faceLikelyEnemyPathNode->constant.vOrigin[2] - ent->r.currentOrigin[2];
+    if ((float)((float)(toEnemy[1] * toEnemy[1]) + (float)(toEnemy[0] * toEnemy[0])) < 1.0)
+    {
+        self->anglesToLikelyEnemyPath[0] = ent->r.currentAngles[0];
+        self->anglesToLikelyEnemyPath[1] = ent->r.currentAngles[1];
+        self->anglesToLikelyEnemyPath[2] = ent->r.currentAngles[2];
+    }
+    else
+    {
+        vectoangles(toEnemy, self->anglesToLikelyEnemyPath);
+    }
+}
+
+const pathnode_t *__cdecl Actor_GetAnglesToLikelyEnemyPath(actor_s *self)
+{
+    sentient_s *sentient; // r11
+    const pathnode_t *result; // r3
+    team_t v4; // r30
+    const pathnode_t *v5; // r3
+    sentient_s *v6; // r29
+    double v7; // fp31
+    int v8; // r27
+    sentient_s *v9; // r30
+    double v10; // fp0
+    double v11; // fp13
+    double v12; // fp12
+    double v13; // fp0
+    int v14; // r11
+    sentient_info_t *v15; // r5
+    int v16; // r11
+    float v17[4]; // [sp+50h] [-50h] BYREF
+
+    sentient = self->sentient;
+    if (sentient->bIgnoreAll)
+        return 0;
+    v4 = Sentient_EnemyTeam(sentient->eTeam);
+    if (v4 == TEAM_FREE)
+        return 0;
+    if (!self->faceLikelyEnemyPathNode)
+    {
+        if (self->faceLikelyEnemyPathNeedRecalculateTime <= level.time)
+            goto LABEL_10;
+        return 0;
+    }
+    if (self->faceLikelyEnemyPathNeedCheckTime <= level.time)
+    {
+        if (self->faceLikelyEnemyPathNeedRecalculateTime > level.time)
+        {
+            v5 = Sentient_NearestNode(self->sentient);
+            if (Path_NodesVisible(v5, self->faceLikelyEnemyPathNode))
+            {
+                Actor_SetAnglesToLikelyEnemyPath(self);
+            LABEL_25:
+                self->faceLikelyEnemyPathNeedCheckTime = level.time + 500;
+                return (const pathnode_t *)1;
+            }
+        }
+    LABEL_10:
+        v6 = 0;
+        v7 = FLT_MAX;
+        self->faceLikelyEnemyPathNode = 0;
+        v8 = 1 << v4;
+        v9 = Sentient_FirstSentient(1 << v4);
+        if (!v9)
+            goto LABEL_18;
+        do
+        {
+            if (!Actor_CheckIgnore(self->sentient, v9))
+            {
+                Sentient_GetOrigin(v9, v17);
+                v10 = (float)(self->ent->r.currentOrigin[0] - v17[0]);
+                v11 = (float)(self->ent->r.currentOrigin[2] - v17[2]);
+                v12 = (float)(self->ent->r.currentOrigin[1] - v17[1]);
+                v13 = (float)((float)((float)v12 * (float)v12)
+                    + (float)((float)((float)v10 * (float)v10) + (float)((float)v11 * (float)v11)));
+                if (v9->ent->client)
+                    v13 = (float)((float)v13 * (float)0.25);
+                if (v7 > v13)
+                {
+                    v7 = v13;
+                    v6 = v9;
+                }
+            }
+            v9 = Sentient_NextSentient(v9, v8);
+        } while (v9);
+        if (!v6)
+        {
+        LABEL_18:
+            result = 0;
+            v14 = level.time + 500;
+            self->faceLikelyEnemyPathNeedRecalculateTime = level.time + 500;
+            self->faceLikelyEnemyPathNeedCheckTime = v14;
+            return result;
+        }
+        if (v7 <= (float)(v6->maxVisibleDist * v6->maxVisibleDist))
+            v15 = 0;
+        else
+            v15 = &self->sentientInfo[v6 - level.sentients];
+        result = Path_FindFacingNode(self->sentient, v6, v15);
+        if (!result)
+        {
+            v16 = level.time + 3000;
+            self->faceLikelyEnemyPathNeedRecalculateTime = level.time + 3000;
+            self->faceLikelyEnemyPathNeedCheckTime = v16;
+            return result;
+        }
+        self->faceLikelyEnemyPathNode = result;
+        Actor_SetAnglesToLikelyEnemyPath(self);
+        self->faceLikelyEnemyPathNeedRecalculateTime = level.time + 3000;
+        goto LABEL_25;
+    }
+    return (const pathnode_t *)1;
+}
+
+void __cdecl Actor_FaceLikelyEnemyPath(actor_s *self, ai_orient_t *pOrient)
+{
+    sentient_s *sentient; // r11
+    const pathnode_t *pClaimedNode; // r30
+
+    if (self->faceLikelyEnemyPathNeedCheckTime <= level.time)
+    {
+        if ((unsigned __int8)Actor_GetAnglesToLikelyEnemyPath(self))
+        {
+            Actor_SetDesiredAngles(pOrient, self->anglesToLikelyEnemyPath[0], self->anglesToLikelyEnemyPath[1]);
+        }
+        else
+        {
+            sentient = self->sentient;
+            pClaimedNode = sentient->pClaimedNode;
+            if (pClaimedNode && Path_IsValidClaimNode(sentient->pClaimedNode))
+            {
+                if (Actor_PointNearNode(self->ent->r.currentOrigin, pClaimedNode))
+                    Actor_SetDesiredAngles(pOrient, 0.0, pClaimedNode->constant.fAngle);
+            }
+        }
+    }
+}
+
+void __cdecl Actor_FaceEnemy(actor_s *self, ai_orient_t *pOrient)
+{
+    iassert(self);
+    iassert(self->sentient);
+
+    if (!Actor_GetTargetEntity(self))
+    {
+        Actor_FaceLikelyEnemyPath(self, pOrient);
+        return;
+    }
+
+    sentient_s *enemy = Actor_GetTargetSentient(self);
+    sentient_info_t *info = enemy ? &self->sentientInfo[enemy - level.sentients] : NULL;
+
+    float v[3];  // world-space facing target; converted to delta below
+
+    if (!enemy || info->VisCache.bVisible)
+    {
+        Actor_GetTargetPosition(self, v);
+    }
+    else if (self->species != AI_SPECIES_HUMAN)
+    {
+        // Non-human (dog): face last-known enemy pos.
+        v[0] = info->vLastKnownPos[0];
+        v[1] = info->vLastKnownPos[1];
+        v[2] = info->vLastKnownPos[2];
+    }
+    else if (!info->VisCache.iLastVisTime)
+    {
+        // Human, never seen the enemy: fall back to likely-enemy-path.
+        Actor_FaceLikelyEnemyPath(self, pOrient);
+        return;
+    }
+    else if (Actor_HasPath(self))
+    {
+        const pathnode_t *facingNode = NULL;
+        if ((float)self->Path.iPathTime + 300.0f < (float)level.time
+            && level.time - info->VisCache.iLastVisTime > 500)
+        {
+            facingNode = Path_FindFacingNode(self->sentient, enemy, info);
+        }
+
+        if (facingNode)
+        {
+            v[0] = facingNode->constant.vOrigin[0];
+            v[1] = facingNode->constant.vOrigin[1];
+            v[2] = facingNode->constant.vOrigin[2];
+        }
+        else
+        {
+            Actor_GetTargetPosition(self, v);
+        }
+    }
+    else
+    {
+        // No path. Long LOS loss -> likely-enemy-path; otherwise leave alone.
+        if (level.time - info->VisCache.iLastVisTime >= 10000)
+            Actor_FaceLikelyEnemyPath(self, pOrient);
+        return;
+    }
+
+    const float *currentOrigin = self->ent->r.currentOrigin;
+    v[0] -= currentOrigin[0];
+    v[1] -= currentOrigin[1];
+    v[2] -= currentOrigin[2];
+    if ((v[0] * v[0]) + (v[1] * v[1]) >= 1.0f)
+        Actor_FaceVector(pOrient, v);
+}
+
+// aislop
+int Actor_FaceGoodShootPos(actor_s *self, ai_orient_t *pOrient)
+{
+    if (!self->goodShootPosValid)
+    {
+        return 0;
+    }
+
+    float *origin = self->ent->r.currentOrigin;
+
+    float dx = self->goodShootPos[0] - origin[0];
+    float dy = self->goodShootPos[1] - origin[1];
+    float dz = self->goodShootPos[2] - origin[2];
+
+    float distSq = dx * dx + dy * dy + dz * dz;
+
+    if (distSq == 0.0f)
+    {
+        return 0;
+    }
+
+    float invLen = 1.0f / sqrtf(distSq);
+
+    float dir[3] =
+    {
+        dx * invLen,
+        dy * invLen,
+        dz * invLen
+    };
+
+    if (!Path_MayFaceEnemy(&self->Path, dir, origin))
+    {
+        return 0;
+    }
+
+    Actor_FaceVector(pOrient, dir);
+    return 1;
+}
+
+// aislop
+void Actor_FaceEnemyOrMotion(actor_s *self, ai_orient_t *pOrient)
+{
+    iassert(self);
+    iassert(pOrient);
+
+    // SP IDA sub_82207F80. Stationary / no path -> always face enemy.
+    if (!Actor_HasPath(self)
+        || (self->Physics.vVelocity[0] == 0.0f && self->Physics.vVelocity[1] == 0.0f))
+    {
+        Actor_FaceEnemy(self, pOrient);
+        return;
+    }
+
+    // No enemy or can't see one -> face the direction we're moving.
+    if (!Actor_GetTargetEntity(self) || !Actor_CanSeeEnemy(self))
+    {
+        Actor_FaceMotion(self, pOrient);
+        return;
+    }
+
+    // Enemy farther than 350 units (350^2 = 122500) -> face motion. Avoids
+    // making the actor visibly snap his head around at long range while sprinting.
+    float vEnemyPos[3];
+    Actor_GetTargetPosition(self, vEnemyPos);
+    if (Vec3DistanceSq(self->ent->r.currentOrigin, vEnemyPos) > 122500.0f)
+    {
+        Actor_FaceMotion(self, pOrient);
+        return;
+    }
+
+    // In range. Ask the pather whether facing the enemy is compatible with the
+    // current path (i.e. won't make the actor turn so far he can't keep moving).
+    float *currentOrigin = self->ent->r.currentOrigin;
+    float vEnemyDir[3] = {
+        vEnemyPos[0] - currentOrigin[0],
+        vEnemyPos[1] - currentOrigin[1],
+        vEnemyPos[2] - currentOrigin[2],
+    };
+    Vec3Normalize(vEnemyDir);  // SP IDA inlines the same safe 1/sqrt via fsel
+
+    if (Path_MayFaceEnemy(&self->Path, vEnemyDir, currentOrigin))
+        Actor_FaceEnemy(self, pOrient);
+    else
+        Actor_FaceMotion(self, pOrient);
+}
+
+
+void Actor_FaceEnemyOrMotionSidestep(actor_s *self, ai_orient_t *pOrient)
+{
+    iassert(self);
+    iassert(pOrient);
+
+    if (Actor_HasPath(self)
+        && (self->Physics.vVelocity[0] != 0.0f || self->Physics.vVelocity[1] != 0.0f))
+    {
+        float targetPos[3];
+        Actor_GetTargetPosition(self, targetPos);
+
+        float *currentOrigin = self->ent->r.currentOrigin;
+
+        float dx = targetPos[0] - currentOrigin[0];
+        float dy = targetPos[1] - currentOrigin[1];
+        float dz = targetPos[2] - currentOrigin[2];
+
+        float lengthSq = dx * dx + dy * dy + dz * dz;
+        float length = sqrtf(lengthSq);
+        float invLength = (length != 0.0f) ? (1.0f / length) : 1.0f;
+
+        float dir[3] = { dx * invLength, dy * invLength, dz * invLength };
+
+        if (!Path_MayFaceEnemy(&self->Path, dir, currentOrigin))
+        {
+            Actor_FaceMotion(self, pOrient);
+            return;
+        }
+    }
+
+    Actor_FaceEnemy(self, pOrient);
+}
+
+void __cdecl Actor_DecideOrientation(actor_s *self)
+{
+    ai_orient_mode_t eMode; // r6
+    ai_orient_t *p_ScriptOrient; // r30
+    sentient_s *sentient; // r11
+    pathnode_t *pClaimedNode; // r31
+    const char *v6; // r3
+
+    if (!self)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_orientation.cpp", 632, 0, "%s", "self");
+    if (!self->sentient)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_orientation.cpp", 633, 0, "%s", "self->sentient");
+    eMode = self->ScriptOrient.eMode;
+    p_ScriptOrient = &self->ScriptOrient;
+    if (eMode == AI_ORIENT_INVALID)
+        p_ScriptOrient = &self->CodeOrient;
+    switch (p_ScriptOrient->eMode)
+    {
+    case AI_ORIENT_DONT_CHANGE:
+        return;
+    case AI_ORIENT_TO_MOTION:
+        Actor_FaceMotion(self, p_ScriptOrient);
+        break;
+    case AI_ORIENT_TO_ENEMY:
+        Actor_FaceEnemy(self, p_ScriptOrient);
+        break;
+    case AI_ORIENT_TO_ENEMY_OR_MOTION:
+        Actor_FaceEnemyOrMotion(self, p_ScriptOrient);
+        break;
+    case AI_ORIENT_TO_ENEMY_OR_MOTION_SIDESTEP:
+        Actor_FaceEnemyOrMotionSidestep(self, p_ScriptOrient);
+        break;
+    case AI_ORIENT_TO_GOAL:
+        sentient = self->sentient;
+        pClaimedNode = sentient->pClaimedNode;
+        if (pClaimedNode)
+        {
+            if (Path_IsValidClaimNode(sentient->pClaimedNode))
+                Actor_SetDesiredAngles(p_ScriptOrient, 0.0, pClaimedNode->constant.fAngle);
+        }
+        break;
+    default:
+        if (!alwaysfails)
+        {
+            v6 = va("invalid orient mode %i (code = %i, script = %i)", p_ScriptOrient->eMode, self->CodeOrient.eMode, eMode);
+            MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_orientation.cpp", 668, 0, v6);
+        }
+        break;
+    }
+}
+
+void __cdecl Actor_SetOrientMode(actor_s *self, ai_orient_mode_t eMode)
+{
+    if (!self)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_orientation.cpp", 683, 0, "%s", "self");
+    if (eMode <= AI_ORIENT_INVALID || eMode >= AI_ORIENT_COUNT)
+        MyAssertHandler(
+            "c:\\trees\\cod3\\cod3src\\src\\game\\actor_orientation.cpp",
+            684,
+            0,
+            "%s",
+            "eMode > AI_ORIENT_INVALID && eMode < AI_ORIENT_COUNT");
+    self->CodeOrient.eMode = eMode;
+}
+
+void __cdecl Actor_ClearScriptOrient(actor_s *self)
+{
+    ai_orient_t *p_CodeOrient; // r11
+    ai_orient_mode_t v2; // r9
+    float v3; // r8
+    float v4; // r7
+    float v5; // r11
+    ai_orient_mode_t eMode; // r9
+    float fDesiredLookPitch; // r8
+    float fDesiredLookYaw; // r7
+    float fDesiredBodyYaw; // r6
+
+    p_CodeOrient = &self->CodeOrient;
+    if (self->ScriptOrient.eMode)
+    {
+        eMode = self->ScriptOrient.eMode;
+        fDesiredLookPitch = self->ScriptOrient.fDesiredLookPitch;
+        fDesiredLookYaw = self->ScriptOrient.fDesiredLookYaw;
+        fDesiredBodyYaw = self->ScriptOrient.fDesiredBodyYaw;
+        self->ScriptOrient.eMode = AI_ORIENT_INVALID;
+        p_CodeOrient->eMode = eMode;
+        self->CodeOrient.fDesiredLookPitch = fDesiredLookPitch;
+        self->CodeOrient.fDesiredLookYaw = fDesiredLookYaw;
+        self->CodeOrient.fDesiredBodyYaw = fDesiredBodyYaw;
+    }
+    else
+    {
+        v2 = p_CodeOrient->eMode;
+        v3 = self->CodeOrient.fDesiredLookPitch;
+        v4 = self->CodeOrient.fDesiredLookYaw;
+        v5 = self->CodeOrient.fDesiredBodyYaw;
+        self->ScriptOrient.eMode = v2;
+        self->ScriptOrient.fDesiredLookPitch = v3;
+        self->ScriptOrient.fDesiredLookYaw = v4;
+        self->ScriptOrient.fDesiredBodyYaw = v5;
+        self->ScriptOrient.eMode = AI_ORIENT_INVALID;
+    }
+}
+

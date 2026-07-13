@@ -1,0 +1,22 @@
+#pragma once
+
+#ifdef KISAK_MP
+#include <qcommon/net_chan_mp.h>
+#elif KISAK_SP
+#include <qcommon/net_chan.h>
+#endif
+
+#include <universal/q_shared.h>
+
+void		NET_Init(void);
+void		NET_Shutdown(void);
+void		NET_Restart(void);
+void		NET_Config(bool enableNetworking);
+void		NET_SendPacket(netsrc_t sock, int length, const void* data, netadr_t to);
+const char* NET_ErrorString(void);
+void		NET_Sleep(int msec);
+
+uint32_t __cdecl NET_TCPIPSocket(const char *net_interface, int port, int type);
+
+qboolean Sys_StringToAdr(const char *s, netadr_t *a);
+char __cdecl Sys_SendPacket(int length, unsigned __int8 *data, netadr_t to);

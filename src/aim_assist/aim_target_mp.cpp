@@ -1,0 +1,401 @@
+#include "aim_assist.h"
+#include <qcommon/mem_track.h>
+#include <qcommon/cmd.h>
+#include <bgame/bg_local.h>
+#include <cgame_mp/cg_local_mp.h>
+#include <script/scr_const.h>
+#include <EffectsCore/fx_system.h>
+#include <universal/profile.h>
+
+AimTargetGlob atGlobArray[1];
+
+const dvar_t *aim_target_sentient_radius;
+
+void __cdecl TRACK_aim_target()
+{
+    track_static_alloc_internal(atGlobArray, 5640, "atGlobArray", 10);
+}
+
+void __cdecl AimTarget_Init(int32_t localClientNum)
+{
+    memset((uint8_t*)&atGlobArray[localClientNum], 0, sizeof(AimTargetGlob));
+    AimTarget_RegisterDvars();
+    Cbuf_InsertText(0, "exec devgui_aimassist\n");
+}
+
+const dvar_s *AimTarget_RegisterDvars()
+{
+    const dvar_s *result; // eax
+    DvarLimits min; // [esp+4h] [ebp-10h]
+
+    min.value.max = 128.0;
+    min.value.min = 0.0;
+    result = Dvar_RegisterFloat(
+        "aim_target_sentient_radius",
+        10.0,
+        min,
+        DVAR_CHEAT,
+        "The radius used to calculate target bounds for a sentient(actor or player)");
+    aim_target_sentient_radius = result;
+    return result;
+}
+
+void __cdecl AimTarget_ClearTargetList(int32_t localClientNum)
+{
+    atGlobArray[localClientNum].targetCount = 0;
+}
+
+void __cdecl AimTarget_ProcessEntity(int32_t localClientNum, const centity_s *ent)
+{
+    AimTarget target;
+    uint32_t visBone;
+    const cg_s *cgameGlob;
+
+    PROF_SCOPED("AimTarget_ProcessEntity");
+
+    cgameGlob = CG_GetLocalClientGlobals(localClientNum);
+
+    iassert(ent);
+    iassert(ent->nextValid);
+    iassert(ent->nextState.number != cgameGlob->predictedPlayerState.clientNum);
+
+    if (!AimTarget_PlayerInValidState(&cgameGlob->predictedPlayerState))
+    {
+        return;
+    }
+
+    if (ent->nextState.eType == ET_PLAYER)
+    {
+        visBone = scr_const.aim_vis_bone;
+    }
+    else
+    {
+        iassert(ent->nextState.lerp.eFlags & EF_AIM_ASSIST);
+        iassert(ent->nextState.solid == SOLID_BMODEL);
+        visBone = 0;
+    }
+
+    if (AimTarget_IsTargetValid(cgameGlob, ent) && AimTarget_IsTargetVisible(localClientNum, ent, visBone))
+    {
+        AimTarget_CreateTarget(localClientNum, ent, &target);
+    }
+}
+
+char __cdecl AimTarget_IsTargetValid(const cg_s *cgameGlob, const centity_s *targetEnt)
+{
+    double v3; // st7
+    float targetDir[3] = { 0 }; // [esp+50h] [ebp-28h] BYREF
+
+    float radius; // [esp+64h] [ebp-14h]
+    float playerDir[3] = { 0 }; // [esp+68h] [ebp-10h] BYREF
+    float dot; // [esp+74h] [ebp-4h]
+
+    PROF_SCOPED("AimTarget_IsTargetValid");
+
+    iassert(targetEnt);
+    iassert(targetEnt->nextValid);
+    iassert(targetEnt->nextState.number != cgameGlob->predictedPlayerState.clientNum);
+
+    if (targetEnt->nextState.eType == ET_PLAYER)
+    {
+        iassert((targetEnt->nextState.lerp.eFlags & 0x20000) == 0);
+        iassert(targetEnt->nextState.clientNum < 0x40u);
+
+        const clientInfo_t* targetInfo = &cgameGlob->bgs.clientinfo[targetEnt->nextState.clientNum]; // [esp+60h] [ebp-18h]
+        iassert(cgameGlob->predictedPlayerState.clientNum < 0x40u);
+
+        const clientInfo_t* playerInfo = &cgameGlob->bgs.clientinfo[cgameGlob->predictedPlayerState.clientNum]; // [esp+5Ch] [ebp-1Ch]
+        if (targetInfo->infoValid && targetInfo->model[0])
+        {
+            DObj_s* ret = Com_GetClientDObj(targetEnt->nextState.number, targetEnt->pose.localClientNum);
+            iassert(ret);
+
+            if (targetInfo->team != playerInfo->team || playerInfo->team == TEAM_FREE)
+                goto LABEL_26;
+        }
+    LABEL_25:
+        return 0;
+    }
+    if ((targetEnt->nextState.lerp.eFlags & 0x800) == 0 || targetEnt->nextState.solid != 0xFFFFFF)
+    {
+        return 0;
+    }
+LABEL_26:
+    Vec3Sub(targetEnt->pose.origin, cgameGlob->predictedPlayerState.origin, targetDir);
+    playerDir[0] = cgameGlob->refdef.viewaxis[0][0];
+    playerDir[1] = cgameGlob->refdef.viewaxis[0][1];
+    playerDir[2] = cgameGlob->refdef.viewaxis[0][2];
+    radius = AimTarget_GetTargetRadius(targetEnt);
+    v3 = Vec3Dot(playerDir, targetDir);
+    dot = v3 + radius;
+    if (dot >= 0.0)
+    {
+        return 1;
+    }
+    else
+    {
+        return 0;
+    }
+}
+
+double __cdecl AimTarget_GetTargetRadius(const centity_s *targetEnt)
+{
+    float mins[3] = { 0 }; // [esp+0h] [ebp-1Ch] BYREF
+    float maxs[3] = { 0 }; // [esp+10h] [ebp-Ch] BYREF
+
+    iassert(targetEnt);
+    
+    if (targetEnt->nextState.eType == ET_PLAYER)
+        return aim_target_sentient_radius->current.value;
+
+    AimTarget_GetTargetBounds(targetEnt, mins, maxs);
+
+    return RadiusFromBounds(mins, maxs);
+}
+
+void __cdecl AimTarget_GetTargetBounds(const centity_s *targetEnt, float *mins, float *maxs)
+{
+    float highBonePos[3]; // [esp+0h] [ebp-Ch] BYREF
+
+    iassert(targetEnt);
+    iassert(mins);
+    iassert(maxs);
+
+    if (targetEnt->nextState.eType == ET_PLAYER)
+    {
+        AimTarget_GetTagPos(targetEnt, scr_const.aim_highest_bone, highBonePos);
+        *mins = -aim_target_sentient_radius->current.value;
+        mins[1] = -aim_target_sentient_radius->current.value;
+        mins[2] = 0.0;
+        *maxs = aim_target_sentient_radius->current.value;
+        maxs[1] = aim_target_sentient_radius->current.value;
+        maxs[2] = highBonePos[2] - targetEnt->pose.origin[2];
+    }
+    else
+    {
+        iassert(targetEnt->nextState.solid == 0xFFFFFF); // "targetEnt->nextState.solid == SOLID_BMODEL"
+
+        CM_ModelBounds(targetEnt->nextState.index.brushmodel, mins, maxs);
+    }
+}
+
+void __cdecl AimTarget_GetTagPos(const centity_s *ent, uint32_t tagName, float *pos)
+{
+    DObj_s* dobj = Com_GetClientDObj(ent->nextState.number, ent->pose.localClientNum); // [esp+0h] [ebp-4h]
+    iassert(dobj);
+
+    if (!CG_DObjGetWorldTagPos(&ent->pose, dobj, tagName, pos))
+    {
+        Com_Error(ERR_DROP, "AimTarget_GetTagPos: Cannot find tag [%s] on entity\n", SL_ConvertToString(tagName));
+    }
+}
+
+char __cdecl AimTarget_IsTargetVisible(int32_t localClientNum, const centity_s *targetEnt, uint32_t visBone)
+{
+    float endPos[4]; // [esp+58h] [ebp-58h] BYREF
+    trace_t trace; // [esp+68h] [ebp-48h] BYREF
+    float playerEyePos[3] = { 0 }; // [esp+94h] [ebp-1Ch] BYREF
+    float targetEyePos[3] = { 0 }; // [esp+A0h] [ebp-10h] BYREF
+    float visibility; // [esp+ACh] [ebp-4h]
+    const cg_s *cgameGlob;
+
+    PROF_SCOPED("AimTarget_IsTargetVisible");
+
+    iassert(targetEnt);
+
+    if (visBone)
+        AimTarget_GetTagPos(targetEnt, visBone, targetEyePos);
+    else
+        AimTarget_GetTargetCenter(targetEnt, targetEyePos);
+
+    cgameGlob = CG_GetLocalClientGlobals(localClientNum);
+
+    playerEyePos[0] = cgameGlob->refdef.vieworg[0];
+    playerEyePos[1] = cgameGlob->refdef.vieworg[1];
+    playerEyePos[2] = cgameGlob->refdef.vieworg[2];
+
+    CG_TraceCapsule(
+        &trace,
+        playerEyePos,
+        (float *)vec3_origin,
+        (float *)vec3_origin,
+        targetEyePos,
+        cgameGlob->predictedPlayerState.clientNum,
+        0x803003);
+
+    if (trace.fraction != 1.0 && Trace_GetEntityHitId(&trace) != targetEnt->nextState.number)
+    {
+        if (targetEnt->nextState.solid != SOLID_BMODEL)
+        {
+            return 0;
+        }
+        Vec3Lerp(playerEyePos, targetEyePos, trace.fraction, endPos);
+        if (!CM_TransformedPointContents(
+            endPos,
+            targetEnt->nextState.index.brushmodel,
+            targetEnt->pose.origin,
+            targetEnt->pose.angles))
+        {
+            return 0;
+        }
+    }
+    visibility = FX_GetClientVisibility(localClientNum, playerEyePos, targetEyePos);
+
+    if (visibility <= 0.00009999999747378752)
+        return 0;
+
+    return 1;
+}
+
+void __cdecl AimTarget_GetTargetCenter(const centity_s *targetEnt, float *center)
+{
+    float mins[3]; // [esp+8h] [ebp-18h] BYREF
+    float maxs[3]; // [esp+14h] [ebp-Ch] BYREF
+
+    iassert(targetEnt);
+    iassert(center);
+
+    AimTarget_GetTargetBounds(targetEnt, mins, maxs);
+    Vec3Add(mins, maxs, center);
+    Vec3Scale(center, 0.5, center);
+    Vec3Add(targetEnt->pose.origin, center, center);
+}
+
+void __cdecl AimTarget_CreateTarget(int32_t localClientNum, const centity_s *targetEnt, AimTarget *target)
+{
+    float scale; // [esp+8h] [ebp-70h]
+    float diff[8]; // [esp+30h] [ebp-48h] BYREF
+    float currentPos[3]; // [esp+5Ch] [ebp-1Ch] BYREF
+    float nextPos[3]; // [esp+68h] [ebp-10h] BYREF
+
+    PROF_SCOPED("AimTarget_CreateTarget");
+
+    iassert(targetEnt);
+    iassert(target);
+
+    const cg_s* cgameGlob = CG_GetLocalClientGlobals(localClientNum); // [esp+50h] [ebp-28h]
+
+    target->entIndex = targetEnt->nextState.number;
+    Vec3Sub(targetEnt->pose.origin, cgameGlob->predictedPlayerState.origin, diff);
+
+    target->worldDistSqr = Vec3LengthSq(diff);
+    AimTarget_GetTargetBounds(targetEnt, target->mins, target->maxs);
+
+    const snapshot_s* snap = cgameGlob->snap; // [esp+58h] [ebp-20h]
+    const snapshot_s* nextSnap = cgameGlob->nextSnap; // [esp+54h] [ebp-24h]
+    float deltaTime = (double)(nextSnap->serverTime - snap->serverTime) * EQUAL_EPSILON; // [esp+74h] [ebp-4h]
+
+    if (deltaTime <= 0.0)
+    {
+        target->velocity[0] = 0.0;
+        target->velocity[1] = 0.0;
+        target->velocity[2] = 0.0;
+    }
+    else
+    {
+        BG_EvaluateTrajectory(&targetEnt->currentState.pos, snap->serverTime, currentPos);
+        BG_EvaluateTrajectory(&targetEnt->nextState.lerp.pos, nextSnap->serverTime, nextPos);
+        Vec3Sub(nextPos, currentPos, target->velocity);
+        scale = 1.0 / deltaTime;
+        Vec3Scale(target->velocity, scale, target->velocity);
+    }
+    AimTarget_AddTargetToList(localClientNum, target);
+}
+
+void __cdecl AimTarget_AddTargetToList(int32_t localClientNum, const AimTarget *target)
+{
+    int32_t targetIndex; // [esp+8h] [ebp-14h]
+    int32_t low; // [esp+Ch] [ebp-10h]
+    int32_t high; // [esp+18h] [ebp-4h]
+
+    iassert(target);
+
+    AimTargetGlob* atGlob = &atGlobArray[localClientNum]; // [esp+14h] [ebp-8h]
+    for (targetIndex = 0; targetIndex < atGlob->targetCount; ++targetIndex)
+    {
+        iassert(target->entIndex != atGlob->targets[targetIndex].entIndex);
+    }
+    low = 0;
+    high = atGlob->targetCount;
+    while (low < high)
+    {
+        if (AimTarget_CompareTargets(target, &atGlob->targets[(high + low) / 2]) <= 0)
+            low = (high + low) / 2 + 1;
+        else
+            high = (high + low) / 2;
+    }
+    if (low < 64)
+    {
+        if (atGlob->targetCount == 64)
+            --atGlob->targetCount;
+        memmove(
+            (uint8_t*)&atGlob->targets[low + 1],
+            (uint8_t*)&atGlob->targets[low],
+            44 * (atGlob->targetCount - low));
+        memcpy(&atGlob->targets[low], target, sizeof(atGlob->targets[low]));
+        ++atGlob->targetCount;
+    }
+}
+
+int __cdecl AimTarget_CompareTargets(const AimTarget *targetA, const AimTarget *targetB)
+{
+    iassert(targetA);
+    iassert(targetB);
+
+    if (targetB->worldDistSqr > (double)targetA->worldDistSqr)
+        return 1;
+    if (targetB->worldDistSqr >= (double)targetA->worldDistSqr)
+        return 0;
+    return -1;
+}
+
+bool __cdecl AimTarget_PlayerInValidState(const playerState_s *ps)
+{
+    bool result; // al
+    
+    iassert(ps);
+
+#ifdef KISAK_MP
+    if ((ps->otherFlags & 2) != 0)
+        return false;
+
+    switch (ps->pm_type)
+    {
+    case PM_NOCLIP:
+    case PM_UFO:
+    case PM_SPECTATOR:
+    case PM_INTERMISSION:
+    case PM_DEAD:
+    case PM_DEAD_LINKED:
+        result = false;
+        break;
+    default:
+        result = true;
+        break;
+    }
+
+    return result;
+
+#elif KISAK_SP
+    return (ps->pm_type > PM_DEAD_LINKED); // weird
+#endif
+}
+
+void __cdecl AimTarget_UpdateClientTargets(int32_t localClientNum)
+{
+    atGlobArray[localClientNum].clientTargetCount = atGlobArray[localClientNum].targetCount;
+    memcpy(
+        (uint8_t*)atGlobArray[localClientNum].clientTargets,
+        (uint8_t*)&atGlobArray[localClientNum],
+        44 * atGlobArray[localClientNum].targetCount);
+}
+
+void __cdecl AimTarget_GetClientTargetList(int32_t localClientNum, AimTarget **targetList, int32_t*targetCount)
+{
+    iassert(targetList);
+    iassert(targetCount);
+
+    *targetList = atGlobArray[localClientNum].clientTargets;
+    *targetCount = atGlobArray[localClientNum].clientTargetCount;
+}
+

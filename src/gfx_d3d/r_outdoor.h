@@ -1,0 +1,22 @@
+#pragma once
+#include <cstdint>
+
+#define MIN_WORLD_COORD -131072.0f
+
+struct OutdoorGlob // sizeof=0x40
+{                                       // ...
+    float bbox[2][3];                   // ...
+    float scale[3];                     // ...
+    float invScale[3];                  // ...
+    float add[3];                       // ...
+    uint8_t *pic;               // ...
+};
+static const int outdoorMapSize[3] =
+{
+    0x200, 0x200, 0x100
+};
+
+int Outdoor_UpdateTransforms();
+void __cdecl R_RegisterOutdoorImage(struct GfxWorld *world, const float *outdoorMin, const float *outdoorMax);
+void __cdecl Outdoor_SetRendererOutdoorLookupMatrix(struct GfxWorld *world);
+void __cdecl R_GenerateOutdoorImage(struct GfxImage *outdoorImage);

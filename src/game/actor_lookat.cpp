@@ -1,0 +1,354 @@
+#ifndef KISAK_SP 
+#error This file is for SinglePlayer only 
+#endif
+
+#include "actor_lookat.h"
+#include <xanim/xanim.h>
+#include "g_main.h"
+#include "g_local.h"
+
+void __cdecl Actor_InitLookAt(actor_s *self)
+{
+    self->lookAtInfo.bDoLookAt = 0;
+    self->lookAtInfo.vLookAtPos[0] = 0.0;
+    self->lookAtInfo.vLookAtPos[1] = 0.0;
+    self->lookAtInfo.vLookAtPos[2] = 0.0;
+    self->lookAtInfo.bLookAtSetup = 0;
+    self->lookAtInfo.fLookAtTurnAngle = 0.0;
+    self->lookAtInfo.fLookAtTurnSpeed = 0.0;
+    self->lookAtInfo.fLookAtTurnAccel = 120.0;
+    self->lookAtInfo.fLookAtAnimYawLimit = 90.0;
+    self->lookAtInfo.fLookAtYawLimit = 90.0;
+}
+
+void __cdecl Actor_SetLookAtAnimNodes(
+    actor_s *self,
+    unsigned __int16 animStraight,
+    unsigned __int16 animLeft,
+    unsigned __int16 animRight)
+{
+    XAnimTree_s *tree; // r3
+    int time; // r11
+
+    tree = G_GetActorAnimTree(self);
+    self->lookAtInfo.animLookAtStraight = animStraight;
+    self->lookAtInfo.animLookAtLeft = animLeft;
+    self->lookAtInfo.animLookAtRight = animRight;
+
+    XAnimClearTreeGoalWeights(tree, self->lookAtInfo.animLookAtLeft, 0.0);
+    XAnimClearTreeGoalWeights(tree, self->lookAtInfo.animLookAtRight, 0.0);
+
+    XAnimSetCompleteGoalWeight(Com_GetServerDObj(self->ent->s.number), self->lookAtInfo.animLookAtStraight, 1.0, 0.0, 1.0, 0, 0, 0);
+
+    self->lookAtInfo.fLookAtAnimBlendRate = 0.0;
+    self->lookAtInfo.fLookAtLimitBlendRate = 0.0;
+    self->lookAtInfo.iLookAtBlendEndTime = level.time;
+    self->lookAtInfo.bLookAtSetup = 1;
+}
+
+void __cdecl Actor_SetLookAt(actor_s *self, float *vPosition, double fTurnAccel)
+{
+    double fLookAtTurnAccel; // fp13
+
+    self->lookAtInfo.vLookAtPos[0] = *vPosition;
+    self->lookAtInfo.vLookAtPos[1] = vPosition[1];
+    self->lookAtInfo.vLookAtPos[2] = vPosition[2];
+    if (fTurnAccel > 20.0)
+        self->lookAtInfo.fLookAtTurnAccel = fTurnAccel;
+    fLookAtTurnAccel = self->lookAtInfo.fLookAtTurnAccel;
+    self->lookAtInfo.bDoLookAt = 1;
+    if (fLookAtTurnAccel < 20.0)
+        self->lookAtInfo.fLookAtTurnAccel = 20.0;
+}
+
+float __cdecl Actor_CurrentLookAtAnimYawMax(actor_s *self)
+{
+    int remaining = self->lookAtInfo.iLookAtBlendEndTime - level.time;
+    if (remaining < 0)
+        remaining = 0;
+    float v3 = self->lookAtInfo.fLookAtAnimYawLimit - self->lookAtInfo.fLookAtAnimBlendRate * (float)remaining;
+    if (v3 < 0.0f)
+        return 0.0f;
+    if (v3 > 180.0f)
+        return 180.0f;
+    return v3;
+}
+
+float __cdecl Actor_CurrentLookAtYawMax(actor_s *self)
+{
+    int remaining = self->lookAtInfo.iLookAtBlendEndTime - level.time;
+    if (remaining < 0)
+        remaining = 0;
+    float v3 = self->lookAtInfo.fLookAtYawLimit - self->lookAtInfo.fLookAtLimitBlendRate * (float)remaining;
+    if (v3 < 0.0f)
+        return 0.0f;
+    if (v3 > 180.0f)
+        return 180.0f;
+    return v3;
+}
+
+void __cdecl Actor_SetLookAtYawLimits(actor_s *self, double fAnimYawLimit, double fYawLimit, double fBlendTime)
+{
+    __int64 v4; // r11
+    double v5; // fp0
+    double v6; // fp13
+
+    if (fAnimYawLimit != self->lookAtInfo.fLookAtAnimYawLimit || fYawLimit != self->lookAtInfo.fLookAtYawLimit)
+    {
+        int remaining = self->lookAtInfo.iLookAtBlendEndTime - level.time;
+        if (remaining < 0)
+            remaining = 0;
+        v5 = self->lookAtInfo.fLookAtAnimYawLimit - (float)remaining * self->lookAtInfo.fLookAtAnimBlendRate;
+        if (v5 < 0.0)
+            v5 = 0.0;
+        else if (v5 > 180.0)
+            v5 = 180.0;
+        self->lookAtInfo.fLookAtAnimYawLimit = fAnimYawLimit;
+        v6 = self->lookAtInfo.fLookAtYawLimit - (float)remaining * self->lookAtInfo.fLookAtLimitBlendRate;
+        if (v6 < 0.0)
+            v6 = 0.0;
+        else if (v6 > 180.0)
+            v6 = 180.0;
+        self->lookAtInfo.fLookAtYawLimit = fYawLimit;
+        self->lookAtInfo.iLookAtBlendEndTime = level.time - (int)(float)((float)fBlendTime * (float)-1000.0);
+        if (fBlendTime == 0.0)
+        {
+            self->lookAtInfo.fLookAtAnimBlendRate = 9999.0;
+            self->lookAtInfo.fLookAtLimitBlendRate = 9999.0;
+        }
+        else
+        {
+            self->lookAtInfo.fLookAtAnimBlendRate = (float)((float)0.001 / (float)fBlendTime)
+                * (float)((float)fAnimYawLimit - (float)v5);
+            self->lookAtInfo.fLookAtLimitBlendRate = (float)((float)fYawLimit - (float)v6)
+                * (float)((float)0.001 / (float)fBlendTime);
+        }
+    }
+}
+
+void __cdecl Actor_StopLookAt(actor_s *self, double fTurnAccel)
+{
+    self->lookAtInfo.bDoLookAt = 0;
+    if (fTurnAccel > 20.0)
+        self->lookAtInfo.fLookAtTurnAccel = fTurnAccel;
+}
+
+void __cdecl Actor_UpdateLookAt(actor_s *self)
+{
+    int v2; // r30
+    double v3; // fp31
+    double v4; // fp13
+    double v5; // fp1
+    double fLookAtTurnAngle; // fp9
+    double v7; // fp13
+    double fLookAtTurnSpeed; // fp0
+    double v9; // fp0
+    double v10; // fp0
+    double v11; // fp0
+    const XAnimTree_s *pAnimTree; // r30
+    double v13; // fp31
+    DObj_s *ServerDObj; // r29
+    int v15; // r7
+    unsigned int v16; // r6
+    unsigned int v17; // r5
+    double v18; // fp1
+    double v19; // fp30
+    int v20; // r7
+    unsigned int v21; // r6
+    unsigned int v22; // r5
+    double v23; // fp1
+    unsigned int animLookAtRight; // r4
+    int v25; // r7
+    unsigned int v26; // r6
+    unsigned int v27; // r5
+    double Weight; // fp1
+    double v29; // fp31
+    int v30; // r7
+    unsigned int v31; // r6
+    unsigned int v32; // r5
+    double v33; // fp1
+    float vEyePosition[3]; // [sp+50h] [-70h] BYREF
+    float vDelta[3]; // [sp+60h] [-60h] BYREF
+    float vAngles[3]; // [sp+70h] [-50h] BYREF
+
+    v2 = 0;
+    if (self->lookAtInfo.bLookAtSetup
+        && (self->lookAtInfo.bDoLookAt
+            && self->lookAtInfo.fLookAtAnimYawLimit != 0.0
+            && self->lookAtInfo.fLookAtYawLimit != 0.0
+            || self->lookAtInfo.fLookAtTurnAngle != 0.0))
+    {
+        v3 = Actor_CurrentLookAtYawMax(self);
+        Sentient_GetEyePosition(self->sentient, vEyePosition);
+        v4 = (float)(self->lookAtInfo.vLookAtPos[1] - vEyePosition[1]);
+        vDelta[0] = self->lookAtInfo.vLookAtPos[0] - vEyePosition[0];
+        vDelta[1] = v4;
+        vDelta[2] = self->lookAtInfo.vLookAtPos[2] - vEyePosition[2];
+        vectoangles(vDelta, vAngles);
+        if (!self->lookAtInfo.bDoLookAt
+            || self->lookAtInfo.fLookAtAnimYawLimit == 0.0
+            || self->lookAtInfo.fLookAtYawLimit == 0.0)
+        {
+            v5 = 0.0;
+        }
+        else
+        {
+            v5 = AngleSubtract(self->ent->r.currentAngles[1], vAngles[1]);
+            if (v5 >= -v3)
+            {
+                if (v5 > v3)
+                    v5 = v3;
+            }
+            else
+            {
+                v5 = -v3;
+            }
+        }
+        fLookAtTurnAngle = self->lookAtInfo.fLookAtTurnAngle;
+        v7 = (float)((float)v5 - self->lookAtInfo.fLookAtTurnAngle);
+        //if (I_fabs(v7) < 1.0)
+        if (fabs(v7) < 1.0)
+            goto LABEL_40;
+        fLookAtTurnSpeed = self->lookAtInfo.fLookAtTurnSpeed;
+        if (v5 >= 0.0)
+        {
+            if (v5 != 0.0)
+                goto LABEL_19;
+            if (v7 >= 0.0)
+                goto LABEL_26;
+        }
+        fLookAtTurnSpeed = (float)(self->lookAtInfo.fLookAtTurnSpeed * (float)-1.0);
+        v2 = 1;
+        v5 = (float)((float)v5 * (float)-1.0);
+        v7 = (float)((float)v7 * (float)-1.0);
+    LABEL_19:
+        if (v7 < 0.0)
+        {
+            if ((float)((float)fLookAtTurnSpeed * (float)-0.1) > v7)
+            {
+                v9 = (float)-(float)((float)(self->lookAtInfo.fLookAtTurnAccel * (float)0.050000001) - (float)fLookAtTurnSpeed);
+            }
+            else
+            {
+                v9 = (float)((float)fLookAtTurnSpeed * (float)1.5);
+                if (v9 <= -10.0)
+                {
+                    if ((float)((float)v9 * (float)-0.1) > v7)
+                        v9 = (float)((float)((float)v7 * (float)-10.0) - (float)0.1);
+                }
+                else
+                {
+                    v9 = -10.0;
+                }
+            }
+            goto LABEL_32;
+        }
+    LABEL_26:
+        if ((float)((float)fLookAtTurnSpeed * (float)0.1) < v7)
+        {
+            v9 = (float)((float)(self->lookAtInfo.fLookAtTurnAccel * (float)0.050000001) + (float)fLookAtTurnSpeed);
+        }
+        else
+        {
+            v9 = (float)-(float)((float)((float)fLookAtTurnSpeed * (float)0.5) - (float)fLookAtTurnSpeed);
+            if (v9 >= 10.0)
+            {
+                if ((float)((float)v9 * (float)0.1) < v7)
+                    v9 = (float)((float)((float)v7 * (float)10.0) + (float)0.1);
+            }
+            else
+            {
+                v9 = 10.0;
+            }
+        }
+    LABEL_32:
+        if (v9 > (float)(self->lookAtInfo.fLookAtTurnAccel * (float)0.22))
+            v9 = (float)(self->lookAtInfo.fLookAtTurnAccel * (float)0.22);
+        if (v2)
+        {
+            v9 = (float)((float)v9 * (float)-1.0);
+            v5 = (float)((float)v5 * (float)-1.0);
+        }
+        self->lookAtInfo.fLookAtTurnSpeed = v9;
+        if (fLookAtTurnAngle >= v5)
+        {
+            v11 = (float)((float)((float)v9 * (float)0.050000001) + self->lookAtInfo.fLookAtTurnAngle);
+            self->lookAtInfo.fLookAtTurnAngle = v11;
+            if (v11 > v5)
+                goto LABEL_41;
+        }
+        else
+        {
+            v10 = (float)((float)((float)v9 * (float)0.050000001) + (float)fLookAtTurnAngle);
+            self->lookAtInfo.fLookAtTurnAngle = v10;
+            if (v10 < v5)
+                goto LABEL_41;
+        }
+    LABEL_40:
+        self->lookAtInfo.fLookAtTurnAngle = v5;
+        self->lookAtInfo.fLookAtTurnSpeed = 0.0;
+    LABEL_41:
+        pAnimTree = G_GetEntAnimTree(self->ent);
+        if (!pAnimTree)
+            MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_lookat.cpp", 317, 0, "%s", "pAnimTree");
+        v13 = (float)((float)(self->lookAtInfo.fLookAtTurnAngle / Actor_CurrentLookAtAnimYawMax(self)) * (float)0.5);
+        if (v13 <= 1.0)
+        {
+            if (v13 < -1.0)
+                v13 = -1.0;
+        }
+        else
+        {
+            v13 = 1.0;
+        }
+        ServerDObj = Com_GetServerDObj(self->ent->s.number);
+        if (v13 <= 0.0)
+        {
+            v13 = (float)((float)v13 * (float)-1.0);
+            Weight = XAnimGetWeight(pAnimTree, self->lookAtInfo.animLookAtLeft);
+            v19 = 0.075000003;
+            if (v13 != Weight)
+                XAnimSetCompleteGoalWeight(
+                    ServerDObj,
+                    self->lookAtInfo.animLookAtLeft,
+                    v13,
+                    //(float)((float)0.075000003 / (float)I_fabs((float)((float)v13 - (float)Weight))),
+                    (float)((float)0.075f / (float)fabs((float)((float)v13 - (float)Weight))),
+                    1.0, 0, 0, 0);
+            v23 = XAnimGetWeight(pAnimTree, self->lookAtInfo.animLookAtRight);
+            if (v23 == 0.0)
+                goto LABEL_57;
+            animLookAtRight = self->lookAtInfo.animLookAtRight;
+        }
+        else
+        {
+            v18 = XAnimGetWeight(pAnimTree, self->lookAtInfo.animLookAtRight);
+            v19 = 0.075000003;
+            if (v13 != v18)
+                XAnimSetCompleteGoalWeight(
+                    ServerDObj,
+                    self->lookAtInfo.animLookAtRight,
+                    v13,
+                    //(float)((float)0.075000003 / (float)I_fabs((float)((float)v13 - (float)v18))),
+                    (float)((float)0.075f / (float)fabs((float)((float)v13 - (float)v18))),
+                    1.0, 0, 0, 0);
+            v23 = XAnimGetWeight(pAnimTree, self->lookAtInfo.animLookAtLeft);
+            if (v23 == 0.0)
+                goto LABEL_57;
+            animLookAtRight = self->lookAtInfo.animLookAtLeft;
+        }
+        XAnimSetCompleteGoalWeight(ServerDObj, animLookAtRight, 0.0, (float)((float)v19 / (float)v23), 1.0, 0, 0, 0);
+    LABEL_57:
+        v29 = (float)((float)1.0 - (float)v13);
+        v33 = XAnimGetWeight(pAnimTree, self->lookAtInfo.animLookAtStraight);
+        if (v29 != v33)
+            XAnimSetCompleteGoalWeight(
+                ServerDObj,
+                self->lookAtInfo.animLookAtStraight,
+                v29,
+                //(float)((float)v19 / (float)I_fabs((float)((float)v29 - (float)v33))),
+                (float)((float)v19 / (float)fabs((float)((float)v29 - (float)v33))),
+                1.0, 0, 0, 0);
+    }
+}
+

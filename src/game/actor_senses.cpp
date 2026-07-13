@@ -1,0 +1,850 @@
+#ifndef KISAK_SP 
+#error This file is for SinglePlayer only 
+#endif
+
+#include "actor_senses.h"
+#include "g_main.h"
+#include <universal/com_math.h>
+#include <server/server.h>
+#include "pathnode.h"
+#include "actor.h"
+#include "sentient.h"
+#include "g_local.h"
+#include <script/scr_const.h>
+#include "actor_turret.h"
+#include "turret.h"
+#include <universal/profile.h>
+
+int Actor_SightTrace(actor_s *self, const float *start, const float *end, int passEntNum)
+{
+    int traceResult[2];
+    float adjustedStart[3];
+    const float *secondTraceStart = start;
+    const float *secondTraceEnd = end;
+    int secondTraceFlags;
+
+    ++self->iTraceCount;
+    int entNum = self->ent->s.number;
+
+    if (self->ignoreCloseFoliage)
+    {
+        float dx = end[0] - start[0];
+        float dy = end[1] - start[1];
+        float dz = end[2] - start[2];
+
+        float distSq = dx * dx + dy * dy + dz * dz;
+        float dist = sqrtf(distSq);
+        float invDist = (dist != 0.0f) ? (1.0f / dist) : 1.0f;
+
+        float foliageIgnoreDist = ai_foliageIngoreDist->current.value;
+        adjustedStart[0] = start[0] + dx * invDist * foliageIgnoreDist;
+        adjustedStart[1] = start[1] + dy * invDist * foliageIgnoreDist;
+        adjustedStart[2] = start[2] + dz * invDist * foliageIgnoreDist;
+
+        SV_SightTrace(traceResult, adjustedStart, vec3_origin, vec3_origin, end, entNum, passEntNum, 41998339);
+        if (traceResult[0])
+            return 0;
+
+        secondTraceEnd = adjustedStart;
+        secondTraceFlags = 41998337;
+    }
+    else
+    {
+        float dx = end[0] - start[0];
+        float dy = end[1] - start[1];
+        float dz = end[2] - start[2];
+
+        float distSq = dx * dx + dy * dy + dz * dz;
+        float threshold = ai_foliageIngoreDist->current.value;
+        secondTraceFlags = (distSq >= threshold * threshold) ? 41998339 : 41998337;
+    }
+
+    SV_SightTrace(traceResult, secondTraceStart, vec3_origin, vec3_origin, secondTraceEnd, entNum, passEntNum, secondTraceFlags);
+
+    if (traceResult[0] || SV_FX_GetVisibility(start, end) < 0.2f)
+        return 0;
+
+    return 1;
+}
+
+int __cdecl Actor_CanSeePointFrom(
+    actor_s *self,
+    const float *vStart,
+    const float *vEnd,
+    double fMaxDistSqrd,
+    int ignoreEntityNum)
+{
+    double v11; // fp13
+    double v12; // fp12
+    double v13; // fp0
+
+    if (fMaxDistSqrd < 0.0)
+        MyAssertHandler(
+            "c:\\trees\\cod3\\cod3src\\src\\game\\actor_senses.cpp",
+            100,
+            0,
+            "%s\n\t(fMaxDistSqrd) = %g",
+            "(fMaxDistSqrd >= 0)",
+            fMaxDistSqrd);
+    if (!self)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_senses.cpp", 101, 0, "%s", "self");
+    if (!self->ent)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_senses.cpp", 102, 0, "%s", "self->ent");
+    if (fMaxDistSqrd == 0.0)
+        return Actor_SightTrace(self, vStart, vEnd, ignoreEntityNum);
+    v11 = (float)(vEnd[2] - vStart[2]);
+    v12 = (float)(vEnd[1] - vStart[1]);
+    v13 = (float)((float)((float)v12 * (float)v12)
+        + (float)((float)((float)(*vEnd - *vStart) * (float)(*vEnd - *vStart)) + (float)((float)v11 * (float)v11)));
+    if (v13 <= fMaxDistSqrd && v13 <= level.fFogOpaqueDistSqrd)
+        return Actor_SightTrace(self, vStart, vEnd, ignoreEntityNum);
+    else
+        return 0;
+}
+
+int __cdecl Actor_CanSeeEnemyViaClaimedNode(actor_s *self)
+{
+    pathnode_t *pClaimedNode; // r30
+    sentient_s *TargetSentient; // r31
+    const pathnode_t *v4; // r4
+    int v5; // r3
+    unsigned __int8 v6; // r11
+
+    pClaimedNode = self->sentient->pClaimedNode;
+    if (!pClaimedNode)
+        return 0;
+    TargetSentient = Actor_GetTargetSentient(self);
+    if (!TargetSentient)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_senses.cpp", 503, 0, "%s", "enemy");
+    v4 = Sentient_NearestNode(TargetSentient);
+    if (!v4)
+        return 0;
+    v5 = Path_ExpandedNodeVisible(pClaimedNode, v4);
+    v6 = 1;
+    if (!v5)
+        return 0;
+    return v6;
+}
+
+sentient_s *__cdecl Actor_KnowAboutEnemy(actor_s *self, int hadPath)
+{
+    sentient_s *result; // r3
+    sentient_s *v5; // r30
+    int lastKnownPosTime; // r11
+    unsigned __int8 v7; // r11
+    bool v8; // zf
+
+    result = Actor_GetTargetSentient(self);
+    v5 = result;
+    if (result)
+    {
+        if (hadPath || !(unsigned __int8)Actor_CanSeeEnemyViaClaimedNode(self))
+        {
+            lastKnownPosTime = self->sentientInfo[v5 - level.sentients].lastKnownPosTime;
+            if (!lastKnownPosTime)
+                return 0;
+            v8 = level.time - lastKnownPosTime < 10000;
+            v7 = 1;
+            if (!v8)
+                return 0;
+            return (sentient_s *)v7;
+        }
+        else
+        {
+            return (sentient_s *)1;
+        }
+    }
+    return result;
+}
+
+int __cdecl Actor_CanShootFrom(actor_s *self, const float *vTarget, const float *vFrom)
+{
+    double v6; // fp13
+    double v7; // fp12
+    unsigned __int16 EntityHitId; // r31
+    sentient_s *sentient; // r11
+    unsigned __int8 v11; // r11
+    bool v12; // zf
+    trace_t v13[2]; // [sp+50h] [-60h] BYREF
+
+    if (!self)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_senses.cpp", 572, 0, "%s", "self");
+    if (!self->ent)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_senses.cpp", 573, 0, "%s", "self->ent");
+    if (!self->sentient)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_senses.cpp", 574, 0, "%s", "self->sentient");
+    v6 = (float)(vFrom[2] - vTarget[2]);
+    v7 = (float)(vFrom[1] - vTarget[1]);
+    if ((float)((float)((float)v7 * (float)v7)
+        + (float)((float)((float)(*vFrom - *vTarget) * (float)(*vFrom - *vTarget)) + (float)((float)v6 * (float)v6))) > (double)level.fFogOpaqueDistSqrd)
+        return 0;
+    G_TraceCapsule(v13, vFrom, vec3_origin, vec3_origin, vTarget, self->ent->s.number, 33605729);
+    if (v13[0].fraction == 1.0)
+        return 1;
+    EntityHitId = Trace_GetEntityHitId(v13);
+    if (self->sentient->targetEnt.isDefined())
+    {
+        if (self->sentient->targetEnt.entnum() == EntityHitId)
+            return 1;
+    }
+    sentient = g_entities[EntityHitId].sentient;
+    if (!sentient)
+        return 0;
+    v12 = sentient->eTeam != self->sentient->eTeam;
+    v11 = 1;
+    if (!v12)
+        return 0;
+    return v11;
+}
+
+int __cdecl compare_sentient_sort(unsigned int *pe1, unsigned int *pe2)
+{
+    return pe2[1] - pe1[1];
+}
+
+void __cdecl Actor_UpdateLastKnownPos(actor_s *self, sentient_s *other)
+{
+    sentient_s *sentients; // r11
+    char *v5; // r11
+    char *v6; // r31
+
+    if (!self)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_senses.cpp", 743, 0, "%s", "self");
+    if (!other)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_senses.cpp", 744, 0, "%s", "other");
+    sentients = level.sentients;
+    if (other < level.sentients || other >= &level.sentients[33])
+    {
+        MyAssertHandler(
+            "c:\\trees\\cod3\\cod3src\\src\\game\\actor_senses.cpp",
+            745,
+            0,
+            "%s",
+            "other >= level.sentients && other < level.sentients + MAX_SENTIENTS");
+        sentients = level.sentients;
+    }
+    if (other != &sentients[other - sentients])
+    {
+        MyAssertHandler(
+            "c:\\trees\\cod3\\cod3src\\src\\game\\actor_senses.cpp",
+            746,
+            0,
+            "%s",
+            "other == level.sentients + (other - level.sentients)");
+        sentients = level.sentients;
+    }
+    v5 = (char *)self + 40 * (other - sentients);
+    v6 = v5 + 2100;
+    *((unsigned int *)v5 + 529) = level.time;
+    Sentient_GetOrigin(other, (float *)v5 + 531);
+    *((unsigned int *)v6 + 9) = (unsigned int)other->pNearestNode;
+}
+
+void __cdecl Actor_UpdateLastEnemySightPos(actor_s *self)
+{
+    const sentient_s *TargetSentient; // r3
+    char *v3; // r11
+
+    TargetSentient = Actor_GetTargetSentient(self);
+    if (TargetSentient)
+    {
+        v3 = (char *)self + 40 * (TargetSentient - level.sentients);
+        if (v3[2100])
+        {
+            if (*((unsigned int *)v3 + 527) == level.time)
+            {
+                self->lastEnemySightPosValid = 1;
+                Sentient_GetEyePosition(TargetSentient, self->lastEnemySightPos);
+            }
+        }
+    }
+}
+
+void __cdecl Actor_UpdateEyeInformation(actor_s *self)
+{
+    float tagMat[4][3]; // [esp+2Ch] [ebp-30h] BYREF
+
+    iassert(self);
+    iassert(self->ent);
+
+    if (self->eyeInfo.time != level.time)
+    {
+        PROF_SCOPED("Actor_UpdateEyeInformation");
+
+        self->eyeInfo.time = level.time;
+
+        if (G_DObjGetWorldTagMatrix(self->ent, scr_const.tag_eye, tagMat))
+        {
+            self->eyeInfo.pos[0] = tagMat[3][0];
+            self->eyeInfo.pos[1] = tagMat[3][1];
+            self->eyeInfo.pos[2] = tagMat[3][2];
+
+            self->eyeInfo.dir[0] = tagMat[0][0];
+            self->eyeInfo.dir[1] = tagMat[0][1];
+
+            Vec2Normalize(self->eyeInfo.dir);
+            self->eyeInfo.dir[2] = 0.0f;
+        }
+        else
+        {
+            Com_Printf(18, "Actor_UpdateEyeInformation: Actor dobj doesn't have TAG_EYE.\n");
+
+            self->eyeInfo.pos[0] = self->ent->r.currentOrigin[0];
+            self->eyeInfo.pos[1] = self->ent->r.currentOrigin[1];
+            self->eyeInfo.pos[2] = self->ent->r.currentOrigin[2];
+            self->eyeInfo.pos[2] += 64.0f;
+
+            self->eyeInfo.dir[0] = self->vLookForward[0];
+            self->eyeInfo.dir[1] = self->vLookForward[1];
+            self->eyeInfo.dir[2] = self->vLookForward[2];
+        }
+    }
+}
+
+void __cdecl Actor_GetEyePosition(actor_s *self, float *vEyePosOut)
+{
+    if (!self)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_senses.cpp", 843, 0, "%s", "self");
+    if (!vEyePosOut)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_senses.cpp", 844, 0, "%s", "vEyePosOut");
+    Actor_UpdateEyeInformation(self);
+    *vEyePosOut = self->eyeInfo.pos[0];
+    vEyePosOut[1] = self->eyeInfo.pos[1];
+    vEyePosOut[2] = self->eyeInfo.pos[2];
+}
+
+void __cdecl Actor_GetDebugEyePosition(actor_s *self, float *vEyePosOut)
+{
+    gentity_s *ent; // r8
+    int v5; // r9
+    float *v6; // r10
+    float *absmax; // r11
+    double v8; // fp0
+
+    if (!self)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_senses.cpp", 870, 0, "%s", "self");
+    if (!vEyePosOut)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_senses.cpp", 871, 0, "%s", "vEyePosOut");
+    *vEyePosOut = self->eyeInfo.pos[0];
+    ent = self->ent;
+    v5 = 0;
+    vEyePosOut[1] = self->eyeInfo.pos[1];
+    v6 = vEyePosOut;
+    absmax = ent->r.absmax;
+    vEyePosOut[2] = self->eyeInfo.pos[2];
+    while (1)
+    {
+        v8 = *v6;
+        if (v8 < (float)(*(absmax - 3) - (float)32.0) || v8 >(float)(*absmax + (float)32.0))
+            break;
+        ++v5;
+        ++v6;
+        ++absmax;
+        if (v5 >= 3)
+            return;
+    }
+    *vEyePosOut = ent->r.currentOrigin[0];
+    vEyePosOut[1] = ent->r.currentOrigin[1];
+    vEyePosOut[2] = ent->r.currentOrigin[2] + (float)56.0;
+}
+
+void __cdecl Actor_GetEyeDirection(actor_s *self, float *vEyeDir)
+{
+    if (!self)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_senses.cpp", 896, 0, "%s", "self");
+    if (!vEyeDir)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_senses.cpp", 897, 0, "%s", "vEyeDir");
+    Actor_UpdateEyeInformation(self);
+    *vEyeDir = self->eyeInfo.dir[0];
+    vEyeDir[1] = self->eyeInfo.dir[1];
+    vEyeDir[2] = self->eyeInfo.dir[2];
+}
+
+void __cdecl Actor_GetEyeOffset(actor_s *self, float *vEyePosOut)
+{
+    if (!self)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_senses.cpp", 913, 0, "%s", "self");
+    if (!vEyePosOut)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_senses.cpp", 914, 0, "%s", "vEyePosOut");
+    *vEyePosOut = 0.0;
+    vEyePosOut[1] = 0.0;
+    vEyePosOut[2] = 64.0;
+}
+
+int __cdecl Actor_GetMuzzleInfo(actor_s *self, float *vOrigin, float *vForward)
+{
+    double v7; // fp0
+    double v8; // fp13
+    double v9; // fp12
+    double v10; // fp11
+    double v11; // fp10
+    double v12; // fp9
+    float v13[28]; // [sp+50h] [-70h] BYREF
+
+    if (!self)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_senses.cpp", 931, 0, "%s", "self");
+    if (self->muzzleInfo.time != level.time)
+    {
+        //Profile_Begin(238);
+        if (!G_DObjGetWorldTagMatrix(self->ent, scr_const.tag_flash, (float (*)[3])v13))
+        {
+            //Profile_EndInternal(0);
+            return 0;
+        }
+        v7 = v13[9];
+        v8 = v13[10];
+        v9 = v13[11];
+        v10 = v13[0];
+        v11 = v13[1];
+        self->muzzleInfo.time = level.time;
+        v12 = v13[2];
+        self->muzzleInfo.pos[0] = v7;
+        self->muzzleInfo.pos[1] = v8;
+        self->muzzleInfo.pos[2] = v9;
+        self->muzzleInfo.dir[0] = v10;
+        self->muzzleInfo.dir[1] = v11;
+        self->muzzleInfo.dir[2] = v12;
+        //Profile_EndInternal(0);
+    }
+    if (!vOrigin)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_senses.cpp", 950, 0, "%s", "vOrigin");
+    *vOrigin = self->muzzleInfo.pos[0];
+    vOrigin[1] = self->muzzleInfo.pos[1];
+    vOrigin[2] = self->muzzleInfo.pos[2];
+    if (vForward)
+    {
+        *vForward = self->muzzleInfo.dir[0];
+        vForward[1] = self->muzzleInfo.dir[1];
+        vForward[2] = self->muzzleInfo.dir[2];
+    }
+    return 1;
+}
+
+bool __cdecl PointInFovAndRange(
+    actor_s *self,
+    const float *vEyePos,
+    const float *vPoint,
+    double fovDot,
+    double fMaxDistSqrd)
+{
+    double v6; // fp31
+    double v7; // fp30
+    double v8; // fp29
+    double v9; // fp27
+    bool result; // r3
+    double v11; // fp0
+    float v12[18]; // [sp+50h] [-50h] BYREF
+
+    v6 = (float)(*vPoint - *vEyePos);
+    v7 = (float)(vPoint[2] - vEyePos[2]);
+    v8 = (float)(vPoint[1] - vEyePos[1]);
+    v9 = (float)((float)((float)v8 * (float)v8)
+        + (float)((float)((float)(*vPoint - *vEyePos) * (float)(*vPoint - *vEyePos))
+            + (float)((float)v7 * (float)v7)));
+    result = 0;
+    if (fMaxDistSqrd == 0.0 || v9 <= fMaxDistSqrd && v9 <= level.fFogOpaqueDistSqrd)
+    {
+        if (fovDot == 0.0)
+            return 1;
+        Actor_GetEyeDirection(self, v12);
+        v11 = (float)((float)(v12[1] * (float)v8) + (float)((float)((float)v6 * v12[0]) + (float)(v12[2] * (float)v7)));
+        if (v11 >= 0.0
+            && (float)((float)v11 * (float)v11) >= (double)(float)((float)((float)v9 * (float)fovDot) * (float)fovDot))
+        {
+            return 1;
+        }
+    }
+    return result;
+}
+
+int __cdecl Actor_CanSeePointExInternal(
+    actor_s *self,
+    const float *vPoint,
+    double fovDot,
+    double fMaxDistSqrd,
+    int ignoreEntityNum,
+    float *vViewPos)
+{
+    iassert(fovDot >= 0);
+    iassert(fMaxDistSqrd >= 0.0);
+
+    int result = PointInFovAndRange(self, vViewPos, vPoint, fovDot, fMaxDistSqrd);
+    if (result)
+        return Actor_SightTrace(self, vViewPos, vPoint, ignoreEntityNum);
+    return result;
+}
+
+int __cdecl Actor_CanSeePointEx(
+    actor_s *self,
+    const float *vPoint,
+    double fovDot,
+    double fMaxDistSqrd,
+    int ignoreEntityNum)
+{
+    float *v12; // r6
+    int v13; // r5
+    float v15[2]; // [sp+50h] [-60h] BYREF
+    float v16[6]; // [sp+58h] [-58h] BYREF
+
+    iassert(fovDot >= 0);
+    iassert(fMaxDistSqrd >= 0.0);
+    
+    if (!Actor_IsUsingTurret(self) || !turret_CanTargetPoint(self->pTurret, vPoint, v16, v15))
+        Actor_GetEyePosition(self, v16);
+
+    return Actor_CanSeePointExInternal(self, vPoint, fovDot, fMaxDistSqrd, ignoreEntityNum, v16);
+}
+
+void __cdecl Actor_UpdateVisCache(actor_s *self, const gentity_s *ent, sentient_info_t *pInfo, bool bVisible)
+{
+    bool v8; // r31
+    int number; // r5
+
+    if (!self)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_senses.cpp", 265, 0, "%s", "self");
+    if (!ent)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_senses.cpp", 266, 0, "%s", "ent");
+    if (!pInfo)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_senses.cpp", 267, 0, "%s", "pInfo");
+    v8 = pInfo->VisCache.bVisible;
+    VisCache_Update(&pInfo->VisCache, bVisible);
+    if (bVisible)
+    {
+        if (!v8)
+        {
+            number = self->ent->s.number;
+            if (g_dumpAIEvents->current.integer == number)
+                Com_Printf(18, "%d ^3 visible^7:  entity^5 %d ^7at time^5 %d\n", number, ent->s.number, level.time);
+            if (ent == Actor_GetTargetEntity(self))
+                Scr_Notify(self->ent, scr_const.enemy_visible, 0);
+        }
+        if (!Actor_IsUsingTurret(self))
+            pInfo->attackTime = 0;
+        Actor_UpdateLastKnownPos(self, ent->sentient);
+    }
+}
+
+int Actor_CanSeeEntityEx(actor_s *self, const gentity_s *ent, double fovDot, double fMaxDistSqrd)
+{
+    iassert(self);
+    iassert(self->sentient);
+    iassert(ent);
+    iassert(fovDot);
+    iassert(fMaxDistSqrd);
+
+    sentient_s *targetSentient;
+    float fMaxSightDistSqrd; // [esp+14h] [ebp-54h]
+    BOOL v8; // [esp+18h] [ebp-50h]
+    int v9; // [esp+1Ch] [ebp-4Ch]
+    BOOL v10; // [esp+20h] [ebp-48h]
+    float v11; // [esp+24h] [ebp-44h]
+    bool bVisible; // [esp+37h] [ebp-31h]
+    float vViewPos[3]; // [esp+3Ch] [ebp-2Ch] BYREF
+    sentient_s *sentient; // [esp+48h] [ebp-20h]
+    bool bOtherVisible; // [esp+4Fh] [ebp-19h]
+    sentient_info_t *pInfo; // [esp+50h] [ebp-18h]
+    float fovDotUse; // [esp+54h] [ebp-14h]
+    float vDestPos[3]; // [esp+58h] [ebp-10h] BYREF
+    int bCacheable; // [esp+64h] [ebp-4h]
+
+    sentient = ent->sentient;
+    if (sentient)
+    {
+        // KISAKFIX: kisak cast both pointers to uintptr_t and subtracted, which
+        // yields a *byte* difference (multiple of sizeof(sentient_s)=116). Used
+        // as an index into sentientInfo[33] (40-byte entries) it shoots far
+        // past the array for every non-zero sentient index — Actor_UpdateVisCache
+        // then writes through this `pInfo` into random fields of actor_s, so the
+        // player (sentient_s ≠ level.sentients[0]) is never marked visible.
+        // IDA uses plain pointer arithmetic which the compiler divides by 116.
+        pInfo = &self->sentientInfo[sentient - level.sentients];
+        Sentient_GetEyePosition(sentient, vDestPos);
+        // KISAKFIX: kisak deleted the turret fast-path. IDA Actor_CanSeeEntityEx at
+        // 0x82210228 inside `if (sentient)`:
+        //   if (Actor_IsUsingTurret(self)) {
+        //     if (turret_CanTargetPoint || turret_CanTargetSentient) goto LABEL_19; // skip GetEyePosition
+        //     if (level.time - lastKnownPosTime >= 1000 && Vec2DistSq >= 262144) return 0; // stale + far bail
+        //   }
+        //   Actor_GetEyePosition(self, vViewPos);
+        // Without this: turret-mounted NPCs can't use the turret's view origin for
+        // LOS, and they never bail on stale + far targets.
+        if (Actor_IsUsingTurret(self))
+        {
+            float localAngles[2];
+            if (turret_CanTargetPoint(self->pTurret, vDestPos, vViewPos, localAngles)
+             || turret_CanTargetSentient(self->pTurret, sentient, vDestPos, vViewPos, localAngles))
+            {
+                // skip Actor_GetEyePosition — vViewPos already has turret view origin
+                goto LABEL_19;
+            }
+            if (level.time - pInfo->lastKnownPosTime >= 1000
+             && Vec2DistanceSq(vDestPos, self->ent->r.currentOrigin) >= 262144.0f)
+                return 0;
+        }
+        Actor_GetEyePosition(self, vViewPos);
+    LABEL_19:
+        fovDotUse = fovDot;
+        targetSentient = Actor_GetTargetSentient(self);
+
+        if (targetSentient == sentient || (self->pFavoriteEnemy.isDefined() && self->pFavoriteEnemy.sentient() == sentient))
+        {
+            fovDotUse = 0.0f;
+        }
+
+        if ((float)(fMaxDistSqrd - (float)(sentient->maxVisibleDist * sentient->maxVisibleDist)) < 0.0)
+            v11 = fMaxDistSqrd;
+        else
+            v11 = sentient->maxVisibleDist * sentient->maxVisibleDist;
+        fMaxDistSqrd = v11;
+        bVisible = Actor_CanSeePointExInternal(self, vDestPos, fovDotUse, v11, ent->s.number, vViewPos);
+    }
+    else
+    {
+        if (!G_DObjGetWorldTagPos(ent, scr_const.tag_eye, vDestPos))
+            G_EntityCentroid(ent, vDestPos);
+        pInfo = 0;
+        bVisible = Actor_CanSeePointEx(self, vDestPos, fovDot, fMaxDistSqrd, ent->s.number);
+    }
+
+    if (bVisible)
+    {
+        v10 = fovDot >= self->fovDot && self->fMaxSightDistSqrd >= fMaxDistSqrd;
+        v9 = v10;
+    }
+    else
+    {
+        v8 = self->fovDot >= fovDot && fMaxDistSqrd >= self->fMaxSightDistSqrd;
+        v9 = v8;
+    }
+
+    bCacheable = v9;
+
+    if (v9 && sentient)
+        Actor_UpdateVisCache(self, ent, pInfo, bVisible);
+
+    if (!bVisible)
+        return 0;
+
+    // KISAKFIX: kisak missed the turret gate. IDA Actor_CanSeeEntityEx:
+    //   if (ent->actor && !Actor_IsUsingTurret(self) && !Actor_IsUsingTurret(ent->actor))
+    //     { ... mutual viscache update ... }
+    // Without the gate, a turret operator's viscache for the other side gets
+    // stale bVisible/iLastUpdateTime, corrupting that actor's threat picker the
+    // next frame.
+    if (ent->actor && !Actor_IsUsingTurret(self) && !Actor_IsUsingTurret(ent->actor))
+    {
+        bOtherVisible = 1;
+        iassert(ent->sentient);
+        if ((float)(ent->actor->fMaxSightDistSqrd - (float)(self->sentient->maxVisibleDist * self->sentient->maxVisibleDist)) < 0.0)
+            fMaxSightDistSqrd = ent->actor->fMaxSightDistSqrd;
+        else
+            fMaxSightDistSqrd = self->sentient->maxVisibleDist * self->sentient->maxVisibleDist;
+        if (!PointInFovAndRange(ent->actor, vDestPos, vViewPos, ent->actor->fovDot, fMaxSightDistSqrd))
+            bOtherVisible = 0;
+        pInfo = &ent->actor->sentientInfo[self->sentient - level.sentients];
+        Actor_UpdateVisCache(ent->actor, self->ent, pInfo, bOtherVisible);
+    }
+
+    return 1;
+}
+
+int __cdecl Actor_CanSeeSentientEx(
+    actor_s *self,
+    sentient_s *sentient,
+    double fovDot,
+    double fMaxDistSqrd,
+    int iMaxLatency)
+{
+    iassert(self);
+    iassert(sentient);
+    iassert(self->sentient);
+    iassert(self->sentient != sentient);
+
+    sentient_info_t *pInfo = &self->sentientInfo[sentient - level.sentients];
+    int iLastUpdateTime = pInfo->VisCache.iLastUpdateTime;
+    if (iLastUpdateTime
+        && iLastUpdateTime + iMaxLatency >= level.time
+        && pInfo->VisCache.bVisible
+        && fovDot <= self->fovDot
+        && fMaxDistSqrd <= self->fMaxSightDistSqrd)
+    {
+        return 1;
+    }
+    return Actor_CanSeeEntityEx(self, sentient->ent, fovDot, fMaxDistSqrd);
+}
+
+int __cdecl Actor_CanShootEnemy(actor_s *self)
+{
+    int result; // r3
+    float v3[4]; // [sp+50h] [-40h] BYREF
+    float v4[12]; // [sp+60h] [-30h] BYREF
+
+    iassert(self);
+    iassert(self->ent);
+    iassert(self->sentient);
+    iassert(self->sentient->targetEnt.isDefined());
+
+    Actor_GetTargetLookPosition(self, v4);
+    result = Actor_GetMuzzleInfo(self, v3, 0);
+    if (result)
+        return Actor_CanShootFrom(self, v4, v3);
+
+    return result;
+}
+
+int __cdecl Actor_CanSeePoint(actor_s *self, const float *vPoint)
+{
+    return Actor_CanSeePointEx(self, vPoint, self->fovDot, self->fMaxSightDistSqrd, ENTITYNUM_NONE);
+}
+
+int __cdecl Actor_CanSeeEntityPoint(actor_s *self, const float *vPoint, const gentity_s *ent)
+{
+    return Actor_CanSeePointEx(self, vPoint, self->fovDot, self->fMaxSightDistSqrd, ent->s.number);
+}
+
+int __cdecl Actor_CanSeeEntity(actor_s *self, const gentity_s *ent)
+{
+    return Actor_CanSeeEntityEx(self, ent, self->fovDot, self->fMaxSightDistSqrd);
+}
+
+int __cdecl Actor_CanSeeSentient(actor_s *self, sentient_s *sentient, int iMaxLatency)
+{
+    if (self->sentientInfo[sentient - level.sentients].VisCache.iLastUpdateTime
+        && iMaxLatency + self->sentientInfo[sentient - level.sentients].VisCache.iLastUpdateTime >= level.time)
+    {
+        return self->sentientInfo[sentient - level.sentients].VisCache.bVisible;
+    }
+    else
+    {
+        return Actor_CanSeeEntity(self, sentient->ent);
+    }
+}
+
+int __cdecl Actor_CanSeeEnemy(actor_s *self)
+{
+    sentient_s *TargetSentient; // r4
+    const gentity_s *v4; // r3
+
+    iassert(self);
+    iassert(self->sentient);
+    iassert(self->sentient->targetEnt.isDefined());
+
+    TargetSentient = Actor_GetTargetSentient(self);
+    if (TargetSentient)
+        return Actor_CanSeeSentient(self, TargetSentient, 250);
+
+    v4 = self->sentient->targetEnt.ent();
+    return Actor_CanSeeEntityEx(self, v4, self->fovDot, self->fMaxSightDistSqrd);
+}
+
+int __cdecl Actor_CanSeeEnemyExtended(actor_s *self, int useClaimedNode)
+{
+    sentient_s *TargetSentient; // r30
+    int iLastVisTime; // r11
+    unsigned __int8 v7; // r11
+    bool v8; // zf
+    const gentity_s *v9; // r3
+
+    iassert(self);
+    iassert(self->sentient);
+    iassert(self->sentient->targetEnt.isDefined());
+
+    TargetSentient = Actor_GetTargetSentient(self);
+    if (TargetSentient)
+    {
+        if (useClaimedNode && (unsigned __int8)Actor_CanSeeEnemyViaClaimedNode(self))
+        {
+            return 1;
+        }
+        else
+        {
+            iLastVisTime = self->sentientInfo[TargetSentient - level.sentients].VisCache.iLastVisTime;
+            if (!iLastVisTime)
+                return 0;
+            v8 = level.time - iLastVisTime < 10000;
+            v7 = 1;
+            if (!v8)
+                return 0;
+            return v7;
+        }
+    }
+    else
+    {
+        v9 = self->sentient->targetEnt.ent();
+        return Actor_CanSeeEntityEx(self, v9, self->fovDot, self->fMaxSightDistSqrd);
+    }
+}
+
+void __cdecl Actor_UpdateSight(actor_s *self)
+{
+    sentient_s *sentient; // r29
+    int iTraceCount; // r29
+    int iLastUpdateTime; // r11
+    float v[3]; // [sp+50h] [-1B0h] BYREF // v16
+    float *currentOrigin;
+
+    sentient_sort_t check[48];
+
+    PROF_SCOPED("Actor_UpdateSight");
+
+    iassert(self);
+    iassert(self->sentient);
+
+    int iTeamFlags = 1 << Sentient_EnemyTeam(self->sentient->eTeam);
+
+    int iCheckCount = 0;
+
+    {
+        PROF_SCOPED("sight 1");
+
+        for (sentient = Sentient_FirstSentient(iTeamFlags); sentient; sentient = Sentient_NextSentient(sentient, iTeamFlags))
+        {
+            iassert(sentient->ent);
+            iassert(sentient->ent->s.number != self->ent->s.number);
+
+            Sentient_GetOrigin(sentient, v);
+            float *currentOrigin = self->ent->r.currentOrigin;
+            v[0] -= currentOrigin[0];
+            v[1] -= currentOrigin[1];
+            v[2] -= currentOrigin[2];
+            float fDistSqrd = Vec3LengthSq(v);
+
+            if (fDistSqrd != 0.0f)
+            {
+                // KISAKFIX: same byte-vs-element-index bug as in Actor_CanSeeEntityEx.
+                // Cast-to-uintptr subtraction yields a byte difference (multiple of 116);
+                // plain pointer arithmetic divides by sizeof(sentient_s) to give a real
+                // index. Garbage iLastUpdateTime → garbage `staleness` metric → every
+                // non-#0 sentient ends up at the bottom of the priority queue.
+                int v4 = level.time - self->sentientInfo[sentient - level.sentients].VisCache.iLastUpdateTime - 100;
+                float v2 = (float)(v4 & ~(v4 >> 31));
+                float v1 = I_rsqrt(fDistSqrd);
+
+                check[iCheckCount].fMetric = v1 * v2;
+                check[iCheckCount].sentient = sentient;
+                iCheckCount++;
+
+                iassert(iCheckCount < ARRAY_COUNT(check)); // LWSS ADD
+            }
+        }
+
+        if (iCheckCount > 1)
+        {
+            qsort(check, iCheckCount, sizeof(sentient_sort_t), (int(__cdecl *)(const void *, const void *))compare_sentient_sort);
+        }
+    }
+
+    {
+        PROF_SCOPED("sight 2");
+
+        int iOldTraceCount = self->iTraceCount;
+        for (int i = 0; i < iCheckCount; i++)
+        {
+            Actor_CanSeeSentient(self, check[i].sentient, 0);
+
+            if (self->iTraceCount != iOldTraceCount)
+                break;
+        }
+    }
+}
+

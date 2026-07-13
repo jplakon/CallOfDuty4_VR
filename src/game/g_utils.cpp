@@ -1,0 +1,3310 @@
+#ifndef KISAK_SP 
+#error This file is for SinglePlayer only 
+#endif
+
+#include "g_local.h"
+#include <server/sv_public.h>
+#include <script/scr_const.h>
+#include <script/scr_vm.h>
+#include <stringed/stringed_hooks.h>
+#include "g_main.h"
+#include <server/sv_game.h>
+#include "turret.h"
+#include "actor_corpse.h"
+#include <script/scr_animtree.h>
+#include <database/database.h>
+#include <cgame/cg_ents.h>
+#include <xanim/dobj_utils.h>
+#include <script/scr_memorytree.h>
+#include "actor_turret.h"
+#include "actor_event_listeners.h"
+
+XModel *cached_models[512]{ NULL };
+
+void __cdecl TRACK_g_utils()
+{
+    track_static_alloc_internal(entityTypeNames, 68, "entityTypeNames", 9);
+    track_static_alloc_internal(cached_models, 2048, "cached_models", 9);
+}
+
+static bool dumpedOnce = false;
+void __cdecl G_DumpConfigStrings(int start, int max)
+{
+    int v4; // r31
+    unsigned int ConfigstringConst; // r3
+    const char *v6; // r3
+
+    if (!dumpedOnce)
+    {
+        v4 = 1;
+        for (dumpedOnce = 1; v4 < max; ++v4)
+        {
+            ConfigstringConst = SV_GetConfigstringConst(v4 + start);
+            v6 = SL_ConvertToString(ConfigstringConst);
+            Com_Printf(24, "G_FindConfigstringIndex: overflow (%d) [%d] %s\n", start, v4, v6);
+        }
+    }
+}
+
+int __cdecl G_FindConfigstringIndex(const char *name, int start, int max, int create, const char *errormsg)
+{
+    unsigned int String; // r3
+    unsigned int v11; // r26
+    int i; // r31
+    unsigned int ConfigstringConst; // r3
+    const char *v14; // r3
+    const char *v16; // r3
+
+    //Profile_Begin(247);
+    if (!name || !*name)
+    {
+        //Profile_EndInternal(0);
+        return 0;
+    }
+    if (start < CS_CASE_INSENSITIVE_BEGIN)
+        String = SL_FindString(name);
+    else
+        String = SL_FindLowercaseString(name);
+    v11 = String;
+    for (i = 1; i < max; ++i)
+    {
+        ConfigstringConst = SV_GetConfigstringConst(i + start);
+        if (ConfigstringConst == scr_const._)
+            break;
+        if (ConfigstringConst == v11)
+            goto LABEL_16;
+    }
+    if (!create)
+    {
+        //Profile_EndInternal(0);
+        if (errormsg)
+        {
+            v14 = va("%s \"%s\" not precached", errormsg, name);
+            Scr_Error(v14);
+            return 0;
+        }
+        return 0;
+    }
+    if (i == max)
+    {
+        G_DumpConfigStrings(start, max);
+        v16 = va("G_FindConfigstringIndex overflow (%d) : %s", start, name);
+        Com_Error(ERR_DROP, v16);
+    }
+    SV_SetConfigstring(i + start, name);
+LABEL_16:
+    //Profile_EndInternal(0);
+    return i;
+}
+
+static const char *origErrorMsg = "localized string";
+int __cdecl G_LocalizedStringIndex(const char *string)
+{
+    const char *v3; // r29
+    int initializing; // r28
+    unsigned int v5; // r30
+    int i; // r31
+    unsigned int ConfigstringConst; // r3
+    const char *v8; // r3
+    const char *v9; // r3
+    unsigned int v10; // r30
+    unsigned int v11; // r3
+    const char *v12; // r3
+
+    if (!string)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 170, 0, "%s", "string");
+    if (!*string)
+        return 0;
+    v3 = origErrorMsg;
+    initializing = level.initializing;
+    if (!level.initializing)
+    {
+        if (loc_warnings->current.enabled)
+        {
+            if (!loc_warningsAsErrors->current.enabled)
+                v3 = 0;
+        }
+        else
+        {
+            initializing = 1;
+        }
+    }
+    //Profile_Begin(247);
+    if (*string)
+    {
+        v5 = SL_FindString(string);
+        for (i = 1; i < 1023; ++i)
+        {
+            ConfigstringConst = SV_GetConfigstringConst(CS_LOCALIZED_STRINGS + i);
+            if (ConfigstringConst == scr_const._)
+                break;
+            if (ConfigstringConst == v5)
+                goto LABEL_22;
+        }
+        if (!initializing)
+        {
+            //Profile_EndInternal(0);
+            if (v3)
+            {
+                v8 = va("%s \"%s\" not precached", v3, string);
+                Scr_Error(v8);
+            }
+            i = 0;
+            goto LABEL_24;
+        }
+        if (i == 1023)
+        {
+            G_DumpConfigStrings(91, 1023);
+            v9 = va("G_LocalizedStringIndex: overflow (%d) : %s", 91, string);
+            Com_Error(ERR_DROP, v9);
+        }
+        SV_SetConfigstring(CS_LOCALIZED_STRINGS + i, string);
+    LABEL_22:
+        //Profile_EndInternal(0);
+        if (i)
+            return i;
+    }
+    else
+    {
+        //Profile_EndInternal(0);
+        i = 0;
+    }
+    if (initializing)
+        return i;
+LABEL_24:
+    if (!loc_warnings->current.enabled || loc_warningsAsErrors->current.enabled)
+        return i;
+    //Profile_Begin(247);
+    if (*string)
+    {
+        v10 = SL_FindString(string);
+        for (i = 1; i < 1023; ++i)
+        {
+            v11 = SV_GetConfigstringConst(i + 91);
+            if (v11 == scr_const._)
+                break;
+            if (v11 == v10)
+                goto LABEL_34;
+        }
+        if (i == 1023)
+        {
+            G_DumpConfigStrings(91, 1023);
+            v12 = va("G_LocalizedStringIndex: overflow (%d) : %s", 91, string);
+            Com_Error(ERR_DROP, v12);
+        }
+        SV_SetConfigstring(CS_LOCALIZED_STRINGS + i, string);
+    LABEL_34:
+        //Profile_EndInternal(0);
+        if (i)
+            Com_PrintWarning(24, "WARNING: %s \"%s\" not precached\n", origErrorMsg, string);
+        return i;
+    }
+    //Profile_EndInternal(0);
+    return 0;
+}
+
+int __cdecl G_MaterialIndex(const char *name)
+{
+    char *v2; // r11
+    int v3; // r10
+    char v5[96]; // [sp+50h] [-60h] BYREF
+
+    iassert(name);
+    iassert(name[0]);
+
+    v2 = (char*)name;
+    do
+    {
+        v3 = *(unsigned __int8 *)v2;
+        (v2++)[v5 - name] = v3;
+    } while (v3);
+    I_strlwr(v5);
+    return G_FindConfigstringIndex(v5, 2551, 128, level.initializing, "material"); // CS_SERVER_MATERIALS (PC SP, was Xbox 2583)
+}
+
+void __cdecl G_SetModelIndex(int modelIndex, const char *name)
+{
+    iassert(modelIndex > 0 && modelIndex < (1 << 9));
+    cached_models[modelIndex] = SV_XModelGet((char*)name);
+    SV_SetConfigstring(CS_MODELS + modelIndex, name);
+}
+
+int __cdecl G_ModelIndex(const char *name)
+{
+    unsigned int LowercaseString; // r29
+    int v4; // r31
+    unsigned int ConfigstringConst; // r3
+    const char *v6; // r3
+
+    //Profile_Begin(248);
+    if (!name)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 240, 0, "%s", "name");
+    if (!*name)
+    {
+        //Profile_EndInternal(0);
+        return 0;
+    }
+    LowercaseString = SL_FindLowercaseString(name);
+    v4 = 1;
+    while (1)
+    {
+        ConfigstringConst = SV_GetConfigstringConst(v4 + 1123); // CS_MODELS (PC SP, was Xbox 1155)
+        if (ConfigstringConst == scr_const._)
+        {
+        LABEL_9:
+            if (!level.initializing)
+            {
+                //Profile_EndInternal(0);
+                v6 = va("model '%s' not precached", name);
+                Scr_Error(v6);
+            }
+            if (v4 == 512)
+                Com_Error(ERR_DROP, "G_ModelIndex: overflow");
+            G_SetModelIndex(v4, name);
+            goto LABEL_14;
+        }
+        if (ConfigstringConst == LowercaseString)
+            break;
+        if (++v4 >= 512)
+            goto LABEL_9;
+    }
+    if (cached_models[v4])
+    {
+    LABEL_14:
+        //Profile_EndInternal(0);
+        return v4;
+    }
+    MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 258, 0, "%s", "cached_models[i]");
+    //Profile_EndInternal(0);
+    return v4;
+}
+
+XModel *__cdecl G_GetModel(int index)
+{
+    if (index <= 0)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 282, 0, "%s", "index > 0");
+    if (index >= 512)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 283, 0, "%s", "index < MAX_MODELS");
+    return cached_models[index];
+}
+
+bool __cdecl G_GetModelBounds(int index, float *outMins, float *outMaxs)
+{
+    const XModel *Model; // r29
+    float v8[8][3]; // [sp+50h] [-60h] BYREF
+
+    if (!outMins)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 293, 0, "%s", "outMins");
+    if (!outMaxs)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 294, 0, "%s", "outMaxs");
+    Model = G_GetModel(index);
+    if (!Model)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 296, 0, "%s", "xmodel");
+    AxisClear((mat3x3&)v8);
+    //return (_cntlzw(XModelGetStaticBounds(Model, (mat3x3&)v8, outMins, outMaxs)) & 0x20) == 0;
+    return XModelGetStaticBounds(Model, (mat3x3&)v8, outMins, outMaxs) != 0;
+}
+
+int __cdecl G_XModelBad(int index)
+{
+    const XModel *Model; // r3
+
+    if (!index)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 309, 0, "%s", "index");
+    Model = G_GetModel(index);
+    return XModelBad(Model);
+}
+
+unsigned int __cdecl G_ModelName(unsigned int index)
+{
+    if (index >= 0x200)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 316, 0, "%s", "(unsigned)index < MAX_MODELS");
+    return SV_GetConfigstringConst(index + 1123); // CS_MODELS (PC SP, was Xbox 1155)
+}
+
+void __cdecl G_EntityCentroidWithBounds(const gentity_s *ent, const float *mins, const float *maxs, float *centroid)
+{
+    double v8; // fp11
+    double v9; // fp13
+    float v10[4]; // [sp+50h] [-70h] BYREF
+    float v11[8][3]; // [sp+60h] [-60h] BYREF
+
+    if (!ent)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 323, 0, "%s", "ent");
+    if (!centroid)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 324, 0, "%s", "centroid");
+    AnglesToAxis(ent->r.currentAngles, v11);
+    v8 = (float)(mins[2] + maxs[2]);
+    v9 = (float)((float)(mins[1] + maxs[1]) * (float)0.5);
+    v10[0] = (float)(*mins + *maxs) * (float)0.5;
+    v10[1] = v9;
+    v10[2] = (float)v8 * (float)0.5;
+    MatrixTransformVector(v10, (const mat3x3&)v11, centroid);
+    *centroid = ent->r.currentOrigin[0] + *centroid;
+    centroid[1] = ent->r.currentOrigin[1] + centroid[1];
+    centroid[2] = ent->r.currentOrigin[2] + centroid[2];
+}
+
+void __cdecl G_EntityCentroid(const gentity_s *ent, float *centroid)
+{
+    double v4; // fp10
+    double v5; // fp13
+    float v6[4]; // [sp+50h] [-60h] BYREF
+    float v7[6][3]; // [sp+60h] [-50h] BYREF
+
+    if (!ent)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 340, 0, "%s", "ent");
+    if (!centroid)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 341, 0, "%s", "centroid");
+    AnglesToAxis(ent->r.currentAngles, v7);
+    v4 = ent->r.mins[2];
+    v5 = (float)(ent->r.mins[1] + ent->r.maxs[1]);
+    v6[0] = (float)(ent->r.mins[0] + ent->r.maxs[0]) * (float)0.5;
+    v6[2] = (float)((float)v4 + ent->r.maxs[2]) * (float)0.5;
+    v6[1] = (float)v5 * (float)0.5;
+    MatrixTransformVector(v6, (const mat3x3 &)v7, centroid);
+    *centroid = ent->r.currentOrigin[0] + *centroid;
+    centroid[1] = ent->r.currentOrigin[1] + centroid[1];
+    centroid[2] = ent->r.currentOrigin[2] + centroid[2];
+}
+
+int __cdecl G_EffectIndex(const char *name)
+{
+    if (!name)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 357, 0, "%s", "name");
+    if (!I_strncmp(name, "fx/", 3))
+        MyAssertHandler(
+            "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+            358,
+            0,
+            "%s\n\t(name) = %s",
+            "(I_strncmp( name, \"fx/\", 3 ))",
+            name);
+    return G_FindConfigstringIndex(name, 2147, 100, level.initializing, "effect"); // CS_EFFECT_NAMES (PC SP, was Xbox 2179)
+}
+
+int __cdecl G_ShellShockIndex(const char *name)
+{
+    if (!name)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 365, 0, "%s", "name");
+    return G_FindConfigstringIndex(name, 2503, 16, 1, 0); // CS_SHELLSHOCKS (PC SP, was Xbox 2535)
+}
+
+unsigned int __cdecl G_SoundAliasIndexTransientAdvance(unsigned __int16 aliasIndex, int offset)
+{
+    unsigned int v4; // r31
+
+    if (aliasIndex < 0x100u || aliasIndex >= 0x200u)
+        MyAssertHandler(
+            "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+            372,
+            0,
+            "%s\n\t(aliasIndex) = %i",
+            "(aliasIndex >= 256 && aliasIndex < 512)",
+            aliasIndex);
+    if (offset <= 0 || offset >= 256)
+        MyAssertHandler(
+            "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+            373,
+            0,
+            "%s\n\t(offset) = %i",
+            "(offset > 0 && offset < 512 - 256)",
+            offset);
+    v4 = (unsigned __int16)(aliasIndex + offset);
+    if (v4 >= 0x200)
+        v4 = (unsigned __int16)(v4 - 256);
+    if ((unsigned __int16)v4 < 0x100u || (unsigned __int16)v4 >= 0x200u)
+        MyAssertHandler(
+            "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+            379,
+            0,
+            "%s\n\t(aliasIndex) = %i",
+            "(aliasIndex >= 256 && aliasIndex < 512)",
+            (unsigned __int16)v4);
+    return v4;
+}
+
+unsigned int __cdecl G_SoundAliasIndexTransient(const char *name)
+{
+    unsigned __int16 soundAliasFirst; // r11
+    unsigned __int16 soundAliasLast; // r3
+    int v5; // r31
+    const char *v6; // r3
+    unsigned int LowercaseString; // r3
+    unsigned int v8; // r30
+    unsigned int v9; // r29
+    unsigned __int16 v10; // r31
+    unsigned __int16 v11; // r11
+    int v12; // r31
+    unsigned __int16 v13; // r31
+    unsigned int v14; // r31
+    unsigned __int16 v15; // r31
+    unsigned int v16; // r31
+
+    if (!name)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 392, 0, "%s", "name");
+    if (!*name)
+        return 0;
+    soundAliasFirst = level.soundAliasFirst;
+    if (level.soundAliasFirst < 0x100u || level.soundAliasFirst >= 0x200u)
+    {
+        MyAssertHandler(
+            "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+            396,
+            0,
+            "%s\n\t(level.soundAliasFirst) = %i",
+            "(level.soundAliasFirst >= 256 && level.soundAliasFirst < 512)",
+            level.soundAliasFirst);
+        soundAliasFirst = level.soundAliasFirst;
+    }
+    soundAliasLast = level.soundAliasLast;
+    if (level.soundAliasLast < 0x100u || soundAliasFirst >= 0x200u)
+    {
+        MyAssertHandler(
+            "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+            397,
+            0,
+            "%s\n\t(level.soundAliasLast) = %i",
+            "(level.soundAliasLast >= 256 && level.soundAliasFirst < 512)",
+            level.soundAliasLast);
+        soundAliasLast = level.soundAliasLast;
+        soundAliasFirst = level.soundAliasFirst;
+    }
+    if (soundAliasFirst != 256)
+    {
+        v5 = soundAliasFirst;
+        if (soundAliasFirst != (unsigned __int16)G_SoundAliasIndexTransientAdvance(soundAliasLast, 128))
+        {
+            v6 = va("%i, %i", v5, level.soundAliasLast);
+            MyAssertHandler(
+                "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+                398,
+                0,
+                "%s\n\t%s",
+                "level.soundAliasFirst == SOUNDALIAS_PERMANENT_COUNT || level.soundAliasFirst == G_SoundAliasIndexTransientAdvanc"
+                "e( level.soundAliasLast, (MAX_SOUNDALIASES - SOUNDALIAS_PERMANENT_COUNT) / 2 )",
+                v6);
+        }
+    }
+    LowercaseString = SL_FindLowercaseString(name);
+    v8 = level.soundAliasFirst;
+    v9 = LowercaseString;
+    if (level.soundAliasFirst == level.soundAliasLast)
+    {
+    LABEL_27:
+        v10 = level.soundAliasLast;
+        if (level.soundAliasLast < 0x100u || level.soundAliasLast >= 0x200u)
+            MyAssertHandler(
+                "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+                372,
+                0,
+                "%s\n\t(aliasIndex) = %i",
+                "(aliasIndex >= 256 && aliasIndex < 512)",
+                level.soundAliasLast);
+        v11 = v10 + 128;
+        if ((unsigned __int16)(v10 + 128) >= 0x200u)
+            v11 = v10 - 128;
+        v12 = v11;
+        if (v11 < 0x100u || v11 >= 0x200u)
+            MyAssertHandler(
+                "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+                379,
+                0,
+                "%s\n\t(aliasIndex) = %i",
+                "(aliasIndex >= 256 && aliasIndex < 512)",
+                v11);
+        if (v12 == level.soundAliasFirst)
+        {
+            v13 = level.soundAliasFirst;
+            if (level.soundAliasFirst < 0x100u || level.soundAliasFirst >= 0x200u)
+                MyAssertHandler(
+                    "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+                    372,
+                    0,
+                    "%s\n\t(aliasIndex) = %i",
+                    "(aliasIndex >= 256 && aliasIndex < 512)",
+                    level.soundAliasFirst);
+            v14 = (unsigned __int16)(v13 + 1);
+            if (v14 >= 0x200)
+                v14 = v14 - 256;
+            if ((unsigned __int16)v14 < 0x100u || (unsigned __int16)v14 >= 0x200u)
+                MyAssertHandler(
+                    "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+                    379,
+                    0,
+                    "%s\n\t(aliasIndex) = %i",
+                    "(aliasIndex >= 256 && aliasIndex < 512)",
+                    (unsigned __int16)v14);
+            level.soundAliasFirst = v14;
+        }
+        if ((unsigned __int16)v8 != level.soundAliasLast)
+            MyAssertHandler(
+                "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+                414,
+                1,
+                "%s",
+                "aliasIndex == level.soundAliasLast");
+        v15 = level.soundAliasLast;
+        if (level.soundAliasLast < 0x100u || level.soundAliasLast >= 0x200u)
+            MyAssertHandler(
+                "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+                372,
+                0,
+                "%s\n\t(aliasIndex) = %i",
+                "(aliasIndex >= 256 && aliasIndex < 512)",
+                level.soundAliasLast);
+        v16 = (unsigned __int16)(v15 + 1);
+        if (v16 >= 0x200)
+            v16 = v16 - 256;
+        if ((unsigned __int16)v16 < 0x100u || (unsigned __int16)v16 >= 0x200u)
+            MyAssertHandler(
+                "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+                379,
+                0,
+                "%s\n\t(aliasIndex) = %i",
+                "(aliasIndex >= 256 && aliasIndex < 512)",
+                (unsigned __int16)v16);
+        level.soundAliasLast = v16;
+        SV_SetConfigstring(CS_SOUNDALIASES + (unsigned __int16)v8, name);
+    }
+    else
+    {
+        while (1)
+        {
+            if (!(_WORD)v8)
+                MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 404, 0, "%s", "aliasIndex != 0");
+            if (SV_GetConfigstringConst(CS_SOUNDALIASES + (unsigned __int16)v8) == v9)
+                break;
+            if ((unsigned __int16)v8 < 0x100u || (unsigned __int16)v8 >= 0x200u)
+                MyAssertHandler(
+                    "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+                    372,
+                    0,
+                    "%s\n\t(aliasIndex) = %i",
+                    "(aliasIndex >= 256 && aliasIndex < 512)",
+                    (unsigned __int16)v8);
+            v8 = (unsigned __int16)(v8 + 1);
+            if (v8 >= 0x200)
+                v8 = (unsigned __int16)(v8 - 256);
+            if ((unsigned __int16)v8 < 0x100u || (unsigned __int16)v8 >= 0x200u)
+                MyAssertHandler(
+                    "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+                    379,
+                    0,
+                    "%s\n\t(aliasIndex) = %i",
+                    "(aliasIndex >= 256 && aliasIndex < 512)",
+                    (unsigned __int16)v8);
+            if ((unsigned __int16)v8 == level.soundAliasLast)
+                goto LABEL_27;
+        }
+    }
+    return v8;
+}
+
+int __cdecl G_SoundAliasIndexPermanent(const char *name)
+{
+    if (!name)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 424, 0, "%s", "name");
+    return (unsigned __int16)G_FindConfigstringIndex(name, 1635, 256, 1, 0);
+}
+
+int __cdecl G_RumbleIndex(const char *name)
+{
+    iassert(name);
+    return G_FindConfigstringIndex(name, CS_RUMBLES, 32, 1, 0);
+}
+
+void __cdecl G_SetClientDemoTime(int time)
+{
+    level.framenum = time / 50;
+    if (time - 50 > 0)
+        level.previousTime = time - 50;
+    else
+        level.previousTime = 0;
+    level.time = time;
+}
+
+void __cdecl G_SetClientDemoServerSnapTime(int time)
+{
+    level.snapTime = time;
+}
+
+void __cdecl G_ClearDemoEntities()
+{
+    int v0; // r20
+    gentity_s *ent; // r31
+    XAnimTree_s *Tree; // r3
+    XAnimTree_s *pAnimTree; // r3
+    actor_s *actor; // r3
+    scr_vehicle_s *scr_vehicle; // r11
+    TurretInfo *pTurretInfo; // r11
+
+    if (g_entities[0].r.inuse)
+    {
+        G_FreeEntities();
+        memset(g_entities, 0, 628 * level.num_entities);
+    }
+    else
+    {
+        v0 = 0;
+        for (ent = level.gentities; v0 < level.num_entities; ++ent)
+        {
+            if (ent->r.inuse)
+            {
+                Tree = SV_DObjGetTree(ent);
+                if (Tree)
+                    XAnimClearTree(Tree);
+                Com_SafeServerDObjFree(ent->s.number);
+                pAnimTree = ent->pAnimTree;
+                if (pAnimTree)
+                {
+                    Com_XAnimFreeSmallTree(pAnimTree);
+                    ent->pAnimTree = 0;
+                }
+                actor = ent->actor;
+                if (actor)
+                    Actor_Free(actor);
+                scr_vehicle = ent->scr_vehicle;
+                if (scr_vehicle)
+                {
+                    scr_vehicle->entNum = ENTITYNUM_NONE;
+                    iassert(!ent->scr_vehicle->idleSndEnt.isDefined());
+                    iassert(!ent->scr_vehicle->engineSndEnt.isDefined());
+                    ent->scr_vehicle = 0;
+                }
+                pTurretInfo = ent->pTurretInfo;
+                if (pTurretInfo)
+                {
+                    if (!pTurretInfo->inuse)
+                        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 501, 0, "%s", "ent->pTurretInfo->inuse");
+                    G_FreeTurret(ent);
+                    if (ent->pTurretInfo)
+                        MyAssertHandler(
+                            "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+                            503,
+                            0,
+                            "%s",
+                            "ent->pTurretInfo == NULL");
+                }
+                ent->r.inuse = 0;
+            }
+            if (ent->actor)
+                MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 509, 0, "%s", "ent->actor == NULL");
+            if (ent->sentient && !ent->client)
+                MyAssertHandler(
+                    "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+                    510,
+                    0,
+                    "%s",
+                    "(ent->sentient == NULL) || (ent->client != NULL)");
+            if (ent->scr_vehicle)
+                MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 511, 0, "%s", "ent->scr_vehicle == NULL");
+            ++v0;
+        }
+    }
+}
+
+void __cdecl G_UpdateDemoEntity(entityState_s *es)
+{
+    unsigned int number; // r26
+    gentity_s *v3; // r31
+    int v4; // r25
+    int eType; // r11
+    sentient_s *v6; // r3
+    actor_s *v7; // r3
+    scr_vehicle_s *v8; // r11
+
+    if (!es)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 522, 0, "%s", "es");
+    number = es->number;
+    if (number >= 0x880)
+        MyAssertHandler(
+            "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+            524,
+            0,
+            "%s",
+            "entnum >= 0 && entnum < MAX_GENTITIES");
+    if ((int)number >= level.num_entities)
+        level.num_entities = number + 1;
+    v3 = &g_entities[number];
+    v4 = level.specialIndex[number];
+    if (v3->r.inuse)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 532, 0, "%s", "!ent->r.inuse");
+    if (v3->actor)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 533, 0, "%s", "ent->actor == NULL");
+    if (v3->sentient && !v3->client)
+        MyAssertHandler(
+            "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+            534,
+            0,
+            "%s",
+            "(ent->sentient == NULL) || (ent->client != NULL)");
+    if (v3->scr_vehicle)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 535, 0, "%s", "ent->scr_vehicle == NULL");
+    eType = v3->s.eType;
+    v3->r.inuse = 1;
+    switch (eType)
+    {
+    case 11:
+        if (v4 >= 64)
+            MyAssertHandler(
+                "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+                565,
+                0,
+                "%s",
+                "specialIndex >= 0 && specialIndex < MAX_VEHICLES");
+        v8 = &level.vehicles[v4];
+        v3->scr_vehicle = v8;
+        v8->entNum = number;
+        break;
+    case 14:
+        if (v4 >= 32)
+            MyAssertHandler(
+                "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+                541,
+                0,
+                "%s",
+                "specialIndex >= 0 && specialIndex < MAX_ACTORS");
+        v6 = Sentient_Alloc();
+        v3->sentient = v6;
+        v6->ent = v3;
+        v7 = &level.actors[v4];
+        v3->actor = v7;
+        memset(v7, 0, sizeof(actor_s));
+        v3->actor->inuse = 1;
+        v3->actor->ent = v3;
+        v3->actor->sentient = v3->sentient;
+        if (!v3->actor)
+            MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 550, 0, "%s", "ent->actor");
+        if (v3->actor->sentient != v3->sentient)
+            MyAssertHandler(
+                "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+                551,
+                0,
+                "%s",
+                "ent->actor->sentient == ent->sentient");
+        if (v3->actor->ent != v3)
+            MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 552, 0, "%s", "ent->actor->ent == ent");
+        if (!v3->sentient)
+            MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 553, 0, "%s", "ent->sentient");
+        if (v3->sentient->ent != v3)
+            MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 554, 0, "%s", "ent->sentient->ent == ent");
+        if (v3->client)
+            MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 555, 0, "%s", "ent->client == NULL");
+        if (v3->scr_vehicle)
+            MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 556, 0, "%s", "ent->scr_vehicle == NULL");
+        break;
+    case 16:
+        if (v4 < 32 || v4 >= 48)
+            MyAssertHandler(
+                "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+                560,
+                0,
+                "%s",
+                "specialIndex >= MAX_ACTORS && specialIndex < MAX_ACTORS + MAX_ACTOR_CORPSES");
+        g_scr_data.dogAnim.weapons[4 * v4 + 18].func = number;
+        break;
+    }
+}
+
+unsigned int __cdecl G_GetEntAnimTreeId(int entnum)
+{
+    gentity_s *v2; // r31
+    int eType; // r11
+    unsigned int v5; // r31
+    const XAnim_s *Anims; // r31
+
+    if (entnum < 0 || entnum >= level.num_entities)
+        MyAssertHandler(
+            "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+            579,
+            0,
+            "%s",
+            "entnum >= 0 && entnum < level.num_entities");
+    v2 = &g_entities[entnum];
+    eType = v2->s.eType;
+    if (eType != 14)
+    {
+        if (eType != 16)
+            goto LABEL_18;
+        if (!v2->s.lerp.u.actor.species)
+        {
+            if (v2->pAnimTree)
+                MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 586, 0, "%s", "ent->pAnimTree == NULL");
+            return G_GetActorCorpseIndex(v2);
+        }
+    }
+    if (!v2->s.lerp.u.actor.species)
+    {
+        if (v2->pAnimTree)
+            MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 594, 0, "%s", "ent->pAnimTree == NULL");
+        if (!v2->actor)
+            MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 595, 0, "%s", "ent->actor");
+        v5 = v2->actor - level.actors;
+        if (v5 >= 0x20)
+            MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 597, 0, "%s", "id >= 0 && id < MAX_ACTORS");
+        return v5;
+    }
+LABEL_18:
+    if (!v2->pAnimTree)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 602, 0, "%s", "ent->pAnimTree != NULL");
+    Anims = XAnimGetAnims(v2->pAnimTree);
+    if (!Anims)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 604, 0, "%s", "anims");
+    return Scr_GetAnimsIndex(Anims);
+}
+
+XAnimTree_s *__cdecl G_GetEntAnimTreeForId(int entnum, unsigned int id)
+{
+    gentity_s *v4; // r30
+    int eType; // r11
+    const XAnimTree_s *pAnimTree; // r3
+    const XAnim_s *Anims; // r31
+    XAnim_s *v9; // r31
+    XAnimTree_s *SmallTree; // r3
+
+    if (entnum < 0 || entnum >= level.num_entities)
+        MyAssertHandler(
+            "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+            616,
+            0,
+            "%s",
+            "entnum >= 0 && entnum < level.num_entities");
+    v4 = &g_entities[entnum];
+    eType = v4->s.eType;
+    if (eType != 14)
+    {
+        if (eType != 16)
+            goto LABEL_14;
+        if (!v4->s.lerp.u.actor.species)
+        {
+            if (g_scr_data.actorCorpseInfo[id].entnum != entnum)
+                MyAssertHandler(
+                    "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+                    623,
+                    0,
+                    "%s",
+                    "g_scr_data.actorCorpseInfo[id].entnum == entnum");
+            return G_GetActorCorpseIndexAnimTree(id);
+        }
+    }
+    if (!v4->s.lerp.u.actor.species)
+    {
+        if (id >= 0x20)
+            MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 630, 0, "%s", "id >= 0 && id < MAX_ACTORS");
+        return G_GetActorAnimTree(&level.actors[id]);
+    }
+LABEL_14:
+    pAnimTree = v4->pAnimTree;
+    if (pAnimTree)
+    {
+        Anims = XAnimGetAnims(pAnimTree);
+        if (!Anims)
+            MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 638, 0, "%s", "anims");
+        if (Scr_GetAnimsIndex(Anims) != id)
+        {
+            XAnimClearTree(v4->pAnimTree);
+            Com_XAnimFreeSmallTree(v4->pAnimTree);
+            v4->pAnimTree = 0;
+        }
+    }
+    if (!v4->pAnimTree)
+    {
+        v9 = Scr_GetAnims(id);
+        if (!v9)
+            MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 649, 0, "%s", "anims");
+        SmallTree = Com_XAnimCreateSmallTree(v9);
+        v4->pAnimTree = SmallTree;
+        if (!SmallTree)
+            MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 651, 0, "%s", "ent->pAnimTree");
+    }
+    return v4->pAnimTree;
+}
+
+void __cdecl G_ShutdownClientDemo()
+{
+    int v0; // r29
+    int num_entities; // r11
+    XAnimTree_s **p_pAnimTree; // r31
+
+    v0 = 0;
+    num_entities = level.num_entities;
+    if (level.num_entities > 0)
+    {
+        p_pAnimTree = &g_entities[0].pAnimTree;
+        do
+        {
+            if (*p_pAnimTree)
+            {
+                XAnimClearTree(*p_pAnimTree);
+                Com_XAnimFreeSmallTree(*p_pAnimTree);
+                num_entities = level.num_entities;
+                *p_pAnimTree = 0;
+            }
+            ++v0;
+            p_pAnimTree += 157;
+        } while (v0 < num_entities);
+    }
+}
+
+XAnimTree_s *__cdecl G_GetEntAnimTree(gentity_s *ent)
+{
+    int eType; // r11
+
+    if (ent->s.lerp.u.actor.species)
+        return ent->pAnimTree;
+    eType = ent->s.eType;
+    if (eType == 14)
+        return G_GetActorAnimTree(ent->actor);
+    if (eType != 16)
+        return ent->pAnimTree;
+    return G_GetActorCorpseAnimTree(ent);
+}
+
+void __cdecl G_CheckDObjUpdate(gentity_s *ent)
+{
+    const DObj_s *ServerDObj; // r3
+    int model; // r29
+    XAnimTree_s *pAnimTree; // r3
+    int eType; // r11
+    XModel *v6; // r29
+    int v7; // r27
+    XModel **v8; // r28
+    unsigned __int16 *attachTagNames; // r26
+    int v10; // r29
+    unsigned __int16 v11; // [sp+50h] [-190h] BYREF
+    unsigned __int16 v12; // [sp+52h] [-18Eh] BYREF
+    XAnimTree_s *v13; // [sp+54h] [-18Ch] BYREF
+
+    DObjModel_s v14[DOBJ_MAX_SUBMODELS]; // [sp+60h] [-180h] BYREF
+    char v15; // [sp+6Ch] [-174h] BYREF
+
+    ServerDObj = Com_GetServerDObj(ent->s.number);
+    model = ent->model;
+    if (ent->model)
+    {
+        DObjGetCreateParms(ServerDObj, v14, &v11, &v13, &v12);
+        if (ent->s.lerp.u.actor.species)
+        {
+            pAnimTree = ent->pAnimTree;
+        }
+        else
+        {
+            eType = ent->s.eType;
+            if (eType == 14)
+            {
+                pAnimTree = G_GetActorAnimTree(ent->actor);
+            }
+            else if (eType == 16)
+            {
+                pAnimTree = G_GetActorCorpseAnimTree(ent);
+            }
+            else
+            {
+                pAnimTree = ent->pAnimTree;
+            }
+        }
+        if (v13 != pAnimTree)
+            MyAssertHandler(
+                "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+                807,
+                0,
+                "%s",
+                "tree == G_GetEntAnimTree( ent )");
+        v6 = G_GetModel(model);
+        if (!v6)
+            MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 812, 0, "%s", "model");
+        if (v14[0].model != v6)
+            MyAssertHandler(
+                "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+                815,
+                0,
+                "%s",
+                "dobjModels[numModels].model == model");
+        if (v14[0].boneName)
+            MyAssertHandler(
+                "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+                816,
+                0,
+                "%s",
+                "!dobjModels[numModels].boneName");
+        if (v14[0].ignoreCollision)
+            MyAssertHandler(
+                "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+                817,
+                0,
+                "%s",
+                "!dobjModels[numModels].ignoreCollision");
+
+        v7 = 1;
+        attachTagNames = ent->attachTagNames;
+        do
+        {
+            v10 = *(attachTagNames - 31);  // == ent->attachModelNames[i]
+            if (!v10)
+                break;
+            if (v7 >= 32)
+                MyAssertHandler(
+                    "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+                    826,
+                    0,
+                    "%s",
+                    "numModels < DOBJ_MAX_SUBMODELS");
+            if (v7 >= v11)
+                MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 827, 0, "%s", "numModels < modelCount");
+            if (v14[v7].model != G_GetModel(v10))
+                MyAssertHandler(
+                    "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+                    828,
+                    0,
+                    "%s",
+                    "dobjModels[numModels].model == G_GetModel( modelIndex )");
+            if (!v14[v7].model)
+                MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 829, 0, "%s", "dobjModels[numModels].model");
+            if (!*attachTagNames)
+                MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 830, 0, "%s", "ent->attachTagNames[i]");
+            if (v14[v7].boneName && v14[v7].boneName != *attachTagNames)
+                MyAssertHandler(
+                    "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+                    831,
+                    0,
+                    "%s",
+                    "!dobjModels[numModels].boneName || (dobjModels[numModels].boneName == ent->attachTagNames[i] )");
+            //    MyAssertHandler(
+            //        "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+            //        832,
+            //        0,
+            //        "%s",
+            //        "dobjModels[numModels].ignoreCollision == ((ent->attachIgnoreCollision & (1 << i)) != 0)");
+            ++v7;
+            ++attachTagNames;
+        } while (v7 - 1 < 31);
+        if (v7 != v11)
+            MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 836, 0, "%s", "numModels == modelCount");
+    }
+    else if (ServerDObj)
+    {
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 801, 0, "%s", "!obj");
+    }
+}
+
+void __cdecl G_SetModel(gentity_s *ent, const char *modelName)
+{
+    int v3; // r3
+    unsigned __int16 v4; // r31
+
+    if (*modelName)
+    {
+        v3 = G_ModelIndex(modelName);
+        v4 = v3;
+        if (v3 != (unsigned __int16)v3)
+            MyAssertHandler(
+                "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+                858,
+                0,
+                "%s",
+                "modelIndex == (modelNameIndex_t) modelIndex");
+        ent->model = v4;
+    }
+    else
+    {
+        ent->model = *(unsigned __int8 *)modelName;
+    }
+}
+
+// attributes: thunk
+void __cdecl G_ReplaceModel_FastFile(const char *originalName, const char *replacementName)
+{
+    DB_ReplaceModel(originalName, replacementName);
+}
+
+void __cdecl G_OverrideModel(unsigned int modelindex, const char *defaultModelName)
+{
+    int v4; // r4
+    const char *v5; // r7
+    unsigned int ConfigstringConst; // r3
+    const char *v7; // r29
+
+    if (modelindex)
+    {
+        if (modelindex < 0x200)
+            goto LABEL_6;
+        v4 = 316;
+        v5 = "(unsigned)index < MAX_MODELS";
+    }
+    else
+    {
+        v4 = 893;
+        v5 = "modelindex";
+    }
+    MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", v4, 0, "%s", v5);
+LABEL_6:
+    ConfigstringConst = SV_GetConfigstringConst(modelindex + 1123); // CS_MODELS (PC SP, was Xbox 1155)
+    v7 = SL_ConvertToString(ConfigstringConst);
+    if (!*v7)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 895, 0, "%s", "modelName[0]");
+    DB_ReplaceModel(v7, defaultModelName);
+}
+
+void __cdecl G_PrecacheDefaultModels()
+{
+    G_ModelIndex("defaultactor");
+#ifndef KISAK_NO_FASTFILES
+    G_PrecacheDefaultVehicle();
+#endif
+}
+
+int __cdecl G_EntIsLinkedTo(gentity_s *ent, gentity_s *parent)
+{
+    tagInfo_s *tagInfo; // r11
+    int result; // r3
+
+    tagInfo = ent->tagInfo;
+    if (!tagInfo)
+        return 0;
+    result = 1;
+    if (tagInfo->parent != parent)
+        return 0;
+    return result;
+}
+
+void __cdecl G_UpdateViewAngleClamp(gclient_s *client, const float *worldAnglesCenter)
+{
+    double v4; // fp0
+    double v5; // fp13
+    double v6; // fp0
+    double v7; // fp0
+    double v8; // fp13
+    double v9; // fp0
+
+    if (!client)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 1501, 0, "%s", "client");
+    if (!worldAnglesCenter)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 1502, 0, "%s", "worldAnglesCenter");
+    v4 = client->linkAnglesMaxClamp[0];
+    v5 = (float)((float)(client->linkAnglesMaxClamp[0] - client->linkAnglesMinClamp[0]) * (float)0.5);
+    client->ps.viewAngleClampRange[0] = (float)(client->linkAnglesMaxClamp[0] - client->linkAnglesMinClamp[0])
+        * (float)0.5;
+    v6 = (float)((float)v4 + *worldAnglesCenter);
+    client->ps.viewAngleClampBase[0] = v6;
+    client->ps.viewAngleClampBase[0] = AngleNormalize360((float)((float)v6 - (float)v5));
+    v7 = client->linkAnglesMaxClamp[1];
+    v8 = (float)((float)(client->linkAnglesMaxClamp[1] - client->linkAnglesMinClamp[1]) * (float)0.5);
+    client->ps.viewAngleClampRange[1] = (float)(client->linkAnglesMaxClamp[1] - client->linkAnglesMinClamp[1])
+        * (float)0.5;
+    v9 = (float)(worldAnglesCenter[1] + (float)v7);
+    client->ps.viewAngleClampBase[1] = v9;
+    client->ps.viewAngleClampBase[1] = AngleNormalize360((float)((float)v9 - (float)v8));
+}
+
+void __cdecl G_UpdateGroundTilt(gclient_s *client)
+{
+    int groundTiltEntNum; // r10
+    gentity_s *v2; // r11
+
+    groundTiltEntNum = client->groundTiltEntNum;
+    if (groundTiltEntNum == ENTITYNUM_NONE)
+    {
+        client->ps.groundTiltAngles[0] = 0.0;
+        client->ps.groundTiltAngles[1] = 0.0;
+        client->ps.groundTiltAngles[2] = 0.0;
+    }
+    else
+    {
+        v2 = &g_entities[groundTiltEntNum];
+        if (v2->r.inuse)
+        {
+            client->ps.groundTiltAngles[0] = v2->r.currentAngles[0];
+            client->ps.groundTiltAngles[1] = v2->r.currentAngles[1];
+            client->ps.groundTiltAngles[2] = v2->r.currentAngles[2];
+        }
+    }
+}
+
+bool __cdecl G_SlideMove(
+    float deltaT,
+    float *origin,
+    float *velocity,
+    float *mins,
+    const float *maxs,
+    const float *gravity,
+    unsigned __int8 passEntityNum,
+    int clipMask)
+{
+    float endVel[3];
+    float end[3]; // [sp+80h] [-130h] BYREF
+    trace_t trace; // [sp+A0h] [-110h] BYREF
+
+    float planes[5][3];
+    int numPlanes = 0;
+    int i;
+    int bumpCount;
+
+    endVel[0] = velocity[0];
+    endVel[1] = velocity[1];
+    endVel[2] = velocity[2];
+
+    if (gravity)
+    {
+        endVel[2] = -(float)((float)((float)deltaT * (float)800.0) - (float)velocity[2]);
+        velocity[2] = (float)((float)velocity[2] - (float)((float)((float)deltaT * (float)800.0) - (float)velocity[2])) * (float)0.5;
+    }
+
+    Vec3NormalizeTo(velocity, planes[numPlanes++]);
+
+    for (bumpCount = 0; bumpCount < 4; ++bumpCount)
+    {
+        end[0] = (deltaT * velocity[0]) + origin[0];
+        end[1] = (deltaT * velocity[1]) + origin[1];
+        end[2] = (deltaT * velocity[2]) + origin[2];
+
+        G_TraceCapsule(&trace, origin, mins, maxs, end, passEntityNum, clipMask);
+
+        if (trace.allsolid)
+        {
+            velocity[2] = 0.0f;
+            return 1;
+        }
+
+        if (trace.fraction > 0.0f)
+        {
+            Vec3Lerp(origin, end, trace.fraction, origin);
+        }
+        if (trace.fraction == 1.0f)
+        {
+            break;
+        }
+
+        deltaT = -((trace.fraction * deltaT) - deltaT);
+
+        if (numPlanes >= 5)
+        {
+            velocity[0] = 0.0f;
+            velocity[1] = 0.0f;
+            velocity[2] = 0.0f;
+            return 1;
+        }
+
+        for (i = 0; i < numPlanes; i++)
+        {
+            if (
+                (trace.normal[0] * planes[i][0]) +
+                (trace.normal[1] * planes[i][1]) +
+                (trace.normal[2] * planes[i][2]) > 0.99f)
+                {
+                    velocity[0] += trace.normal[0];
+                    velocity[1] += trace.normal[1];
+                    velocity[2] += trace.normal[2];
+                    break;
+                }
+        }
+
+        if (i >= numPlanes)
+        {
+            planes[numPlanes][0] = trace.normal[0];
+            planes[numPlanes][1] = trace.normal[1];
+            planes[numPlanes][2] = trace.normal[2];
+
+            numPlanes++;
+
+            for (i = 0; i < numPlanes; i++)
+            {
+                if ((velocity[0] * planes[i][0]) + (velocity[1] * planes[i][1]) + (velocity[2] * planes[i][2]) < 0.1f)
+                {
+                    float clipVel[3];
+                    float endClipVel[3];
+
+                    PM_ClipVelocity(velocity, planes[i], clipVel);
+                    PM_ClipVelocity(endVel, planes[i], endClipVel);
+
+                    for (int j = 0; j < numPlanes; j++)
+                    {
+                        if (j == i)
+                        {
+                            continue;
+                        }
+
+                        if ((clipVel[0] * planes[j][0]) + (clipVel[1] * planes[j][1]) + (clipVel[2] * planes[j][2]) < 0.1f)
+                        {
+                            PM_ClipVelocity(clipVel, planes[j], clipVel);
+                            PM_ClipVelocity(endClipVel, planes[j], endClipVel);
+
+                            if ((clipVel[0] * planes[i][0]) + (clipVel[1] * planes[i][1]) + (clipVel[2] * planes[i][2]) < 0.0f)
+                            {
+                                float dir[3];
+                                Vec3Cross(planes[i], planes[j], dir);
+                                Vec3Normalize(dir);
+                                float dot = (dir[0] * velocity[0]) + (dir[1] * velocity[1]) + (dir[2] * velocity[2]);
+                                Vec3Scale(dir, dot, clipVel);
+
+                                dot = (dir[0] * endVel[0]) + (dir[1] * endVel[1]) + (dir[2] * endVel[2]);
+                                Vec3Scale(dir, dot, endClipVel);
+
+                                for (int k = 0; k < numPlanes; k++)
+                                {
+                                    if (k == j || k == i)
+                                    {
+                                        continue;
+                                    }
+
+                                    if ((clipVel[0] * planes[k][0]) + (clipVel[1] * planes[k][1]) + (clipVel[2] * planes[k][2]) < 0.1f)
+                                    {
+                                        velocity[0] = 0.0f;
+                                        velocity[1] = 0.0f;
+                                        velocity[2] = 0.0f;
+                                        return 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    velocity[0] = clipVel[0];
+                    velocity[1] = clipVel[1];
+                    velocity[2] = clipVel[2];
+                    endVel[0] = endClipVel[0];
+                    endVel[1] = endClipVel[1];
+                    endVel[2] = endClipVel[2];
+                    break;
+                }
+            }
+        }
+    }
+
+    if (gravity)
+    {
+        velocity[0] = endVel[0];
+        velocity[1] = endVel[1];
+        velocity[2] = endVel[2];
+    }
+
+    return bumpCount != 0;
+}
+
+void __cdecl G_StepSlideMove(
+    float deltaT,
+    float *origin,
+    float *velocity,
+    float *mins,
+    const float *maxs,
+    const float *gravity,
+    unsigned __int8 passEntityNum,
+    int clipMask)
+{
+    trace_t trace; // [sp+80h] [-A0h] BYREF
+
+    float startOrigin[3];
+    startOrigin[0] = origin[0];
+    startOrigin[1] = origin[1];
+    startOrigin[2] = origin[2];
+
+    float startVel[3];
+    startVel[0] = velocity[0];
+    startVel[1] = velocity[1];
+    startVel[2] = velocity[2];
+
+    float down[3];
+    float up[3];
+
+    if (G_SlideMove(deltaT, origin, velocity, mins, maxs, gravity, passEntityNum, clipMask))
+    {
+        down[0] = startOrigin[0];
+        down[1] = startOrigin[1];
+        down[2] = startOrigin[2] - 18.0f;
+
+        G_TraceCapsule(&trace, startOrigin, mins, maxs, down, passEntityNum, clipMask);
+
+        if (startVel[2] <= 0.0f || trace.fraction != 1.0f && trace.normal[2] >= 0.7f)
+        {
+            up[0] = startOrigin[0];
+            up[1] = startOrigin[1];
+            up[2] = startOrigin[2] + 18.0;
+            G_TraceCapsule(&trace, startOrigin, mins, maxs, up, passEntityNum, clipMask);
+
+            if (!trace.startsolid)
+            {
+                float endpos[3];
+                Vec3Lerp(startOrigin, up, trace.fraction, endpos);
+
+                origin[0] = endpos[0];
+                origin[1] = endpos[1];
+                origin[2] = endpos[2];
+
+                velocity[0] = startVel[0];
+                velocity[1] = startVel[1];
+                velocity[2] = startVel[2];
+
+                G_SlideMove(deltaT, origin, velocity, mins, maxs, gravity, passEntityNum, clipMask);
+
+                down[0] = origin[0];
+                down[1] = origin[1];
+                down[2] = origin[2];
+                down[2] = (startOrigin[2] - endpos[2]) + down[2];
+
+                G_TraceCapsule(&trace, origin, mins, maxs, down, passEntityNum, clipMask);
+
+                if (!trace.startsolid)
+                {
+                    Vec3Lerp(origin, down, trace.fraction, origin);
+                }
+                if (trace.fraction < 1.0f)
+                    PM_ClipVelocity(velocity, trace.normal, velocity);
+            }
+        }
+    }
+}
+
+void __cdecl G_SafeDObjFree(gentity_s *ent)
+{
+    if (ent->s.number == level.cachedTagMat.entnum)
+        level.cachedTagMat.entnum = ENTITYNUM_NONE;
+    if (ent->s.number == level.cachedEntTargetTagMat.entnum)
+        level.cachedEntTargetTagMat.entnum = ENTITYNUM_NONE;
+    Com_SafeServerDObjFree(ent->s.number);
+}
+
+int __cdecl G_DObjUpdateServerTime(gentity_s *ent, int bNotify)
+{
+    ent->flags &= ~(FL_REPEAT_ANIM_UPDATE);
+    return SV_DObjUpdateServerTime(ent, 0.05f, bNotify);
+}
+
+void __cdecl G_DObjCalcPose(gentity_s *ent, int *partBits)
+{
+    DObj_s *ServerDObj; // r29
+    void(__cdecl * controller)(const gentity_s *, int *); // r11
+
+    ServerDObj = Com_GetServerDObj(ent->s.number);
+    if (!ServerDObj)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 1940, 0, "%s", "obj");
+    if (!SV_DObjCreateSkelForBones(ServerDObj, partBits))
+    {
+        controller = entityHandlers[ent->handler].controller;
+        if (controller)
+            controller(ent, partBits);
+        DObjCalcSkel(ServerDObj, partBits);
+    }
+}
+
+void __cdecl G_DObjCalcBone(const gentity_s *ent, int boneIndex)
+{
+    DObj_s *ServerDObj; // r31
+    void(__cdecl * controller)(const gentity_s *, int *); // r11
+    int v6[12]; // [sp+50h] [-30h] BYREF
+
+    ServerDObj = Com_GetServerDObj(ent->s.number);
+    if (!ServerDObj)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 1963, 0, "%s", "obj");
+    if (!SV_DObjCreateSkelForBone(ServerDObj, boneIndex))
+    {
+        DObjGetHierarchyBits(ServerDObj, boneIndex, v6);
+        controller = entityHandlers[ent->handler].controller;
+        if (controller)
+            controller(ent, v6);
+        DObjCalcSkel(ServerDObj, v6);
+    }
+}
+
+DObjAnimMat *__cdecl G_DObjGetLocalBoneIndexMatrix(const gentity_s *ent, int boneIndex)
+{
+    //Profile_Begin(318);
+    G_DObjCalcBone(ent, boneIndex);
+    //Profile_EndInternal(0);
+    return &SV_DObjGetMatrixArray(ent)[boneIndex];
+}
+
+void __cdecl G_DObjGetWorldBoneIndexMatrix(const gentity_s *ent, int boneIndex, float (*tagMat)[3])
+{
+    DObjAnimMat *mat; // r30
+    mat4x3 ent_axis;
+    mat3x3 axis; // [esp+84h] [ebp-24h] BYREF
+
+    G_DObjCalcBone(ent, boneIndex);
+    mat = &SV_DObjGetMatrixArray(ent)[boneIndex];
+    AnglesToAxis(ent->r.currentAngles, ent_axis);
+    ent_axis[3][0] = ent->r.currentOrigin[0];
+    ent_axis[3][1] = ent->r.currentOrigin[1];
+    ent_axis[3][2] = ent->r.currentOrigin[2];
+    LocalConvertQuatToMat(mat, axis);
+    MatrixMultiply(axis, (const mat3x3&)ent_axis, (mat3x3&)*tagMat);
+    MatrixTransformVector43(mat->trans, ent_axis, &(*tagMat)[9]);
+}
+
+void __cdecl G_DObjGetWorldBoneIndexPos(const gentity_s *ent, int boneIndex, float *pos)
+{
+    DObjAnimMat *MatrixArray; // r28
+    float v7[24]; // [sp+50h] [-60h] BYREF
+
+    //Profile_Begin(318);
+    G_DObjCalcBone(ent, boneIndex);
+    //Profile_EndInternal(0);
+    MatrixArray = SV_DObjGetMatrixArray(ent);
+    AnglesToAxis(ent->r.currentAngles, (float (*)[3])v7);
+    v7[9] = ent->r.currentOrigin[0];
+    v7[10] = ent->r.currentOrigin[1];
+    v7[11] = ent->r.currentOrigin[2];
+    MatrixTransformVector43(MatrixArray[boneIndex].trans, (const mat4x3&)v7, pos);
+}
+
+DObjAnimMat *__cdecl G_DObjGetLocalTagMatrix(const gentity_s *ent, unsigned int tagName)
+{
+    int BoneIndex; // r30
+
+    BoneIndex = SV_DObjGetBoneIndex(ent, tagName);
+    if (BoneIndex < 0)
+        return 0;
+    //Profile_Begin(318);
+    G_DObjCalcBone(ent, BoneIndex);
+    //Profile_EndInternal(0);
+    return &SV_DObjGetMatrixArray(ent)[BoneIndex];
+}
+
+int __cdecl G_DObjGetWorldTagMatrix(const gentity_s *ent, unsigned int tagName, float (*tagMat)[3])
+{
+    int BoneIndex; // r4
+
+    BoneIndex = SV_DObjGetBoneIndex(ent, tagName);
+    if (BoneIndex < 0)
+        return 0;
+    G_DObjGetWorldBoneIndexMatrix(ent, BoneIndex, tagMat);
+    return 1;
+}
+
+int __cdecl G_DObjGetWorldTagPos(const gentity_s *ent, unsigned int tagName, float *pos)
+{
+    int BoneIndex; // r30
+    DObjAnimMat *MatrixArray; // r29
+    float v8[24]; // [sp+50h] [-60h] BYREF
+
+    BoneIndex = SV_DObjGetBoneIndex(ent, tagName);
+    if (BoneIndex < 0)
+        return 0;
+    //Profile_Begin(318);
+    G_DObjCalcBone(ent, BoneIndex);
+    //Profile_EndInternal(0);
+    MatrixArray = SV_DObjGetMatrixArray(ent);
+    AnglesToAxis(ent->r.currentAngles, (float (*)[3])v8);
+    v8[9] = ent->r.currentOrigin[0];
+    v8[10] = ent->r.currentOrigin[1];
+    v8[11] = ent->r.currentOrigin[2];
+    MatrixTransformVector43(MatrixArray[BoneIndex].trans, (const mat4x3&)v8, pos);
+    return 1;
+}
+
+void __cdecl G_DObjGetWorldTagPos_CheckTagExists(const gentity_s *ent, unsigned int tagName, float *pos)
+{
+    const DObj_s *ServerDObj; // r3
+    const DObj_s *v6; // r30
+    const char *Name; // r30
+    int number; // r31
+    const char *v9; // r3
+    int v10; // r31
+    const char *v11; // r3
+
+    if (!G_DObjGetWorldTagPos(ent, tagName, pos))
+    {
+        ServerDObj = Com_GetServerDObj(ent->s.number);
+        v6 = ServerDObj;
+        if (ServerDObj && DObjGetNumModels(ServerDObj) && DObjGetName(v6))
+        {
+            Name = DObjGetName(v6);
+            number = ent->s.number;
+            v9 = SL_ConvertToString(tagName);
+            Com_Error(ERR_DROP, "Missing tag [%s] on entity [%d] (%s)\n", v9, number, Name);
+        }
+        else
+        {
+            v10 = ent->s.number;
+            v11 = SL_ConvertToString(tagName);
+            Com_Error(ERR_DROP, "Missing tag [%s] on entity [%d]\n", v11, v10);
+        }
+    }
+}
+
+gentity_s *__cdecl G_Find(gentity_s *from, int fieldofs, unsigned __int16 match)
+{
+    //gentity_s *result; // r3
+    //gentity_s *v4; // r9
+    //unsigned __int8 *i; // r11
+    //
+    //if (from)
+    //    result = from + 1;
+    //else
+    //    result = g_entities;
+    //
+    //v4 = &g_entities[level.num_entities];
+    //
+    //if (result >= v4)
+    //    return 0;
+    //
+    //for (i = (unsigned char*)result + fieldofs; 
+    //    !i[168 - fieldofs] || !*(_WORD *)i || *(unsigned __int16 *)i != match; i += 628)
+    //{
+    //    if (++result >= v4)
+    //        return 0;
+    //}
+    //return result;
+
+    unsigned __int16 s; // [esp+0h] [ebp-4h]
+
+    if (from)
+        from = from + 1;
+    else
+        from = g_entities;
+    while (from < &g_entities[level.num_entities])
+    {
+        if (from->r.inuse)
+        {
+            s = *(_WORD *)((char *)from + fieldofs);
+            if (s)
+            {
+                if (s == match)
+                    return from;
+            }
+        }
+        ++from;
+    }
+    return 0;
+}
+
+void __cdecl G_InitGentity(gentity_s *e)
+{
+    e->nextFree = 0;
+    iassert(!e->r.inuse);
+    e->r.inuse = 1;
+    Scr_SetString(&e->classname, scr_const.noclass);
+    e->s.number = (unsigned __int16)(e - g_entities);
+    iassert(e->s.number == e - g_entities);
+    iassert(!e->r.ownerNum.isDefined());
+    e->r.eventType = 0;
+    e->r.eventTime = 0;
+    e->angleLerpRate = 540.0;
+}
+
+void __cdecl G_PrintEntities()
+{
+    int v0; // r30
+    unsigned __int16 *p_model; // r31
+    unsigned int v2; // r11
+    double v3; // fp31
+    double v4; // fp30
+    double v5; // fp29
+    const char *v6; // r24
+    const char *EntityTypeName; // r3
+    double v8; // fp31
+    double v9; // fp30
+    double v10; // fp29
+    const char *v11; // r3
+
+    v0 = 0;
+    if (level.num_entities > 0)
+    {
+        p_model = &g_entities[0].model;
+        do
+        {
+            if (*((_BYTE *)p_model - 112))
+            {
+                v2 = p_model[2];
+                if (scr_const.script_model == v2 && *p_model)
+                {
+                    const char *modelName = G_GetModel(*p_model)->name;
+                    v3 = *((float *)p_model - 12);
+                    v4 = *((float *)p_model - 13);
+                    v5 = *((float *)p_model - 14);
+                    v6 = SL_ConvertToStringSafe(p_model[2]);
+                    EntityTypeName = BG_GetEntityTypeName(*((unsigned __int8 *)p_model - 280));
+                    Com_Printf(
+                        15,
+                        "%4i: Type: %s, Class: %s, model '%s', origin: %6.1f %6.1f %6.1f\n",
+                        v0,
+                        EntityTypeName,
+                        v6,
+                        modelName,
+                        v5,
+                        v4,
+                        v3);
+                }
+                else
+                {
+                    const char *className = SL_ConvertToStringSafe(v2);
+                    v8 = *((float *)p_model - 12);
+                    v9 = *((float *)p_model - 13);
+                    v10 = *((float *)p_model - 14);
+                    v11 = BG_GetEntityTypeName(*((unsigned __int8 *)p_model - 280));
+                    Com_Printf(
+                        15,
+                        "%4i: Type: %s, Class: %s, origin: %6.1f %6.1f %6.1f\n",
+                        v0,
+                        v11,
+                        className,
+                        v10,
+                        v9,
+                        v8);
+                }
+            }
+            ++v0;
+            p_model += 314;
+        } while (v0 < level.num_entities);
+    }
+}
+
+gentity_s *__cdecl G_Spawn()
+{
+    gentity_s *e; // r30
+
+    e = level.firstFreeEnt;
+    if (level.firstFreeEnt)
+    {
+        level.firstFreeEnt = level.firstFreeEnt->nextFree;
+        if (!level.firstFreeEnt)
+            level.lastFreeEnt = 0;
+        e->nextFree = 0;
+    }
+    else
+    {
+        if (level.num_entities == ENTITYNUM_WORLD)
+        {
+            G_PrintEntities();
+            Scr_Error("G_Spawn: no free entities");
+            Com_Error(ERR_DROP, "G_Spawn: no free entities");
+        }
+        e = &level.gentities[level.num_entities++];
+        //SV_LocateGameData(level.gentities, level.num_entities, sizeof(gentity_s), &level.clients->ps, 46104);
+        SV_LocateGameData(level.gentities, level.num_entities, sizeof(gentity_s), &level.clients->ps, sizeof(playerState_s));
+    }
+    G_InitGentity(e);
+    return e;
+}
+
+void __cdecl G_FreeEntityRefs(gentity_s *ed)
+{
+    int number; // r29
+    int num_entities; // r10
+    unsigned __int16 *p_groundEntityNum; // r11
+    gclient_s *client; // r31
+
+    number = ed->s.number;
+    if ((ed->flags & 0x100000) != 0 && level.num_entities > 0)
+    {
+        num_entities = level.num_entities;
+        p_groundEntityNum = &g_entities[0].s.groundEntityNum;
+        do
+        {
+            if (*((_BYTE *)p_groundEntityNum + 46) && *p_groundEntityNum == number)
+                *p_groundEntityNum = ENTITYNUM_NONE;
+            --num_entities;
+            p_groundEntityNum += 314;
+        } while (num_entities);
+    }
+    if ((ed->flags & 0x400000) != 0 && g_entities[0].r.inuse)
+    {
+        client = g_entities[0].client;
+        if (!g_entities[0].client)
+            MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 2338, 0, "%s", "pClient");
+        if (client->ps.cursorHintEntIndex == number)
+            client->ps.cursorHintEntIndex = ENTITYNUM_NONE;
+    }
+    G_FreeVehicleRefs(ed);
+    if ((ed->flags & 0x1000000) != 0)
+        Missile_FreeAttractorRefs(ed);
+    if ((ed->flags & 0x2000000) != 0)
+        Targ_Remove(ed);
+}
+
+void __cdecl G_FreeAllEntityRefs()
+{
+    actor_s *actors; // r11
+    int i; // r31
+    EntHandle *droppedWeaponCue; // r31
+
+    actors = level.actors;
+    if (level.actors)
+    {
+        for (i = 0; i < 32; ++i)
+        {
+            if (actors[i].inuse)
+            {
+                Actor_ClearPileUp(&actors[i]);
+                actors = level.actors;
+            }
+        }
+    }
+    droppedWeaponCue = level.droppedWeaponCue;
+    do
+        droppedWeaponCue++->setEnt(0);
+    while ((int)droppedWeaponCue < (int)&level.droppedWeaponCue[32]);
+    Targ_RemoveAll();
+}
+
+void __cdecl G_FreeEntityDelay(gentity_s *ed)
+{
+    unsigned __int16 hThread; // [esp+0h] [ebp-4h]
+
+    iassert(g_scr_data.delete_);
+    hThread = Scr_ExecEntThread(ed, g_scr_data.delete_, 0);
+    Scr_FreeThread(hThread);
+    //int delete; // r4
+    //unsigned __int16 v3; // r3
+    //
+    //delete = g_scr_data.delete_;
+    //if (!g_scr_data.delete_)
+    //{
+    //    MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 2529, 0, "%s", "g_scr_data.delete_");
+    //    delete = g_scr_data.delete_;
+    //}
+    //v3 = Scr_ExecEntThread(ed, delete, 0);
+    //Scr_FreeThread(v3);
+}
+
+void __cdecl G_BroadcastEntity(gentity_s *ent)
+{
+    ;
+}
+
+void __cdecl G_FreeEntityAfterEvent(gentity_s *ent)
+{
+    ent->r.eventType |= 1u;
+}
+
+int __cdecl G_SaveFreeEntities(unsigned __int8 *buf)
+{
+    gentity_s *firstFreeEnt; // r9
+    int result; // r3
+    unsigned __int8 *v4; // r11
+
+    if (buf)
+    {
+        *(unsigned int *)buf = (unsigned int)level.firstFreeEnt;
+        *((unsigned int *)buf + 1) = (unsigned int)level.lastFreeEnt;
+    }
+    firstFreeEnt = level.firstFreeEnt;
+    result = 8;
+    if (level.firstFreeEnt)
+    {
+        v4 = buf + 8;
+        do
+        {
+            if (buf)
+            {
+                *v4 = (unsigned __int8)firstFreeEnt->nextFree;
+                v4[1] = BYTE1(firstFreeEnt->nextFree);
+                v4[2] = BYTE2(firstFreeEnt->nextFree);
+                v4[3] = HIBYTE(firstFreeEnt->nextFree);
+            }
+            firstFreeEnt = firstFreeEnt->nextFree;
+            result += 4;
+            v4 += 4;
+        } while (firstFreeEnt);
+    }
+    return result;
+}
+
+void __cdecl G_LoadFreeEntities(unsigned __int8 *buf)
+{
+    _BYTE *v2; // r11
+    bool v3; // cr58
+    unsigned __int8 *v4; // r9
+    unsigned __int8 v5; // r10
+
+    if (!buf)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 2608, 0, "%s", "buf");
+    v2 = *(_BYTE **)buf;
+    v3 = *(unsigned int *)buf == 0;
+    level.firstFreeEnt = *(gentity_s **)buf;
+    level.lastFreeEnt = (gentity_s *)*((unsigned int *)buf + 1);
+    if (!v3)
+    {
+        v4 = buf + 8;
+        do
+        {
+            v2[624] = *v4;
+            v2[625] = v4[1];
+            v2[626] = v4[2];
+            v5 = v4[3];
+            v4 += 4;
+            v2[627] = v5;
+            v2 = (_BYTE *)*((unsigned int *)v2 + 156);
+        } while (v2);
+    }
+}
+
+void __cdecl G_AddPredictableEvent(gentity_s *ent, entity_event_t event, unsigned int eventParm)
+{
+    gclient_s *client; // r5
+
+    client = ent->client;
+    if (client)
+        BG_AddPredictableEventToPlayerstate(event, eventParm, &client->ps);
+}
+
+void __cdecl G_AddEvent(gentity_s *ent, unsigned int event, unsigned int eventParm)
+{
+    unsigned __int8 v3; // r30
+    gclient_s *client; // r11
+
+    v3 = event;
+    if (event)
+    {
+        if (event >= 0x100)
+            MyAssertHandler(
+                "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+                2690,
+                0,
+                "event doesn't index 256\n\t%i not in [0, %i)",
+                event,
+                256);
+    }
+    else
+    {
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 2689, 0, "%s", "event");
+    }
+    if (ent->s.eType >= 0x11u)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 2692, 0, "%s", "ent->s.eType < ET_EVENTS");
+    client = ent->client;
+    if (client)
+    {
+        client->ps.events[client->ps.eventSequence & 3] = v3;
+        ent->client->ps.eventParms[ent->client->ps.eventSequence++ & 3] = eventParm;
+    }
+    else
+    {
+        ent->s.events[ent->s.eventSequence & 3] = v3;
+        ent->s.eventParms[ent->s.eventSequence++ & 3] = eventParm;
+    }
+    ent->r.eventTime = level.time;
+}
+
+void __cdecl G_RegisterSoundWait(gentity_s *ent, unsigned __int16 index, unsigned int notifyString, int stoppable)
+{
+    int time; // r11
+    unsigned __int16 v14[8]; // [sp+80h] [-890h] BYREF
+    char v15[1024]; // [sp+90h] [-880h] BYREF
+    char v16[1024]; // [sp+490h] [-480h] BYREF
+
+    v14[0] = 0;
+    Scr_SetString(v14, notifyString);
+    if (ent->snd_wait.notifyString)
+    {
+        Scr_Notify(ent, ent->snd_wait.notifyString, 0);
+        if (!ent->snd_wait.stoppable || !stoppable)
+        {
+            const char *classnameStr;
+            const char *targetnameStr;
+            const char *oldStr;
+            const char *newStr;
+
+            SV_GetConfigstring(ent->snd_wait.index + 1635, v16, 1024);
+            SV_GetConfigstring(index + 1635, v15, 1024);
+            Scr_SetString(v14, 0);
+            targetnameStr = ent->targetname ? SL_ConvertToString(ent->targetname) : "<undefined>";
+            newStr = SL_ConvertToString(v14[0]);
+            oldStr = SL_ConvertToString(ent->snd_wait.notifyString);
+            classnameStr = SL_ConvertToString(ent->classname);
+            Scr_Error(va(
+                "issued a second playsound with notification string before the first finished on entity %i classname %s tar"
+                "getname %s location %g %g %g old string %s alias %s at time %i new string %s alias %s at time %i\n",
+                ent->s.number,
+                classnameStr,
+                targetnameStr,
+                ent->r.currentOrigin[0],
+                ent->r.currentOrigin[1],
+                ent->r.currentOrigin[2],
+                oldStr,
+                v16,
+                ent->snd_wait.basetime,
+                newStr,
+                v15,
+                level.time));
+        }
+    }
+    Scr_SetString(&ent->snd_wait.notifyString, v14[0]);
+    Scr_SetString(v14, 0);
+    ent->snd_wait.index = index;
+    time = level.time;
+    ent->snd_wait.stoppable = stoppable;
+    ent->snd_wait.duration = -1;
+    ent->snd_wait.basetime = time;
+}
+
+void __cdecl G_PlaySoundAliasWithNotify(
+    gentity_s *ent,
+    unsigned __int16 index,
+    unsigned int notifyString,
+    int stoppable,
+    unsigned int event,
+    unsigned int notifyevent)
+{
+    if (!ent)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 2773, 0, "%s", "ent");
+    if (event != 3 && event != 4)
+        MyAssertHandler(
+            "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+            2774,
+            0,
+            "%s",
+            "event == EV_SOUND_ALIAS || event == EV_SOUND_ALIAS_AS_MASTER");
+    if (notifyevent != 42 && notifyevent != 43)
+        MyAssertHandler(
+            "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+            2775,
+            0,
+            "%s",
+            "notifyevent == EV_SOUND_ALIAS_NOTIFY || notifyevent == EV_SOUND_ALIAS_NOTIFY_AS_MASTER");
+    if (index)
+    {
+        if (notifyString)
+        {
+            G_AddEvent(ent, notifyevent, index);
+            G_RegisterSoundWait(ent, index, notifyString, stoppable);
+        }
+        else
+        {
+            G_AddEvent(ent, event, index);
+        }
+    }
+}
+
+void __cdecl G_PlaySoundAlias(gentity_s *ent, unsigned __int16 index)
+{
+    if (!ent)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 2773, 0, "%s", "ent");
+    if (index)
+        G_AddEvent(ent, EV_SOUND_ALIAS, index);
+}
+
+void __cdecl G_SetOrigin(gentity_s *ent, float *origin)
+{
+    if ((COERCE_UNSIGNED_INT(*origin) & 0x7F800000) == 0x7F800000
+        || (COERCE_UNSIGNED_INT(origin[1]) & 0x7F800000) == 0x7F800000
+        || (COERCE_UNSIGNED_INT(origin[2]) & 0x7F800000) == 0x7F800000)
+    {
+        MyAssertHandler(
+            "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+            2814,
+            0,
+            "%s",
+            "!IS_NAN((origin)[0]) && !IS_NAN((origin)[1]) && !IS_NAN((origin)[2])");
+    }
+    ent->s.lerp.pos.trBase[0] = *origin;
+    ent->s.lerp.pos.trBase[1] = origin[1];
+    ent->s.lerp.pos.trBase[2] = origin[2];
+    ent->s.lerp.pos.trType = TR_STATIONARY;
+    ent->s.lerp.pos.trTime = 0;
+    ent->s.lerp.pos.trDuration = 0;
+    ent->s.lerp.pos.trDelta[0] = 0.0;
+    ent->s.lerp.pos.trDelta[1] = 0.0;
+    ent->s.lerp.pos.trDelta[2] = 0.0;
+    ent->r.currentOrigin[0] = *origin;
+    ent->r.currentOrigin[1] = origin[1];
+    ent->r.currentOrigin[2] = origin[2];
+}
+
+void __cdecl G_SetAngle(gentity_s *ent, float *angle)
+{
+    ent->s.lerp.apos.trBase[0] = *angle;
+    ent->s.lerp.apos.trBase[1] = angle[1];
+    ent->s.lerp.apos.trBase[2] = angle[2];
+    ent->s.lerp.apos.trType = TR_STATIONARY;
+    ent->s.lerp.apos.trTime = 0;
+    ent->s.lerp.apos.trDuration = 0;
+    ent->s.lerp.apos.trDelta[0] = 0.0;
+    ent->s.lerp.apos.trDelta[1] = 0.0;
+    ent->s.lerp.apos.trDelta[2] = 0.0;
+    ent->r.currentAngles[0] = *angle;
+    ent->r.currentAngles[1] = angle[1];
+    ent->r.currentAngles[2] = angle[2];
+}
+
+void __cdecl G_SetConstString(unsigned __int16 *to, const char *from)
+{
+    Scr_SetString(to, 0);
+    *to = SL_GetString(from, 0);
+}
+
+const char *__cdecl G_GetEntityTypeName(const gentity_s *ent)
+{
+    if (ent->s.eType >= 0x11u)
+        MyAssertHandler(
+            "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+            2863,
+            0,
+            "%s",
+            "(unsigned)ent->s.eType < ET_EVENTS");
+    return *(const char **)((char *)entityTypeNames + __ROL4__(ent->s.eType, 2));
+}
+
+unsigned int holdrand;
+
+void __cdecl G_SetPM_MPViewer(bool setting)
+{
+    level.mpviewer = setting;
+}
+
+void __cdecl G_srand(unsigned int seed)
+{
+    holdrand = seed;
+}
+
+unsigned int __cdecl G_GetRandomSeed()
+{
+    return holdrand;
+}
+
+//unsigned int __cdecl G_rand()
+//{
+//    unsigned int result; // r3
+//
+//    result = (214013 * holdrand + 2531011) >> 17;
+//    holdrand = 214013 * holdrand + 2531011;
+//    return result;
+//}
+
+unsigned int __cdecl G_rand()
+{
+    holdrand = 214013 * holdrand + 2531011;
+    return holdrand >> 17;
+}
+
+//float __cdecl G_flrand(double min, double max)
+//{
+//    __int64 v2; // r11
+//    double v3; // fp1
+//
+//    HIDWORD(v2) = _xri_a;
+//    holdrand = 214013 * holdrand + 2531011;
+//    LODWORD(v2) = holdrand >> 17;
+//    v3 = (float)((float)((float)((float)v2 * (float)((float)max - (float)min)) * (float)0.000030517578) + (float)min);
+//    return *((float *)&v3 + 1);
+//}
+
+float __cdecl G_flrand(float min, float max)
+{
+    return (float)G_rand() * (max - min) / 32768.0f + min;
+}
+
+//int __cdecl G_irand(int min, int max)
+//{
+//    __int128 v2; // r11
+//
+//    DWORD1(v2) = 214013;
+//    holdrand = 214013 * holdrand + 2531011;
+//    DWORD2(v2) = max - min;
+//    LODWORD(v2) = holdrand >> 17;
+//    return ((__int64)(v2 * *(_QWORD *)((char *)&v2 + 4)) >> 15) + min;
+//}
+
+int __cdecl G_irand(int min, int max)
+{
+    return ((G_rand() * (__int64)(max - min)) >> 15) + min;
+}
+
+//float __cdecl G_random()
+//{
+//    __int64 v0; // r11
+//    double v1; // fp1
+//
+//    HIDWORD(v0) = _xri_a;
+//    holdrand = 214013 * holdrand + 2531011;
+//    LODWORD(v0) = holdrand >> 17;
+//    v1 = (float)((float)v0 * (float)0.000030517578);
+//    return *((float *)&v1 + 1);
+//}
+
+float __cdecl G_random()
+{
+    return (float)G_rand() / 32768.0f;
+}
+
+//float __cdecl G_crandom()
+//{
+//    __int64 v0; // r11
+//    double v1; // fp1
+//
+//    HIDWORD(v0) = _xri_a;
+//    holdrand = 214013 * holdrand + 2531011;
+//    LODWORD(v0) = holdrand >> 17;
+//    v1 = (float)((float)((float)v0 * (float)0.000061035156) - (float)1.0);
+//    return *((float *)&v1 + 1);
+//}
+
+float __cdecl G_crandom()
+{
+    return G_random() * 2.0 - 1.0;
+}
+
+void __cdecl G_CalcTagParentAxis(gentity_s *ent, float (*parentAxis)[3])
+{
+    tagInfo_s *tagInfo; // r29
+    const gentity_s *parent; // r31
+    const float *currentAngles; // r3
+    DObjAnimMat *v7; // r31
+    float *v8; // r29
+    float v9[4][3]; // [sp+60h] [-90h] BYREF
+    float v10[24]; // [sp+90h] [-60h] BYREF
+
+    //Profile_Begin(317);
+    tagInfo = ent->tagInfo;
+    if (!tagInfo)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 1375, 0, "%s", "tagInfo");
+    parent = tagInfo->parent;
+    if (!tagInfo->parent)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 1377, 0, "%s", "parent");
+    currentAngles = parent->r.currentAngles;
+    if (tagInfo->index < 0)
+    {
+        AnglesToAxis(currentAngles, parentAxis);
+        v8 = &(*parentAxis)[9];
+        (*parentAxis)[9] = parent->r.currentOrigin[0];
+        (*parentAxis)[10] = parent->r.currentOrigin[1];
+        (*parentAxis)[11] = parent->r.currentOrigin[2];
+    }
+    else
+    {
+        AnglesToAxis(currentAngles, (float (*)[3])v10);
+        v10[9] = parent->r.currentOrigin[0];
+        v10[10] = parent->r.currentOrigin[1];
+        v10[11] = parent->r.currentOrigin[2];
+        G_DObjCalcBone(parent, tagInfo->index);
+        v7 = &SV_DObjGetMatrixArray(parent)[tagInfo->index];
+        LocalConvertQuatToMat(v7, v9);
+        // parentAxis is `float (*)[3]` (a pointer parameter). The previous cast
+        // `(mat3x3&)parentAxis` reinterpreted the 4-byte pointer SLOT as a 36-byte
+        // 3x3 matrix — MatrixMultiply then wrote 9 floats starting at the address
+        // of the local pointer variable, clobbering return address / saved EBP.
+        // Caught by ASAN at G_CalcTagParentAxis → MatrixMultiply. IDA SP 0x82272330
+        // passed `parentAxis` directly to a `float (*)[3]`-typed parameter; the
+        // kisak port redeclared MatrixMultiply with `mat3x3&` references, so we
+        // need to bind the reference to the pointee, not the pointer variable.
+        MatrixMultiply((const mat3x3&)v9, (const mat3x3&)v10, (mat3x3&)*parentAxis);
+        v8 = &(*parentAxis)[9];
+        MatrixTransformVector43(v7->trans, (const mat4x3&)v10, &(*parentAxis)[9]);
+    }
+    if ((COERCE_UNSIGNED_INT((*parentAxis)[0]) & 0x7F800000) == 0x7F800000
+        || (COERCE_UNSIGNED_INT((*parentAxis)[1]) & 0x7F800000) == 0x7F800000
+        || (COERCE_UNSIGNED_INT((*parentAxis)[2]) & 0x7F800000) == 0x7F800000)
+    {
+        MyAssertHandler(
+            "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+            1399,
+            0,
+            "%s",
+            "!IS_NAN((parentAxis[0])[0]) && !IS_NAN((parentAxis[0])[1]) && !IS_NAN((parentAxis[0])[2])");
+    }
+    if ((COERCE_UNSIGNED_INT((*parentAxis)[3]) & 0x7F800000) == 0x7F800000
+        || (COERCE_UNSIGNED_INT((*parentAxis)[4]) & 0x7F800000) == 0x7F800000
+        || (COERCE_UNSIGNED_INT((*parentAxis)[5]) & 0x7F800000) == 0x7F800000)
+    {
+        MyAssertHandler(
+            "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+            1400,
+            0,
+            "%s",
+            "!IS_NAN((parentAxis[1])[0]) && !IS_NAN((parentAxis[1])[1]) && !IS_NAN((parentAxis[1])[2])");
+    }
+    if ((COERCE_UNSIGNED_INT((*parentAxis)[6]) & 0x7F800000) == 0x7F800000
+        || (COERCE_UNSIGNED_INT((*parentAxis)[7]) & 0x7F800000) == 0x7F800000
+        || (COERCE_UNSIGNED_INT((*parentAxis)[8]) & 0x7F800000) == 0x7F800000)
+    {
+        MyAssertHandler(
+            "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+            1401,
+            0,
+            "%s",
+            "!IS_NAN((parentAxis[2])[0]) && !IS_NAN((parentAxis[2])[1]) && !IS_NAN((parentAxis[2])[2])");
+    }
+    if ((COERCE_UNSIGNED_INT(*v8) & 0x7F800000) == 0x7F800000
+        || (COERCE_UNSIGNED_INT((*parentAxis)[10]) & 0x7F800000) == 0x7F800000
+        || (COERCE_UNSIGNED_INT((*parentAxis)[11]) & 0x7F800000) == 0x7F800000)
+    {
+        MyAssertHandler(
+            "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+            1402,
+            0,
+            "%s",
+            "!IS_NAN((parentAxis[3])[0]) && !IS_NAN((parentAxis[3])[1]) && !IS_NAN((parentAxis[3])[2])");
+    }
+    //Profile_EndInternal(0);
+}
+
+void __cdecl G_CalcTagParentRelAxis(gentity_s *ent, float (*parentRelAxis)[3])
+{
+    tagInfo_s *tagInfo; // r30
+    float v5[6][3]; // [sp+50h] [-50h] BYREF
+
+    tagInfo = ent->tagInfo;
+    if (!tagInfo)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 1419, 0, "%s", "tagInfo");
+    G_CalcTagParentAxis(ent, v5);
+    // Same pointer-vs-pointee gotcha as G_CalcTagParentAxis: parentRelAxis is
+    // `float (*)[3]` and `(mat4x3&)parentRelAxis` would treat the 4-byte pointer
+    // SLOT as a 48-byte mat4x3, blowing out the stack on write. Dereference first.
+    MatrixMultiply43(tagInfo->parentInvAxis, (const mat4x3&)v5, (mat4x3&)*parentRelAxis);
+}
+
+void __cdecl G_CalcTagAxis(gentity_s *ent, int bAnglesOnly)
+{
+    tagInfo_s *tagInfo; // r30
+    float v5[12]; // [sp+50h] [-B0h] BYREF
+    float v6[4][3]; // [sp+80h] [-80h] BYREF
+    float v7[6][3]; // [sp+B0h] [-50h] BYREF
+
+    G_CalcTagParentAxis(ent, v7);
+    AnglesToAxis(ent->r.currentAngles, (float (*)[3])v5);
+    tagInfo = ent->tagInfo;
+    if (!tagInfo)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 1443, 0, "%s", "tagInfo");
+    if (bAnglesOnly)
+    {
+        MatrixTranspose((const mat3x3&)v7, (mat3x3&)v6);
+        MatrixMultiply((const mat3x3&)v5, (const mat3x3&)v6, (mat3x3&)tagInfo->axis);
+    }
+    else
+    {
+        MatrixInverseOrthogonal43((const mat4x3&)v7, v6);
+        v5[9] = ent->r.currentOrigin[0];
+        v5[10] = ent->r.currentOrigin[1];
+        v5[11] = ent->r.currentOrigin[2];
+        MatrixMultiply43((const mat4x3&)v5, v6, tagInfo->axis);
+    }
+}
+
+void __cdecl G_SetFixedLink(gentity_s *ent, unsigned int eAngles)
+{
+    tagInfo_s *tagInfo; // r30
+    double v5; // fp13
+    double v6; // fp12
+    double v9; // fp13
+    double v10; // fp12
+    float axis[4][3]; // [sp+50h] [-80h] BYREF
+    //float v12; // [sp+74h] [-5Ch] BYREF
+    //float v13; // [sp+78h] [-58h]
+    //float v14; // [sp+7Ch] [-54h]
+    float v15[6][3]; // [sp+80h] [-50h] BYREF
+
+    G_CalcTagParentAxis(ent, v15);
+    tagInfo = ent->tagInfo;
+    if (!tagInfo)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 1473, 0, "%s", "tagInfo");
+    if (eAngles)
+    {
+        if (eAngles == 1)
+        {
+            MatrixMultiply43(tagInfo->axis, (const mat4x3&)v15, (mat4x3&)axis);
+            ent->r.currentOrigin[0] = axis[3][0];
+            ent->r.currentOrigin[1] = axis[3][1];
+            ent->r.currentOrigin[2] = axis[3][2];
+            ent->r.currentAngles[1] = vectoyaw(axis[0]);
+        }
+        else if (eAngles < 3)
+        {
+            float pos[3];
+            MatrixTransformVector43(tagInfo->axis[3], (const mat4x3&)v15, pos);
+            ent->r.currentOrigin[0] = pos[0];
+            ent->r.currentOrigin[1] = pos[1];
+            ent->r.currentOrigin[2] = pos[2];
+        }
+    }
+    else
+    {
+        MatrixMultiply43(tagInfo->axis, (const mat4x3&)v15, (mat4x3&)axis);
+        ent->r.currentOrigin[0] = axis[3][0];
+        ent->r.currentOrigin[1] = axis[3][1];
+        ent->r.currentOrigin[2] = axis[3][2];
+        AxisToAngles((const mat3x3&)axis, ent->r.currentAngles);
+    }
+}
+
+void __cdecl G_SetPlayerFixedLink(gentity_s *ent)
+{
+    gclient_s *client; // r28
+    float *viewangles; // r31
+    float viewHeightCurrent; // fp0
+    float *currentOrigin; // r4
+    float linkChangeQuat[4]; // [sp+50h] [-200h] BYREF
+    float maxs[4]; // [sp+60h] [-1F0h] BYREF
+    float mins[4]; // [sp+70h] [-1E0h] BYREF
+    float worldAngles[3]; // [sp+80h] [-1D0h] BYREF
+    float newViewAngles[3]; // [sp+90h] [-1C0h] BYREF
+    float velocity[4]; // [sp+A0h] [-1B0h] BYREF
+    float worldViewOff[3]; // [sp+B0h] [-1A0h] BYREF
+    float localViewOff[4]; // [sp+C0h] [-190h] BYREF
+    float identQuat[4]; // [sp+D0h] [-180h] BYREF
+    float worldQuat[4]; // [sp+E0h] [-170h] BYREF
+    float worldAxis[4][3]; // [sp+F0h] [-160h] BYREF
+    float viewQuat[4]; // [sp+130h] [-120h] BYREF
+    float newViewQuat[4]; // [sp+140h] [-110h] BYREF
+    float newViewMat[3][3]; // [sp+190h] [-C0h] BYREF
+    float viewMat[3][3]; // [sp+1C0h] [-90h] BYREF
+
+    iassert(ent->client);
+    client = ent->client;
+    tagInfo_s *tagInfo = ent->tagInfo;
+    iassert(tagInfo);
+
+    G_CalcTagParentAxis(ent, worldAxis);
+    if ((client->ps.pm_flags & 0x1000000) != 0)
+    {
+        AxisToAngles((const mat3x3&)worldAxis, newViewAngles);
+
+        for (int angleIndex = 0; angleIndex < 3; ++angleIndex)
+        {
+            float angleDiff = AngleNormalize180(newViewAngles[angleIndex] - client->ps.viewangles[angleIndex]);
+            client->ps.delta_angles[angleIndex] = client->ps.delta_angles[angleIndex] + angleDiff;
+            client->ps.viewangles[angleIndex] = client->ps.viewangles[angleIndex] + angleDiff;
+        }
+    }
+    else
+    {
+        AxisToQuat(worldAxis, worldQuat);
+        AxisToAngles((const mat3x3&)worldAxis, worldAngles);
+        G_UpdateViewAngleClamp(client, worldAngles);
+
+        if (client->prevLinkAnglesSet)
+        {
+            QuatMultiply(client->prevLinkedInvQuat, worldQuat, linkChangeQuat);
+            QuatInverse(worldQuat, client->prevLinkedInvQuat);
+            identQuat[0] = 0.0f;
+            identQuat[1] = 0.0f;
+            identQuat[2] = 0.0f;
+            identQuat[3] = 1.0f;
+            QuatLerp(identQuat, linkChangeQuat, client->linkAnglesFrac, linkChangeQuat);
+        }
+        else
+        {
+            client->prevLinkAnglesSet = 1;
+            QuatInverse(worldQuat, client->prevLinkedInvQuat);
+            linkChangeQuat[0] = 0.0f;
+            linkChangeQuat[1] = 0.0f;
+            linkChangeQuat[2] = 0.0f;
+            linkChangeQuat[3] = 1.0f;
+        }
+
+        AnglesToAxis(client->ps.viewangles, viewMat);
+        AxisToQuat(viewMat, viewQuat);
+        QuatMultiply(viewQuat, linkChangeQuat, newViewQuat);
+        QuatToAxis(newViewQuat, (mat3x3&)newViewMat);
+        AxisToAngles((const mat3x3&)newViewMat, newViewAngles);
+
+        for (int angleIndex = 0; angleIndex < 2; ++angleIndex)
+        {
+            float angleDiff = AngleNormalize180(newViewAngles[angleIndex] - client->ps.viewangles[angleIndex]);
+            client->ps.delta_angles[angleIndex] = client->ps.delta_angles[angleIndex] + angleDiff;
+            client->ps.viewangles[angleIndex] = client->ps.viewangles[angleIndex] + angleDiff;
+        }
+
+        if (ent->client->link_useTagAnglesForViewAngles)
+        {
+            client->ps.linkAngles[0] = worldAngles[0];
+            client->ps.linkAngles[1] = worldAngles[1];
+            client->ps.linkAngles[2] = worldAngles[2];
+        }
+        else
+        {
+            float relMat[3][3];   // v38
+            float relQuat[4];     // v37
+            float newRelQuat[4];  // v34
+            AnglesToAxis(client->ps.linkAngles, relMat);
+            AxisToQuat(relMat, relQuat);
+            QuatMultiply(relQuat, linkChangeQuat, newRelQuat);
+            QuatToAxis(newRelQuat, (mat3x3&)relMat);
+            AxisToAngles((const mat3x3&)relMat, client->ps.linkAngles);
+        }
+    }
+    if (ent->client->link_rotationMovesEyePos)
+    {
+        viewHeightCurrent = client->ps.viewHeightCurrent;
+        localViewOff[0] = 0.0f;
+        localViewOff[1] = 0.0f;
+        localViewOff[2] = viewHeightCurrent;
+        MatrixTransformVector43(localViewOff, (const mat4x3&)worldAxis, worldViewOff);
+        currentOrigin = worldViewOff;
+        worldViewOff[2] = worldViewOff[2] - client->ps.viewHeightCurrent;
+    }
+    else if (ent->client->link_doCollision)
+    {
+        mins[0] = ent->r.mins[0];
+        mins[1] = ent->r.mins[1];
+        mins[2] = ent->r.mins[2];
+
+        maxs[0] = ent->r.maxs[0];
+        maxs[1] = ent->r.maxs[1];
+        maxs[2] = ent->r.maxs[2];
+
+        velocity[0] = worldAxis[3][0] - ent->r.currentOrigin[0];
+        velocity[1] = worldAxis[3][1] - ent->r.currentOrigin[1];
+        velocity[2] = worldAxis[3][2] - ent->r.currentOrigin[2];
+        ExpandBoundsToWidth(mins, maxs);
+        G_StepSlideMove(1.0f, ent->r.currentOrigin, velocity, mins, maxs, 0, ent->s.number, ent->clipmask & 0xFFFFBFFF);
+        currentOrigin = ent->r.currentOrigin;
+    }
+    else
+    {
+        currentOrigin = worldAxis[3];
+    }
+    G_SetOrigin(ent, currentOrigin);
+    ent->s.lerp.pos.trType = TR_INTERPOLATE;
+    SV_LinkEntity(ent);
+}
+
+void __cdecl G_GeneralLink(gentity_s *ent)
+{
+    tagInfo_s *tagInfo; // r28
+    double v3; // fp13
+    double v4; // fp12
+    float v5[12]; // [sp+50h] [-90h] BYREF
+    float v6[8][3]; // [sp+80h] [-60h] BYREF
+
+    iassert(ent->tagInfo);
+    G_CalcTagParentAxis(ent, v6);
+    tagInfo = ent->tagInfo;
+    iassert(tagInfo);
+    MatrixMultiply43(tagInfo->axis, (const mat4x3&)v6, (mat4x3&)v5);
+    v3 = v5[10];
+    v4 = v5[11];
+    ent->r.currentOrigin[0] = v5[9];
+    ent->r.currentOrigin[1] = v3;
+    ent->r.currentOrigin[2] = v4;
+    AxisToAngles((const mat3x3&)v5, ent->r.currentAngles);
+    G_SetOrigin(ent, ent->r.currentOrigin);
+    ent->s.lerp.apos.trBase[0] = ent->r.currentAngles[0];
+    ent->s.lerp.apos.trBase[1] = ent->r.currentAngles[1];
+    ent->s.lerp.apos.trBase[2] = ent->r.currentAngles[2];
+    ent->s.lerp.apos.trType = TR_STATIONARY;
+    ent->s.lerp.apos.trTime = 0;
+    ent->s.lerp.apos.trDuration = 0;
+    ent->s.lerp.apos.trDelta[0] = 0.0;
+    ent->s.lerp.apos.trDelta[1] = 0.0;
+    ent->s.lerp.apos.trDelta[2] = 0.0;
+    ent->r.currentAngles[0] = ent->r.currentAngles[0];
+    ent->r.currentAngles[1] = ent->r.currentAngles[1];
+    ent->r.currentAngles[2] = ent->r.currentAngles[2];
+    ent->s.lerp.pos.trType = TR_INTERPOLATE;
+    ent->s.lerp.apos.trType = TR_INTERPOLATE;
+    SV_LinkEntity(ent);
+}
+
+gentity_s *__cdecl G_TempEntity(float *origin, int event)
+{
+    gentity_s *v4; // r3
+    gentity_s *v5; // r31
+    bool v6; // zf
+    float v8[6]; // [sp+50h] [-30h] BYREF
+
+    v4 = G_Spawn();
+    v4->s.eType = (entityType_t)(event + 17);
+    v6 = (unsigned __int8)(event + 17) == event + 17;
+    v5 = v4;
+    if (!v6)
+        MyAssertHandler(
+            "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+            2643,
+            0,
+            "%s",
+            "e->s.eType == ET_EVENTS + event");
+    Scr_SetString(&v5->classname, scr_const.tempEntity);
+    v5->r.eventType = 1;
+    v5->r.eventTime = level.time;
+    v8[0] = *origin;
+    v8[1] = origin[1];
+    v8[2] = origin[2];
+    G_SetOrigin(v5, v8);
+    SV_LinkEntity(v5);
+    return v5;
+}
+
+void __cdecl G_PlaySoundAliasAtPoint(float *origin, unsigned __int16 index)
+{
+    if (!origin)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 2756, 0, "%s", "origin");
+    if (index)
+        G_TempEntity(origin, 3)->s.eventParm = index;
+}
+
+void __cdecl G_EntUnlink(gentity_s *ent)
+{
+    tagInfo_s *tagInfo; // r22
+    animscripted_s *scripted; // r30
+    float *anglesError; // r30
+    long double v5; // fp2
+    gclient_s *client; // r11
+    gentity_s *parent; // r24
+    gentity_s *tagChildren; // r30
+    gentity_s *v9; // r27
+    gclient_s *v10; // r11
+    int pm_type; // r10
+    float v12[4]; // [sp+50h] [-130h] BYREF
+    float v13[3][3]; // [sp+60h] [-120h] BYREF
+    float v14[3]; // [sp+84h] [-FCh] BYREF
+    float v15[12]; // [sp+90h] [-F0h] BYREF
+    float v16[4][3]; // [sp+C0h] [-C0h] BYREF
+    float v17[4][3]; // [sp+F0h] [-90h] BYREF
+
+    //Profile_Begin(255);
+    tagInfo = ent->tagInfo;
+    if (tagInfo)
+    {
+        scripted = ent->scripted;
+        if (scripted)
+        {
+            G_CalcTagParentRelAxis(ent, v16);
+            MatrixTranspose((const mat3x3&)v16, (mat3x3&)v17);
+            MatrixMultiply43(scripted->axis, v16, (mat4x3&)v15);
+            AxisCopy((const mat3x3&)v15, (mat3x3&)scripted->axis);
+            scripted->axis[3][0] = v15[9];
+            scripted->axis[3][1] = v15[10];
+            scripted->axis[3][2] = v15[11];
+            v14[0] = scripted->originError[0];
+            v14[1] = scripted->originError[1];
+            v14[2] = scripted->originError[2];
+            MatrixTransformVector(v14, (const mat3x3&)v16, scripted->originError);
+            anglesError = scripted->anglesError;
+            AnglesToAxis(anglesError, v13);
+            MatrixMultiply((const mat3x3&)v17, v13, (mat3x3&)v15);
+            MatrixMultiply((const mat3x3&)v15, (const mat3x3&)v16, v13);
+            AxisToSignedAngles(v13, anglesError);
+        }
+        G_SetOrigin(ent, ent->r.currentOrigin);
+        ent->s.lerp.apos.trBase[0] = ent->r.currentAngles[0];
+        ent->s.lerp.apos.trBase[1] = ent->r.currentAngles[1];
+        ent->s.lerp.apos.trBase[2] = ent->r.currentAngles[2];
+        ent->s.lerp.apos.trType = TR_STATIONARY;
+        ent->s.lerp.apos.trTime = 0;
+        ent->s.lerp.apos.trDuration = 0;
+        ent->s.lerp.apos.trDelta[0] = 0.0;
+        ent->s.lerp.apos.trDelta[1] = 0.0;
+        ent->s.lerp.apos.trDelta[2] = 0.0;
+        ent->r.currentAngles[0] = ent->r.currentAngles[0];
+        ent->r.currentAngles[1] = ent->r.currentAngles[1];
+        ent->r.currentAngles[2] = ent->r.currentAngles[2];
+        client = ent->client;
+        if (client)
+        {
+            v12[0] = client->ps.viewangles[0];
+            v12[1] = client->ps.viewangles[1];
+            v12[2] = 0.0;
+            SetClientViewAngle(ent, v12);
+            ent->r.currentAngles[0] = 0.0;
+        }
+        parent = tagInfo->parent;
+        if (!tagInfo->parent)
+            MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 1238, 0, "%s", "parent");
+        tagChildren = parent->tagChildren;
+        if (tagChildren == ent)
+            goto LABEL_16;
+        do
+        {
+            if (!tagChildren->tagInfo)
+                MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 1244, 0, "%s", "next->tagInfo");
+            v9 = tagChildren;
+            tagChildren = tagChildren->tagInfo->next;
+            if (!tagChildren)
+                MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 1247, 0, "%s", "next");
+        } while (tagChildren != ent);
+        if (!v9)
+            LABEL_16:
+        parent->tagChildren = tagInfo->next;
+        else
+            v9->tagInfo->next = tagInfo->next;
+        v10 = ent->client;
+        ent->tagInfo = 0;
+        if (v10)
+        {
+            pm_type = v10->ps.pm_type;
+            if (pm_type == PM_NORMAL_LINKED)
+            {
+                v10->ps.pm_type = PM_NORMAL;
+            }
+            else if (pm_type == PM_DEAD_LINKED)
+            {
+                v10->ps.pm_type = PM_DEAD;
+            }
+        }
+        Scr_SetString(&tagInfo->name, 0);
+        MT_Free((unsigned char *)tagInfo, 112);
+    }
+    //Profile_EndInternal(0);
+}
+
+void __cdecl G_UpdateTagInfo(gentity_s *ent, int bParentHasDObj)
+{
+    tagInfo_s *tagInfo; // r31
+    int BoneIndex; // r3
+
+    //Profile_Begin(256);
+    tagInfo = ent->tagInfo;
+    if (!tagInfo)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 1311, 0, "%s", "tagInfo");
+    if (tagInfo->name)
+    {
+        if (!bParentHasDObj
+            || (BoneIndex = SV_DObjGetBoneIndex(tagInfo->parent, tagInfo->name), tagInfo->index = BoneIndex, BoneIndex < 0))
+        {
+            G_EntUnlink(ent);
+            //Profile_EndInternal(0);
+            return;
+        }
+    }
+    else
+    {
+        tagInfo->index = -1;
+    }
+    //Profile_EndInternal(0);
+}
+
+void __cdecl G_UpdateTagInfoOfChildren(gentity_s *parent, int bHasDObj)
+{
+    gentity_s *tagChildren; // r3
+    gentity_s *next; // r31
+
+    //Profile_Begin(252);
+    tagChildren = parent->tagChildren;
+    if (tagChildren)
+    {
+        do
+        {
+            next = tagChildren->tagInfo->next;
+            G_UpdateTagInfo(tagChildren, bHasDObj);
+            tagChildren = next;
+        } while (next);
+    }
+    //Profile_EndInternal(0);
+}
+
+void __cdecl G_EntUnlinkFree(gentity_s *ent)
+{
+    animscripted_s *scripted; // r3
+
+    scripted = ent->scripted;
+    if (scripted)
+    {
+        MT_Free((unsigned char *)scripted, 96);
+        ent->scripted = 0;
+    }
+    G_EntUnlink(ent);
+}
+
+void __cdecl G_FreeEntity(gentity_s *ed)
+{
+    animscripted_s *scripted; // r3
+    gentity_s *tagChildren; // r30
+    animscripted_s *v4; // r3
+    XAnimTree_s *Tree; // r3
+    XAnimTree_s *pAnimTree; // r3
+    actor_s *actor; // r3
+    sentient_s *sentient; // r3
+    actor_s *i; // r30
+    TurretInfo *pTurretInfo; // r11
+    int useCount; // r30
+    int inuse; // r10
+
+    //Profile_Begin(246);
+    if (Path_IsDynamicBlockingEntity(ed))
+        Path_ConnectPathsForEntity(ed);
+    if ((ed->flags & 0x200000) != 0)
+        Path_RemoveBadPlaceEntity(ed);
+    if (ed->disconnectedLinks)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 2421, 0, "%s", "!ed->disconnectedLinks");
+    scripted = ed->scripted;
+    if (scripted)
+    {
+        MT_Free((unsigned char*)scripted, 96);
+        ed->scripted = 0;
+    }
+    G_EntUnlink(ed);
+    while (ed->tagChildren)
+    {
+        tagChildren = ed->tagChildren;
+        v4 = tagChildren->scripted;
+        if (v4)
+        {
+            MT_Free((unsigned char *)v4, 96);
+            tagChildren->scripted = 0;
+        }
+        G_EntUnlink(tagChildren);
+    }
+    SV_UnlinkEntity(ed);
+    if (ed->s.number == level.cachedTagMat.entnum)
+        level.cachedTagMat.entnum = ENTITYNUM_NONE;
+    if (ed->s.number == level.cachedEntTargetTagMat.entnum)
+        level.cachedEntTargetTagMat.entnum = ENTITYNUM_NONE;
+    Tree = SV_DObjGetTree(ed);
+    if (Tree)
+        XAnimClearTree(Tree);
+    Com_SafeServerDObjFree(ed->s.number);
+    pAnimTree = ed->pAnimTree;
+    if (pAnimTree)
+    {
+        Com_XAnimFreeSmallTree(pAnimTree);
+        ed->pAnimTree = 0;
+    }
+    actor = ed->actor;
+    if (actor)
+    {
+        Actor_Free(actor);
+        if (ed->actor)
+            MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 2450, 0, "%s", "ed->actor == NULL");
+    }
+    sentient = ed->sentient;
+    if (sentient)
+    {
+        Sentient_Free(sentient);
+        if (ed->sentient)
+            MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 2456, 0, "%s", "ed->sentient == NULL");
+    }
+    else
+    {
+        G_FreeEntityRefs(ed);
+    }
+    Actor_EventListener_RemoveEntity(ed->s.number);
+    if ((ed->flags & 0x4000000) != 0)
+    {
+        for (i = Actor_FirstActor(-1); i; i = Actor_NextActor(i, -1))
+        {
+            if (i->pTurret == ed)
+            {
+                Actor_StopUseTurret(i);
+                if (i->pTurret)
+                    MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 2472, 0, "%s", "pActor->pTurret == NULL");
+            }
+        }
+    }
+    if (ed->s.eType == 16)
+        ActorCorpse_Free(ed);
+    pTurretInfo = ed->pTurretInfo;
+    if (pTurretInfo)
+    {
+        if (!pTurretInfo->inuse)
+            MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 2482, 0, "%s", "ed->pTurretInfo->inuse");
+        G_FreeTurret(ed);
+        if (ed->pTurretInfo)
+            MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 2484, 0, "%s", "ed->pTurretInfo == NULL");
+    }
+    if (ed->scr_vehicle)
+    {
+        G_FreeVehicle(ed);
+        if (ed->scr_vehicle)
+            MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 2490, 0, "%s", "ed->scr_vehicle == NULL");
+    }
+    EntHandleDissociate(ed);
+    if (!ed->r.inuse)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 2495, 0, "%s", "ed->r.inuse");
+    Scr_FreeEntity(ed);
+    if (ed->classname)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 2498, 0, "%s", "ed->classname == 0");
+    useCount = ed->s.lerp.useCount;
+    memset(ed, 0, sizeof(gentity_s));
+    if (ed - level.gentities >= 1)
+    {
+        if (level.lastFreeEnt)
+            level.lastFreeEnt->nextFree = ed;
+        else
+            level.firstFreeEnt = ed;
+        level.lastFreeEnt = ed;
+        ed->nextFree = 0;
+    }
+    inuse = ed->r.inuse;
+    ed->s.lerp.useCount = useCount + 1;
+    if (inuse)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 2513, 0, "%s", "!ed->r.inuse");
+    //Profile_EndInternal(0);
+}
+
+void __cdecl G_UpdateTags(gentity_s *ent, int bHasDObj)
+{
+    if (ent->scr_vehicle)
+        G_UpdateVehicleTags(ent);
+    G_UpdateTagInfoOfChildren(ent, bHasDObj);
+}
+
+void __cdecl G_DObjUpdate(gentity_s *ent)
+{
+    int modelIndex; // r31
+    XAnimTree_s *pAnimTree; // r19
+    int eType; // r11
+    XAnimTree_s *ActorAnimTree; // r3
+    XModel *model; // r31
+    int i; // r29
+    int numModels; // r26
+    unsigned __int16 *attachTagNames; // r30
+    unsigned int attachIgnoreCollision; // r11
+    DObjModel_s dobjModels[DOBJ_MAX_SUBMODELS]; // [sp+50h] [-170h] BYREF
+
+    //Profile_Begin(251);
+
+    if (ent->s.number == level.cachedTagMat.entnum)
+        level.cachedTagMat.entnum = ENTITYNUM_NONE;
+
+    if (ent->s.number == level.cachedEntTargetTagMat.entnum)
+        level.cachedEntTargetTagMat.entnum = ENTITYNUM_NONE;
+
+    Com_SafeServerDObjFree(ent->s.number);
+    modelIndex = ent->model;
+    if (!ent->model)
+    {
+        G_UpdateTags(ent, false);
+        return;
+    }
+    if (!ent->s.lerp.u.actor.species)
+    {
+        eType = ent->s.eType;
+        if (eType == 14)
+        {
+            ActorAnimTree = G_GetActorAnimTree(ent->actor);
+        }
+        else
+        {
+            if (eType != 16)
+            {
+                pAnimTree = ent->pAnimTree;
+                goto LABEL_17;
+            }
+            ActorAnimTree = G_GetActorCorpseAnimTree(ent);
+        }
+        pAnimTree = ActorAnimTree;
+        goto LABEL_17;
+    }
+    pAnimTree = ent->pAnimTree;
+LABEL_17:
+    model = G_GetModel(modelIndex);
+    iassert(model);
+
+    dobjModels[0].model = model;
+    dobjModels[0].boneName = 0;
+    dobjModels[0].ignoreCollision = 0;
+
+    i = 0;
+    numModels = 1;
+    attachTagNames = ent->attachTagNames;
+    do
+    {
+        modelIndex = ent->attachModelNames[i];
+
+        if (!modelIndex)
+            break;
+
+        iassert(numModels < DOBJ_MAX_SUBMODELS);
+
+        dobjModels[numModels].model = G_GetModel(modelIndex);
+
+        iassert(dobjModels[numModels].model);
+        iassert(ent->attachTagNames[i]);
+
+        dobjModels[numModels].boneName = ent->attachTagNames[i];
+        dobjModels[numModels].ignoreCollision = (ent->attachIgnoreCollision & (1 << i)) != 0;
+
+        numModels++;
+        i++;
+    } while (i < 31);
+
+    Com_ServerDObjCreate(dobjModels, numModels, pAnimTree, ent->s.number);
+    G_UpdateTags(ent, true);
+    //Profile_EndInternal(0);
+}
+
+int __cdecl G_EntDetach(gentity_s *ent, const char *modelName, unsigned int tagName)
+{
+    unsigned int LowercaseString; // r3
+    unsigned int v7; // r24
+    int v8; // r31
+    unsigned __int16 *attachModelNames; // r29
+    unsigned int v10; // r28
+    unsigned __int16 *v12; // r29
+    int v13; // r8
+    unsigned __int16 *v14; // r11
+    unsigned __int16 v15; // r10
+    unsigned int attachIgnoreCollision; // r10
+    int v17; // r7
+    unsigned int v18; // r10
+
+    //Profile_Begin(250);
+    if (!tagName)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 977, 0, "%s", "tagName");
+    LowercaseString = SL_FindLowercaseString(modelName);
+    v7 = LowercaseString;
+    if (!LowercaseString || LowercaseString == scr_const._)
+    {
+    LABEL_11:
+        //Profile_EndInternal(0);
+        return 0;
+    }
+    else
+    {
+        v8 = 0;
+        attachModelNames = ent->attachModelNames;
+        while (1)
+        {
+            if (attachModelNames[31] == tagName)
+            {
+                v10 = *attachModelNames;
+                if (v10 >= 0x200)
+                    MyAssertHandler(
+                        "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+                        316,
+                        0,
+                        "%s",
+                        "(unsigned)index < MAX_MODELS");
+                if (SV_GetConfigstringConst(v10 + 1123) == v7) // CS_MODELS (PC SP, was Xbox 1155)
+                    break;
+            }
+            ++v8;
+            ++attachModelNames;
+            if (v8 >= 31)
+                goto LABEL_11;
+        }
+        v12 = &ent->attachModelNames[v8];
+        if (!*v12)
+            MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 994, 0, "%s", "ent->attachModelNames[i]");
+        *v12 = 0;
+        Scr_SetString(&ent->attachTagNames[v8], 0);
+        if (v8 < 30)
+        {
+            v13 = v8 + 1;
+            v14 = &ent->attachModelNames[v8];
+            do
+            {
+                v15 = v14[1];
+                v14[31] = v14[32];
+                *v14 = v15;
+                attachIgnoreCollision = ent->attachIgnoreCollision;
+                v17 = 1 << v8;
+                if (((1 << v13) & attachIgnoreCollision) != 0)
+                    v18 = v17 | attachIgnoreCollision;
+                else
+                    v18 = attachIgnoreCollision & ~v17;
+                ++v13;
+                ent->attachIgnoreCollision = v18;
+                ++v8;
+                ++v14;
+            } while (v13 < 31);
+        }
+        ent->attachTagNames[v8] = 0;
+        ent->attachModelNames[v8] = 0;
+        ent->attachIgnoreCollision &= ~(1 << v8);
+        G_DObjUpdate(ent);
+        //Profile_EndInternal(0);
+        return 1;
+    }
+}
+
+void __cdecl G_EntDetachAll(gentity_s *ent)
+{
+    unsigned __int16 *attachTagNames; // r31
+    int v3; // r30
+
+    attachTagNames = ent->attachTagNames;
+    //Profile_Begin(253);
+    v3 = 31;
+    do
+    {
+        *(attachTagNames - 31) = 0;
+        Scr_SetString(attachTagNames, 0);
+        --v3;
+        ++attachTagNames;
+    } while (v3);
+    ent->attachIgnoreCollision = 0;
+    G_DObjUpdate(ent);
+    //Profile_EndInternal(0);
+}
+
+int __cdecl G_EntLinkToInternal(gentity_s *ent, gentity_s *parent, unsigned int tagName)
+{
+    int BoneIndex; // r24
+    int result; // r3
+    gentity_s *i; // r31
+    gentity_s **p_parent; // r11
+    tagInfo_s *v10; // r31
+    const char *v11; // r3
+    gentity_s *tagChildren; // r11
+    animscripted_s *scripted; // r11
+    gclient_s *client; // r11
+    int pm_type; // r10
+    float v16[10][3]; // [sp+50h] [-80h] BYREF
+
+    if (!parent)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 1061, 0, "%s", "parent");
+    if ((ent->flags & 0x800) == 0)
+        MyAssertHandler(
+            "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+            1062,
+            0,
+            "%s",
+            "ent->flags & FL_SUPPORTS_LINKTO");
+    G_EntUnlink(ent);
+    if (ent->tagInfo)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 1066, 0, "%s", "!ent->tagInfo");
+    if (tagName)
+    {
+        if (!SV_DObjExists(parent))
+            return 0;
+        BoneIndex = SV_DObjGetBoneIndex(parent, tagName);
+        if (BoneIndex < 0)
+            return 0;
+    }
+    else
+    {
+        BoneIndex = -1;
+    }
+    for (i = parent; ; i = *p_parent)
+    {
+        if (!i)
+            MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 1085, 0, "%s", "checkEnt");
+        if (i == ent)
+            break;
+        p_parent = &i->tagInfo->parent;
+        if (!p_parent)
+        {
+            v10 = (tagInfo_s *)MT_Alloc(112, 17);
+            v10->parent = parent;
+            v10->name = 0;
+            if (tagName && !SL_IsLowercaseString(tagName))
+            {
+                v11 = SL_ConvertToString(tagName);
+                MyAssertHandler(
+                    "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+                    1096,
+                    0,
+                    "%s\n\t(SL_ConvertToString( tagName )) = %s",
+                    "(!tagName || SL_IsLowercaseString( tagName ))",
+                    v11);
+            }
+            Scr_SetString(&v10->name, tagName);
+            tagChildren = parent->tagChildren;
+            v10->index = BoneIndex;
+            v10->next = tagChildren;
+            memset(v10->axis, 0, sizeof(v10->axis));
+            parent->tagChildren = ent;
+            scripted = ent->scripted;
+            ent->tagInfo = v10;
+            if (scripted)
+            {
+                G_CalcTagParentAxis(ent, v16);
+                MatrixInverseOrthogonal43((const mat4x3&)v16, v10->parentInvAxis);
+            }
+            else
+            {
+                memset(v10->parentInvAxis, 0, sizeof(v10->parentInvAxis));
+            }
+            client = ent->client;
+            if (client)
+            {
+                pm_type = client->ps.pm_type;
+                if (pm_type)
+                {
+                    if (pm_type == PM_DEAD)
+                    {
+                        result = 1;
+                        client->ps.pm_type = PM_DEAD_LINKED;
+                        return result;
+                    }
+                }
+                else
+                {
+                    client->ps.pm_type = PM_NORMAL_LINKED;
+                }
+            }
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int __cdecl G_EntLinkTo(gentity_s *ent, gentity_s *parent, unsigned int tagName)
+{
+    //Profile_Begin(254);
+    if (G_EntLinkToInternal(ent, parent, tagName))
+    {
+        G_CalcTagAxis(ent, 0);
+        //Profile_EndInternal(0);
+        return 1;
+    }
+    else
+    {
+        //Profile_EndInternal(0);
+        return 0;
+    }
+}
+
+int __cdecl G_EntLinkToWithOffset(
+    gentity_s *ent,
+    gentity_s *parent,
+    unsigned int tagName,
+    float *originOffset,
+    const float *anglesOffset)
+{
+    tagInfo_s *tagInfo; // r31
+
+    //Profile_Begin(254);
+    if (G_EntLinkToInternal(ent, parent, tagName))
+    {
+        tagInfo = ent->tagInfo;
+        AnglesToAxis(anglesOffset, tagInfo->axis);
+        tagInfo->axis[3][0] = *originOffset;
+        tagInfo->axis[3][1] = originOffset[1];
+        tagInfo->axis[3][2] = originOffset[2];
+        //Profile_EndInternal(0);
+        return 1;
+    }
+    else
+    {
+        //Profile_EndInternal(0);
+        return 0;
+    }
+}
+
+int __cdecl G_EntAttach(gentity_s *ent, const char *modelName, unsigned int tagName, int ignoreCollision)
+{
+    int v8; // r31
+    unsigned __int16 *i; // r11
+    int v11; // r30
+    int v12; // r31
+
+    //Profile_Begin(249);
+    if (!tagName)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 930, 0, "%s", "tagName");
+    if (G_EntDetach(ent, modelName, tagName))
+        MyAssertHandler(
+            "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+            933,
+            0,
+            "%s",
+            "!G_EntDetach( ent, modelName, tagName )");
+    v8 = 0;
+    for (i = ent->attachModelNames; *i; ++i)
+    {
+        if (++v8 >= 31)
+        {
+            //Profile_EndInternal(0);
+            return 0;
+        }
+    }
+    //Profile_EndInternal(0);
+    v11 = G_ModelIndex(modelName);
+    if (!v11)
+        return 0;
+    //Profile_Begin(249);
+    if (v11 != (unsigned __int16)v11)
+        MyAssertHandler(
+            "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+            947,
+            0,
+            "%s",
+            "modelIndex == (modelNameIndex_t) modelIndex");
+    ent->attachModelNames[v8] = v11;
+    if (ent->attachTagNames[v8])
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp", 949, 0, "%s", "!ent->attachTagNames[i]");
+    Scr_SetString(&ent->attachTagNames[v8], tagName);
+    v12 = 1 << v8;
+    if ((ent->attachIgnoreCollision & v12) != 0)
+        MyAssertHandler(
+            "c:\\trees\\cod3\\cod3src\\src\\game\\g_utils.cpp",
+            951,
+            0,
+            "%s",
+            "!(ent->attachIgnoreCollision & (1 << i))");
+    if (ignoreCollision)
+        ent->attachIgnoreCollision |= v12;
+    G_DObjUpdate(ent);
+    //Profile_EndInternal(0);
+    return 1;
+}
+

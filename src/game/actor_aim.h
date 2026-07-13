@@ -1,0 +1,97 @@
+#pragma once
+
+#ifndef KISAK_SP 
+#error This file is for SinglePlayer only 
+#endif
+
+#include <qcommon/graph.h>
+
+enum WeapAccuracyType : __int32;
+
+enum enumLastShot : __int32
+{
+    LAST_SHOT_IN_CLIP = 0x0,
+    NOT_LAST_SHOT_IN_CLIP = 0x1,
+};
+
+struct WeaponDef;
+struct actor_s;
+struct sentient_s;
+struct weaponParms;
+struct DevGraph;
+
+
+void __cdecl TRACK_actor_aim();
+void __cdecl Actor_DrawDebugAccuracy(const float *pos, double scale, double rowHeight);
+void __cdecl Actor_DebugAccuracyMsg(
+    unsigned int msgIndex,
+    const char *msg,
+    float accuracy,
+    const float *color);
+float __cdecl Actor_GetAccuracyFraction(
+    float dist,
+    const WeaponDef *weapDef,
+    WeapAccuracyType accuracyType);
+float __cdecl Actor_GetWeaponAccuracy(
+    const actor_s *self,
+    const sentient_s *enemy,
+    const WeaponDef *weapDef,
+    WeapAccuracyType accuracyType);
+float __cdecl Actor_GetPlayerStanceAccuracy(const actor_s *self, const sentient_s *enemy);
+float __cdecl Actor_GetPlayerMovementAccuracy(const actor_s *self, const sentient_s *enemy);
+float __cdecl Actor_GetPlayerSightAccuracy(actor_s *self, const sentient_s *enemy);
+float __cdecl Actor_GetFinalAccuracy(actor_s *self, weaponParms *wp, double accuracyMod);
+void __cdecl Actor_FillWeaponParms(actor_s *self, weaponParms *wp);
+void __cdecl Actor_HitSentient(weaponParms *wp, sentient_s *enemy, float accuracy);
+void __cdecl Actor_HitTarget(const weaponParms *wp, const float *target, float *forward);
+void __cdecl Actor_HitEnemy(actor_s *self, weaponParms *wp, double accuracy);
+void __cdecl Actor_MissSentient(weaponParms *wp, sentient_s *enemy, float accuracy);
+void __cdecl Actor_MissTarget(const weaponParms *wp, const float *target, float *forward);
+void __cdecl Actor_MissEnemy(actor_s *self, weaponParms *wp, double accuracy);
+void __cdecl Actor_ShootNoEnemy(actor_s *self, weaponParms *wp);
+void __cdecl Actor_ShootPos(actor_s *self, weaponParms *wp, float *pos);
+void __cdecl Actor_ClampShot(actor_s *self, weaponParms *wp);
+void __cdecl Actor_Shoot(actor_s *self, float accuracyMod, float (*posOverride)[3], enumLastShot lastShot);
+void __cdecl Actor_ShootBlank(actor_s *self);
+struct gentity_s *__cdecl Actor_Melee(actor_s *self, const float *direction);
+float __cdecl Sentient_GetScarinessForDistance(sentient_s *self, sentient_s *enemy, double fDist);
+void __cdecl Actor_GetAccuracyGraphFileName_FastFile(
+    const WeaponDef *weaponDef,
+    WeapAccuracyType accuracyType,
+    char *filePath,
+    unsigned int sizeofFilePath);
+void __cdecl Actor_GetAccuracyGraphFileName(
+    const WeaponDef *weaponDef,
+    WeapAccuracyType accuracyType,
+    char *filePath,
+    unsigned int sizeofFilePath);
+void __cdecl Actor_AccuracyGraphSaveToFile(
+    const DevGraph *graph,
+    WeaponDef *weaponDef,
+    WeapAccuracyType accuracyType);
+void __cdecl Actor_CommonAccuracyGraphEventCallback(
+    const DevGraph *graph,
+    DevEventType event,
+    WeapAccuracyType accuracyType);
+void __cdecl Actor_AiVsAiAccuracyGraphEventCallback(
+    const DevGraph *graph,
+    DevEventType event,
+    int unusedLocalClientNum);
+void __cdecl Actor_AiVsPlayerAccuracyGraphEventCallback(
+    const DevGraph *graph,
+    DevEventType event,
+    int unusedLocalClientNum);
+void __cdecl Actor_AccuracyGraphTextCallback(
+    const DevGraph *graph,
+    const float inputX,
+    const float inputY,
+    char *text,
+    const int textLength);
+void __cdecl G_SwapAccuracyBuffers();
+DevGraph *__cdecl Actor_InitWeaponAccuracyGraphForWeaponType(
+    unsigned int weaponIndex,
+    WeapAccuracyType accuracyType,
+    void(__cdecl *eventCallback)(const DevGraph *, DevEventType, int));
+void __cdecl Actor_CopyAccuGraphBuf(WeaponDef *from, WeaponDef *to);
+void __cdecl Actor_InitWeaponAccuracyGraphForWeapon(unsigned int weaponIndex);
+void __cdecl Actor_ShutdownWeaponAccuracyGraph();

@@ -1,0 +1,1420 @@
+#include "cg_local.h"
+#include "cg_public.h"
+
+#include <bgame/bg_public.h>
+
+#include <script/scr_const.h>
+#include <xanim/dobj.h>
+#include <EffectsCore/fx_system.h>
+#include <bgame/bg_public.h>
+#include <DynEntity/DynEntity_client.h>
+#include <ragdoll/ragdoll.h>
+#include <client/client.h>
+
+#ifdef KISAK_MP
+#include <cgame_mp/cg_local_mp.h>
+#include <server_mp/server_mp.h>
+#elif KISAK_SP
+#include "cg_main.h"
+#include "cg_ents.h"
+#include <client/cl_input.h>
+#include "cg_servercmds.h"
+#include "cg_compassfriendlies.h"
+#endif
+#include <universal/com_sndalias.h>
+
+
+int32_t __cdecl CG_GetBoneIndex(
+    int32_t localClientNum,
+    uint32_t dobjHandle,
+    uint32_t boneName,
+    uint8_t *boneIndex)
+{
+    const DObj_s *obj; // [esp+0h] [ebp-4h]
+
+    bcassert(dobjHandle, CLIENT_DOBJ_HANDLE_MAX);
+
+    obj = Com_GetClientDObj(dobjHandle, localClientNum);
+    if (obj)
+        return DObjGetBoneIndex(obj, boneName, boneIndex);
+    else
+        return 0;
+}
+
+void __cdecl CG_PlayBoltedEffect(
+    int32_t localClientNum,
+    const FxEffectDef *fxDef,
+    uint32_t dobjHandle,
+    uint32_t boneName)
+{
+    uint8_t boneIndex; // [esp+3h] [ebp-5h] BYREF
+    int32_t time; // [esp+4h] [ebp-4h]
+
+    boneIndex = -2;
+    if (CG_GetBoneIndex(localClientNum, dobjHandle, boneName, &boneIndex))
+    {
+        time = CG_GetLocalClientGlobals(localClientNum)->time;
+        FX_PlayBoltedEffect(localClientNum, fxDef, time, dobjHandle, boneIndex);
+    }
+}
+
+void __cdecl CG_EntityEvent(int32_t localClientNum, centity_s *cent, int32_t event)
+{
+    const char *ConfigString; // eax
+    char *v4; // eax
+    float innerRadius_4; // [esp+4h] [ebp-150h]
+    float innerRadius_4a; // [esp+4h] [ebp-150h]
+    float innerRadius_4b; // [esp+4h] [ebp-150h]
+    float innerRadius_4c; // [esp+4h] [ebp-150h]
+    float innerRadius_4d; // [esp+4h] [ebp-150h]
+    float innerRadius_4e; // [esp+4h] [ebp-150h]
+    float p_4; // [esp+Ch] [ebp-148h]
+    float p_4a; // [esp+Ch] [ebp-148h]
+    float p_4b; // [esp+Ch] [ebp-148h]
+    float p_4c; // [esp+Ch] [ebp-148h]
+    float p_4d; // [esp+Ch] [ebp-148h]
+    float p_4e; // [esp+Ch] [ebp-148h]
+    float p_4f; // [esp+Ch] [ebp-148h]
+    snapshot_s *v24; // [esp+B0h] [ebp-A4h]
+    snapshot_s *v25; // [esp+B4h] [ebp-A0h]
+    snapshot_s *v26; // [esp+B8h] [ebp-9Ch]
+    snapshot_s *v27; // [esp+BCh] [ebp-98h]
+    snapshot_s *v28; // [esp+C0h] [ebp-94h]
+    snapshot_s *nextSnap; // [esp+C8h] [ebp-8Ch]
+    snd_alias_list_t *v30; // [esp+CCh] [ebp-88h] BYREF
+    FxEffectDef *def; // [esp+D0h] [ebp-84h] BYREF
+    snd_alias_list_t *outSnd; // [esp+D4h] [ebp-80h] BYREF
+    FxEffectDef *outFx; // [esp+D8h] [ebp-7Ch] BYREF
+    snd_alias_list_t *snd; // [esp+DCh] [ebp-78h] BYREF
+    const FxEffectDef *fx; // [esp+E0h] [ebp-74h] BYREF
+    centity_s *attackerCent; // [esp+E4h] [ebp-70h]
+    entityType_t eType; // [esp+E8h] [ebp-6Ch]
+    WeaponDef *itemWeapDef; // [esp+ECh] [ebp-68h]
+    int32_t index; // [esp+F0h] [ebp-64h]
+    float fallHeight; // [esp+F4h] [ebp-60h]
+    float dir[3]; // [esp+F8h] [ebp-5Ch] BYREF
+    bool isPlayerView; // [esp+107h] [ebp-4Dh]
+    cg_s *cgameGlob; // [esp+108h] [ebp-4Ch]
+    int32_t viewDip; // [esp+10Ch] [ebp-48h]
+    const WeaponDef *weaponDef; // [esp+110h] [ebp-44h]
+    int32_t offset; // [esp+114h] [ebp-40h]
+    entityState_s *ent; // [esp+118h] [ebp-3Ch]
+    int32_t eventParm; // [esp+11Ch] [ebp-38h]
+    float axis[3][3]; // [esp+120h] [ebp-34h] BYREF
+    int32_t clientNum; // [esp+144h] [ebp-10h]
+    float *position; // [esp+148h] [ebp-Ch]
+    const playerState_s *ps; // [esp+14Ch] [ebp-8h]
+    uint32_t weaponIdx; // [esp+150h] [ebp-4h]
+    int SoundAliasSeed;
+    const char *v85;
+    int v86;
+    int v88;
+    const char *v90;
+
+    if (event)
+    {
+        cgameGlob = CG_GetLocalClientGlobals(localClientNum);
+        position = cent->pose.origin;
+        ps = &cgameGlob->nextSnap->ps;
+        ent = &cent->nextState;
+        eventParm = cent->nextState.eventParm;
+        nextSnap = cgameGlob->nextSnap;
+
+#ifdef KISAK_SP
+        isPlayerView = (cent->nextState.eType == ET_PLAYER);
+#elif KISAK_MP
+        isPlayerView = (nextSnap->ps.otherFlags & 6) != 0 && ent->number == nextSnap->ps.clientNum;
+#endif
+
+        if (cg_debugEvents->current.enabled)
+            Com_Printf(21, "ent:%3i  event:%3i ", ent->number, event);
+
+        iassert(event > 0 && event < EV_MAX_EVENTS);
+
+        if (cg_debugEvents->current.enabled)
+            Com_Printf(21, "CG_EntityEvent:%s\n", eventnames[event]);
+
+        if (isPlayerView)
+            weaponIdx = cgameGlob->predictedPlayerState.weapon;
+        else
+            weaponIdx = ent->weapon;
+
+#ifdef KISAK_MP
+        clientNum = ent->clientNum;
+        if ((uint32_t)clientNum >= 64)
+            clientNum = 0;
+#elif KISAK_SP
+        clientNum = cent->nextState.number;
+
+        if (weaponIdx && !CG_GetLocalClientWeaponInfo(localClientNum, weaponIdx)->registered)
+            Com_Error(ERR_DROP, "Calling event on an unregistered weapon. Make sure that the weapon has been precached.");
+#endif
+
+        weaponDef = BG_GetWeaponDef(weaponIdx);
+
+#ifdef KISAK_MP
+        if ((cgameGlob->bgs.clientinfo[clientNum].perks & 0x100) != 0)
+        {
+            offset = 29;
+        }
+        else
+#endif
+        {
+            offset = 0;
+        }
+
+        if (event > EV_LANDING_FIRST && event < EV_LANDING_LAST)
+        {
+            if (isPlayerView)
+                CG_PlayEntitySoundAlias(localClientNum, ent->number, *(&cgMedia.landSoundPlayer[event - EV_LANDING_FIRST] + offset));
+            else
+                CG_PlayEntitySoundAlias(localClientNum, ent->number, *(&cgMedia.landSound[event - EV_LANDING_FIRST] + offset));
+            if (clientNum == cgameGlob->predictedPlayerState.clientNum)
+            {
+                cgameGlob->landChange = 0.0 - (double)eventParm;
+                cgameGlob->landTime = cgameGlob->time;
+            }
+        }
+        else if (event > EV_LANDING_PAIN_FIRST && event < EV_LANDING_PAIN_LAST)
+        {
+            if (isPlayerView)
+                CG_PlayEntitySoundAlias(localClientNum, ent->number, *(&cgMedia.landSoundPlayer[event - EV_LANDING_PAIN_FIRST] + offset));
+            else
+                CG_PlayEntitySoundAlias(localClientNum, ent->number, *(&cgMedia.landSound[event - EV_LANDING_PAIN_FIRST] + offset));
+            CG_PlayEntitySoundAlias(localClientNum, ent->number, cgMedia.landDmgSound);
+            if (clientNum == cgameGlob->predictedPlayerState.clientNum)
+            {
+                fallHeight = (double)eventParm
+                    * 0.009999999776482582
+                    * (bg_fallDamageMaxHeight->current.value - bg_fallDamageMinHeight->current.value)
+                    + bg_fallDamageMinHeight->current.value;
+                if (fallHeight > 12.0)
+                    viewDip = (int)((fallHeight - 12.0) / 26.0 * 4.0 + 4.0);
+                else
+                    viewDip = 0;
+                if (viewDip > 24)
+                    viewDip = 24;
+                if (viewDip > 0)
+                {
+                    cgameGlob->landChange = 0.0 - (double)viewDip;
+                    cgameGlob->landTime = cgameGlob->time;
+                }
+            }
+        }
+        else
+        {
+            switch (event)
+            {
+            case EV_FOLIAGE_SOUND:
+                CG_PlayEntitySoundAlias(localClientNum, ent->number, cgMedia.foliageMovement);
+                return;
+            case EV_STOP_WEAPON_SOUND:
+                CG_StopWeaponSound(localClientNum, isPlayerView, weaponDef, ent->number, (weaponstate_t)eventParm);
+                return;
+            case EV_SOUND_ALIAS:
+                if (ent->eventParm)
+                {
+                    ConfigString = CL_GetConfigString(localClientNum, CS_SOUNDALIASES + ent->eventParm);
+                    CG_PlaySoundAliasByName(localClientNum, ent->number, ent->lerp.pos.trBase, ConfigString);
+                }
+                return;
+            case EV_SOUND_ALIAS_AS_MASTER:
+                if (ent->eventParm)
+                {
+                    CG_PlaySoundAliasAsMasterByName(localClientNum,
+                        ent->number,
+                        ent->lerp.pos.trBase,
+                        CL_GetConfigString(localClientNum, CS_SOUNDALIASES + ent->eventParm)
+                    );
+                }
+                return;
+            case EV_STOPSOUNDS:
+                CG_StopSoundsOnEnt(localClientNum, ent->number);
+                return;
+            case EV_STANCE_FORCE_STAND:
+                if (clientNum != cgameGlob->predictedPlayerState.clientNum)
+                    goto LABEL_216;
+                CL_SetStance(localClientNum, CL_STANCE_STAND);
+                return;
+            case EV_STANCE_FORCE_CROUCH:
+                if (clientNum != cgameGlob->predictedPlayerState.clientNum)
+                    goto LABEL_216;
+                CL_SetStance(localClientNum, CL_STANCE_CROUCH);
+                return;
+            case EV_STANCE_FORCE_PRONE:
+                if (clientNum != cgameGlob->predictedPlayerState.clientNum)
+                    goto LABEL_216;
+                CL_SetStance(localClientNum, CL_STANCE_PRONE);
+                return;
+            case EV_ITEM_PICKUP:
+            case EV_AMMO_PICKUP:
+                index = ent->eventParm;
+                if (index >= 1 && index < 128)
+                {
+                    itemWeapDef = BG_GetWeaponDef(index);
+                    if (event == EV_ITEM_PICKUP)
+                    {
+                        if (isPlayerView)
+                            CG_PlayEntitySoundAlias(localClientNum, ent->number, itemWeapDef->pickupSoundPlayer);
+                        else
+                            CG_PlayEntitySoundAlias(localClientNum, ent->number, itemWeapDef->pickupSound);
+                    }
+                    else if (event == EV_AMMO_PICKUP)
+                    {
+                        if (isPlayerView)
+                            CG_PlayEntitySoundAlias(localClientNum, ent->number, itemWeapDef->ammoPickupSoundPlayer);
+                        else
+                            CG_PlayEntitySoundAlias(localClientNum, ent->number, itemWeapDef->ammoPickupSound);
+                    }
+                    if (isPlayerView)
+                        CG_ItemPickup(localClientNum, index);
+                }
+                return;
+            case EV_NOAMMO:
+                if (!BG_WeaponIsClipOnly(weaponIdx) && !weaponDef->cancelAutoHolsterWhenEmpty)
+                {
+                    if (isPlayerView)
+                        CG_PlayEntitySoundAlias(localClientNum, ent->number, weaponDef->emptyFireSoundPlayer);
+                    else
+                        CG_PlayEntitySoundAlias(localClientNum, ent->number, weaponDef->emptyFireSound);
+                }
+                if (isPlayerView)
+                    CG_OutOfAmmoChange(localClientNum);
+                return;
+            case EV_EMPTYCLIP:
+            case EV_RELOAD_START_NOTIFY:
+            case EV_RELOAD_ADDAMMO:
+            case EV_GRENADE_SUICIDE:
+                return;
+            case EV_EMPTY_OFFHAND:
+                if (clientNum != cgameGlob->predictedPlayerState.clientNum)
+                    goto LABEL_216;
+                if (isPlayerView)
+                {
+                    CG_MenuShowNotify(localClientNum, 4);
+                    CG_SwitchOffHandCmd(localClientNum);
+                }
+                return;
+            case EV_RESET_ADS:
+                if (clientNum != cgameGlob->predictedPlayerState.clientNum)
+                    goto LABEL_216;
+                if (isPlayerView)
+                    CL_SetADS(localClientNum, 0);
+                return;
+            case EV_RELOAD:
+                if (isPlayerView)
+                    CG_PlayEntitySoundAlias(localClientNum, ent->number, weaponDef->reloadSoundPlayer);
+                else
+                    CG_PlayEntitySoundAlias(localClientNum, ent->number, weaponDef->reloadSound);
+                return;
+            case EV_RELOAD_FROM_EMPTY:
+                if (isPlayerView)
+                    CG_PlayEntitySoundAlias(localClientNum, ent->number, weaponDef->reloadEmptySoundPlayer);
+                else
+                    CG_PlayEntitySoundAlias(localClientNum, ent->number, weaponDef->reloadEmptySound);
+                return;
+            case EV_RELOAD_START:
+                if (isPlayerView)
+                    CG_PlayEntitySoundAlias(localClientNum, ent->number, weaponDef->reloadStartSoundPlayer);
+                else
+                    CG_PlayEntitySoundAlias(localClientNum, ent->number, weaponDef->reloadStartSound);
+                return;
+            case EV_RELOAD_END:
+                if (isPlayerView)
+                    CG_PlayEntitySoundAlias(localClientNum, ent->number, weaponDef->reloadEndSoundPlayer);
+                else
+                    CG_PlayEntitySoundAlias(localClientNum, ent->number, weaponDef->reloadEndSound);
+                return;
+            case EV_RAISE_WEAPON:
+                if (isPlayerView)
+                    CG_PlayEntitySoundAlias(localClientNum, ent->number, weaponDef->raiseSoundPlayer);
+                else
+                    CG_PlayEntitySoundAlias(localClientNum, ent->number, weaponDef->raiseSound);
+                return;
+            case EV_FIRST_RAISE_WEAPON:
+                if (isPlayerView)
+                    CG_PlayEntitySoundAlias(localClientNum, ent->number, weaponDef->firstRaiseSoundPlayer);
+                else
+                    CG_PlayEntitySoundAlias(localClientNum, ent->number, weaponDef->firstRaiseSound);
+                return;
+            case EV_PUTAWAY_WEAPON:
+                if (isPlayerView)
+                    CG_PlayEntitySoundAlias(localClientNum, ent->number, weaponDef->putawaySoundPlayer);
+                else
+                    CG_PlayEntitySoundAlias(localClientNum, ent->number, weaponDef->putawaySound);
+                return;
+            case EV_WEAPON_ALT:
+                if (isPlayerView)
+                    CG_PlayEntitySoundAlias(localClientNum, ent->number, weaponDef->altSwitchSoundPlayer);
+                else
+                    CG_PlayEntitySoundAlias(localClientNum, ent->number, weaponDef->altSwitchSound);
+                return;
+            case EV_PULLBACK_WEAPON:
+                if (isPlayerView)
+                    CG_PlayEntitySoundAlias(localClientNum, ent->number, weaponDef->pullbackSoundPlayer);
+                else
+                    CG_PlayEntitySoundAlias(localClientNum, ent->number, weaponDef->pullbackSound);
+                return;
+            case EV_FIRE_WEAPON:
+            case EV_FIRE_WEAPON_LASTSHOT:
+                CG_FireWeapon(localClientNum, cent, event, scr_const.tag_flash, 0, &cgameGlob->predictedPlayerState);
+                return;
+            case EV_RECHAMBER_WEAPON:
+                if (isPlayerView)
+                    CG_PlayEntitySoundAlias(localClientNum, ent->number, weaponDef->rechamberSoundPlayer);
+                else
+                    CG_PlayEntitySoundAlias(localClientNum, ent->number, weaponDef->rechamberSound);
+                return;
+            case EV_EJECT_BRASS:
+                CG_EjectWeaponBrass(localClientNum, ent, event);
+                return;
+            case EV_MELEE_SWIPE:
+                if (isPlayerView)
+                    CG_PlayEntitySoundAlias(localClientNum, ent->number, weaponDef->meleeSwipeSoundPlayer);
+                else
+                    CG_PlayEntitySoundAlias(localClientNum, ent->number, weaponDef->meleeSwipeSound);
+                return;
+            case EV_FIRE_MELEE:
+                DynEntCl_MeleeEvent(localClientNum, ent->number);
+                return;
+            case EV_PREP_OFFHAND:
+                if (clientNum != cgameGlob->predictedPlayerState.clientNum)
+                    goto LABEL_216;
+                if (isPlayerView)
+                    CG_PrepOffHand(localClientNum, ent, ent->eventParm);
+                return;
+            case EV_USE_OFFHAND:
+                if (clientNum != cgameGlob->predictedPlayerState.clientNum)
+                    goto LABEL_216;
+                if (isPlayerView)
+                    CG_UseOffHand(localClientNum, cent, ent->eventParm);
+                return;
+            case EV_SWITCH_OFFHAND:
+                if (clientNum != cgameGlob->predictedPlayerState.clientNum)
+                    goto LABEL_216;
+                if (isPlayerView)
+                    CG_SetEquippedOffHand(localClientNum, ent->eventParm);
+                return;
+            case EV_MELEE_HIT:
+                if (ent->eventParm)
+                {
+                    CG_PlayEntitySoundAlias(localClientNum, ent->otherEntityNum, cgMedia.meleeKnifeHit);
+                }
+                else if (weaponDef->meleeHitSound)
+                {
+                    CG_PlayEntitySoundAlias(localClientNum, ent->otherEntityNum, weaponDef->meleeHitSound);
+                }
+                else
+                {
+                    CG_PlayEntitySoundAlias(localClientNum, ent->otherEntityNum, cgMedia.meleeHit);
+                }
+                return;
+            case EV_MELEE_MISS:
+                if (ent->eventParm)
+                {
+                    CG_PlaySoundAlias(localClientNum, ent->otherEntityNum, position, cgMedia.meleeKnifeHitOther);
+                }
+                else if (weaponDef->meleeMissSound)
+                {
+                    CG_PlaySoundAlias(localClientNum, ent->otherEntityNum, position, weaponDef->meleeMissSound);
+                }
+                else
+                {
+                    CG_PlaySoundAlias(localClientNum, ent->otherEntityNum, position, cgMedia.meleeHitOther);
+                }
+                return;
+            case EV_MELEE_BLOOD:
+                if (clientNum == cgameGlob->predictedPlayerState.clientNum)
+                {
+                    if (isPlayerView)
+                        CG_MeleeBloodEvent(localClientNum, cent);
+                }
+                else
+                {
+                LABEL_216:
+                    Com_DPrintf(21, "Event %s just for client %i was sent to other clients\n", eventnames[event], clientNum);
+                }
+                return;
+            case EV_FIRE_WEAPON_MG42:
+                eType = ET_PLAYER;
+                CG_StartShakeCamera(localClientNum, 0.050000001f, 100, cent->pose.origin, 100.0f);
+                CG_FireWeapon(localClientNum, cent, event, scr_const.tag_flash, 0, &cgameGlob->nextSnap->ps);
+                attackerCent = CG_GetEntity(localClientNum, eventParm);
+                if (attackerCent->nextValid
+                    && attackerCent->nextState.eType == eType
+                    && ps->viewlocked_entNum != cent->nextState.number)
+                {
+                    CG_CompassAddWeaponPingInfo(localClientNum, attackerCent, cent->pose.origin, 50);
+                }
+                return;
+            case EV_FIRE_QUADBARREL_1:
+                CG_FireWeapon(localClientNum, cent, event, scr_const.tag_flash, 0, &cgameGlob->nextSnap->ps);
+                CG_FireWeapon(localClientNum, cent, event, scr_const.tag_flash_11, 0, &cgameGlob->nextSnap->ps);
+                return;
+            case EV_FIRE_QUADBARREL_2:
+                CG_FireWeapon(localClientNum, cent, event, scr_const.tag_flash_2, 0, &cgameGlob->nextSnap->ps);
+                CG_FireWeapon(localClientNum, cent, event, scr_const.tag_flash_22, 0, &cgameGlob->nextSnap->ps);
+                return;
+#ifdef KISAK_SP
+            case EV_BULLET_TRACER: // 0x29
+                if (cent->nextState.eventParm || (cg_tracerChance->current.value * 32768.0f > (float)rand()))
+                {
+                    CG_SpawnTracer(localClientNum, cent->nextState.lerp.pos.trBase, cent->nextState.lerp.u.turret.gunAngles);
+                }
+                return;
+            case EV_SOUND_ALIAS_NOTIFY:
+            case EV_SOUND_ALIAS_NOTIFY_AS_MASTER:
+                if (cent->nextState.eventParm)
+                {
+                    SoundAliasSeed = Com_GetSoundAliasSeed();
+                    Com_SetSoundAliasSeed(cgArray[0].snap->serverCommandSequence + cent->nextState.number);
+                    v85 = CL_GetConfigString(localClientNum, cent->nextState.eventParm + CS_SOUNDALIASES);
+                    v86 = cent->nextState.number;
+                    if (event == EV_SOUND_ALIAS_NOTIFY)
+                        v88 = CG_PlaySoundAliasByName(localClientNum, v86, cent->nextState.lerp.pos.trBase, v85);
+                    else
+                        v88 = CG_PlaySoundAliasAsMasterByName(localClientNum, v86, cent->nextState.lerp.pos.trBase, v85);
+                    if (cgArray[0].demoType != DEMO_TYPE_CLIENT)
+                        SND_AddLengthNotify(v88, (const snd_alias_t *)cent->nextState.number, SndLengthNotify_Script);
+                    Com_SetSoundAliasSeed(SoundAliasSeed);
+                }
+
+                return;
+            case EV_SOUND_ALIAS_ADD_NOTIFY:
+                if (cent->nextState.eventParm)
+                {
+                    if (cgArray[0].demoType != DEMO_TYPE_CLIENT)
+                    {
+                        v90 = CL_GetConfigString(localClientNum, cent->nextState.eventParm + CS_SOUNDALIASES);
+                        if (v90)
+                        {
+                            SND_AddLengthNotify(SND_FindPlaybackId((const snd_alias_t *)cent->nextState.number, v90), (const snd_alias_t *)cent->nextState.number, SndLengthNotify_Script);
+                        }
+                    }
+                }
+                return;
+#endif
+            case EV_BULLET_HIT:
+#ifdef KISAK_SP
+                iassert(ent->eventParm == 0);
+                dir[0] = ent->lerp.apos.trBase[0];
+                dir[1] = ent->lerp.apos.trBase[1];
+                dir[2] = ent->lerp.apos.trBase[2];
+#else
+                ByteToDir(ent->eventParm, dir);
+#endif
+                CG_BulletHitEvent(
+                    localClientNum,
+                    ent->otherEntityNum,
+                    ent->groundEntityNum,
+                    ent->weapon,
+                    &ent->lerp.u.bulletHit.start[0],
+                    cent->pose.origin,
+                    dir,
+                    ent->surfType,
+                    event,
+                    ent->un1.scale,
+                    weaponDef->damage,
+                    0);
+                return;
+            case EV_BULLET_HIT_CLIENT_SMALL:
+            case EV_BULLET_HIT_CLIENT_LARGE:
+                CG_BulletHitClientEvent(
+                    localClientNum,
+                    ent->otherEntityNum,
+                    &ent->lerp.u.bulletHit.start[0],
+                    cent->pose.origin,
+                    ent->surfType,
+                    event,
+                    weaponDef->damage);
+                return;
+            case EV_GRENADE_BOUNCE:
+                bcassert(ent->surfType, SURF_TYPECOUNT);
+
+                if (weaponDef->bounceSound)
+                    CG_PlaySoundAlias(localClientNum, ENTITYNUM_WORLD, position, weaponDef->bounceSound[ent->surfType]);
+
+                if (cgMedia.fx->table[8].nonflesh[ent->surfType])
+                {
+                    ByteToDir(ent->eventParm, axis[0]);
+                    Vec3Basis_RightHanded(axis[0], axis[1], axis[2]);
+                    FX_PlayOrientedEffect(
+                        localClientNum,
+                        cgMedia.fx->table[8].nonflesh[ent->surfType],
+                        cgameGlob->time,
+                        position,
+                        axis);
+                }
+                return;
+            case EV_GRENADE_EXPLODE:
+                p_4 = (float)weaponDef->iExplosionRadius;
+                Ragdoll_ExplosionEvent(localClientNum, 0, position, 0.0, p_4, vec3_origin, 1.0);
+                innerRadius_4 = (float)weaponDef->iExplosionRadius;
+                DynEntCl_ExplosionEvent(
+                    localClientNum,
+                    0,
+                    position,
+                    0.0,
+                    innerRadius_4,
+                    (float *)vec3_origin,
+                    1.0,
+                    weaponDef->iExplosionInnerDamage,
+                    weaponDef->iExplosionOuterDamage);
+
+                bcassert(ent->surfType, SURF_TYPECOUNT);
+
+                ByteToDir(ent->eventParm, axis[0]);
+                Vec3Basis_RightHanded(axis[0], axis[1], axis[2]);
+                CG_ImpactEffectForWeapon(weaponIdx, ent->surfType, 0, &fx, &snd);
+                if (fx)
+                    FX_PlayOrientedEffect(localClientNum, fx, cgameGlob->time, position, axis);
+
+                if (snd)
+                    CG_PlaySoundAlias(localClientNum, ENTITYNUM_WORLD, position, snd);
+
+                if (weaponDef->projExplosionEffect)
+                    FX_PlayOrientedEffect(localClientNum, weaponDef->projExplosionEffect, cgameGlob->time, position, axis);
+
+                if (weaponDef->projExplosionSound)
+                    CG_PlaySoundAlias(localClientNum, ENTITYNUM_WORLD, position, weaponDef->projExplosionSound);
+
+                return;
+            case EV_ROCKET_EXPLODE:
+                goto $LN48_1;
+            case EV_ROCKET_EXPLODE_NOMARKS:
+                cgameGlob->nomarks = 1;
+            $LN48_1:
+                p_4a = (float)weaponDef->iExplosionRadius;
+                Ragdoll_ExplosionEvent(localClientNum, 0, position, p_4a, p_4a, vec3_origin, 1.0);
+                innerRadius_4a = (float)weaponDef->iExplosionRadius;
+                DynEntCl_ExplosionEvent(
+                    localClientNum,
+                    0,
+                    position,
+                    innerRadius_4a,
+                    innerRadius_4a,
+                    (float *)vec3_origin,
+                    1.0,
+                    weaponDef->iExplosionInnerDamage,
+                    weaponDef->iExplosionOuterDamage);
+
+                bcassert(ent->surfType, SURF_TYPECOUNT);
+
+                ByteToDir(ent->eventParm, axis[0]);
+                Vec3Basis_RightHanded(axis[0], axis[1], axis[2]);
+                CG_ImpactEffectForWeapon(weaponIdx, ent->surfType, 0, (const FxEffectDef **)&outFx, &outSnd);
+                if (outFx)
+                    FX_PlayOrientedEffect(localClientNum, outFx, cgameGlob->time, position, axis);
+
+                if (outSnd)
+                    CG_PlaySoundAlias(localClientNum, ENTITYNUM_WORLD, position, outSnd);
+
+                if (weaponDef->projExplosionEffect)
+                    FX_PlayOrientedEffect(localClientNum, weaponDef->projExplosionEffect, cgameGlob->time, position, axis);
+
+                if (weaponDef->projExplosionSound)
+                    CG_PlaySoundAlias(localClientNum, ENTITYNUM_WORLD, position, weaponDef->projExplosionSound);
+
+                cgameGlob->nomarks = 0;
+                return;
+            case EV_FLASHBANG_EXPLODE:
+                ByteToDir(ent->eventParm, axis[0]);
+                Vec3Basis_RightHanded(axis[0], axis[1], axis[2]);
+
+                if (weaponDef->projExplosionEffect)
+                    FX_PlayOrientedEffect(localClientNum, weaponDef->projExplosionEffect, cgameGlob->time, position, axis);
+
+                if (weaponDef->projExplosionSound)
+                    CG_PlaySoundAlias(localClientNum, ENTITYNUM_WORLD, position, weaponDef->projExplosionSound);
+
+                return;
+            case EV_CUSTOM_EXPLODE:
+                goto $LN37_1;
+            case EV_CUSTOM_EXPLODE_NOMARKS:
+                cgameGlob->nomarks = 1;
+            $LN37_1:
+                p_4b = (float)weaponDef->iExplosionRadius;
+                Ragdoll_ExplosionEvent(localClientNum, 0, position, p_4b, p_4b, vec3_origin, 1.0);
+                innerRadius_4b = (float)weaponDef->iExplosionRadius;
+                DynEntCl_ExplosionEvent(
+                    localClientNum,
+                    0,
+                    position,
+                    innerRadius_4b,
+                    innerRadius_4b,
+                    (float *)vec3_origin,
+                    1.0,
+                    weaponDef->iExplosionInnerDamage,
+                    weaponDef->iExplosionOuterDamage);
+                ByteToDir(ent->eventParm, axis[0]);
+                Vec3Basis_RightHanded(axis[0], axis[1], axis[2]);
+                CG_ImpactEffectForWeapon(weaponIdx, ent->surfType, 0, (const FxEffectDef **)&def, &v30);
+                if (def)
+                    FX_PlayOrientedEffect(localClientNum, def, cgameGlob->time, position, axis);
+                if (v30)
+                    CG_PlaySoundAlias(localClientNum, ENTITYNUM_WORLD, position, v30);
+                if (weaponDef->projExplosionEffect)
+                {
+                    Com_Printf(
+                        14,
+                        "Playing smoke grenade at %i at ( %f, %f, %f )\n",
+                        ent->lerp.u.customExplode.startTime,
+                        ent->lerp.pos.trBase[0],
+                        ent->lerp.pos.trBase[1],
+                        ent->lerp.pos.trBase[2]);
+                    FX_PlayOrientedEffect(
+                        localClientNum,
+                        weaponDef->projExplosionEffect,
+                        ent->lerp.u.customExplode.startTime,
+                        ent->lerp.pos.trBase,
+                        axis);
+                }
+                if (weaponDef->projExplosionSound
+                    && ((ent->lerp.eFlags & 0x10000) == 0 || cgameGlob->time - ent->lerp.u.customExplode.startTime < 200))
+                {
+                    CG_PlaySoundAlias(localClientNum, ENTITYNUM_WORLD, position, weaponDef->projExplosionSound);
+                }
+                cgameGlob->nomarks = 0;
+                return;
+            case EV_CHANGE_TO_DUD:
+                cgameGlob->nomarks = 1;
+                ByteToDir(ent->eventParm, axis[0]);
+                Vec3Basis_RightHanded(axis[0], axis[1], axis[2]);
+                if (cgMedia.fx->table[11].nonflesh[0])
+                    FX_PlayOrientedEffect(localClientNum, cgMedia.fx->table[11].nonflesh[0], cgameGlob->time, position, axis);
+                cgameGlob->nomarks = 0;
+                return;
+            case EV_DUD_EXPLODE:
+                bcassert(ent->surfType, SURF_TYPECOUNT);
+ 
+                ByteToDir(ent->eventParm, axis[0]);
+                Vec3Basis_RightHanded(axis[0], axis[1], axis[2]);
+                CG_PlaySoundAlias(localClientNum, ENTITYNUM_WORLD, position, cgMedia.bulletHitLargeSound[ent->surfType]);
+                if (cgMedia.fx->table[11].nonflesh[ent->surfType])
+                    FX_PlayOrientedEffect(
+                        localClientNum,
+                        cgMedia.fx->table[11].nonflesh[ent->surfType],
+                        cgameGlob->time,
+                        position,
+                        axis);
+
+                if (weaponDef->projExplosionEffect)
+                    FX_PlayOrientedEffect(localClientNum, weaponDef->projExplosionEffect, cgameGlob->time, position, axis);
+
+                if (weaponDef->projExplosionSound)
+                    CG_PlaySoundAlias(localClientNum, ENTITYNUM_WORLD, position, weaponDef->projExplosionSound);
+
+                if (weaponDef->projDudEffect)
+                    FX_PlayOrientedEffect(localClientNum, weaponDef->projDudEffect, cgameGlob->time, position, axis);
+
+                if (weaponDef->projDudSound)
+                    CG_PlaySoundAlias(localClientNum, ENTITYNUM_WORLD, position, weaponDef->projDudSound);
+
+                return;
+            case EV_DUD_IMPACT:
+                bcassert(ent->surfType, SURF_TYPECOUNT);
+
+                ByteToDir(ent->eventParm, axis[0]);
+                Vec3Basis_RightHanded(axis[0], axis[1], axis[2]);
+                CG_PlaySoundAlias(localClientNum, ENTITYNUM_WORLD, position, cgMedia.bulletHitLargeSound[ent->surfType]);
+
+                if (cgMedia.fx->table[11].nonflesh[ent->surfType])
+                    FX_PlayOrientedEffect(
+                        localClientNum,
+                        cgMedia.fx->table[11].nonflesh[ent->surfType],
+                        cgameGlob->time,
+                        position,
+                        axis);
+
+                if (weaponDef->projDudEffect)
+                    FX_PlayOrientedEffect(localClientNum, weaponDef->projDudEffect, cgameGlob->time, position, axis);
+
+                if (weaponDef->projDudSound)
+                    CG_PlaySoundAlias(localClientNum, ENTITYNUM_WORLD, position, weaponDef->projDudSound);
+
+                return;
+            case EV_PLAY_FX:
+                CG_PlayFx(localClientNum, cent, ent->lerp.apos.trBase);
+                return;
+            case EV_PLAY_FX_ON_TAG:
+                CG_PlayFxOnTag(localClientNum, cent, ent->eventParm);
+                return;
+            case EV_PHYS_EXPLOSION_SPHERE:
+                p_4c = (float)ent->eventParm;
+                Ragdoll_ExplosionEvent(
+                    localClientNum,
+                    0,
+                    position,
+                    ent->lerp.u.explosion.innerRadius,
+                    p_4c,
+                    vec3_origin,
+                    ent->lerp.u.explosion.magnitude);
+                innerRadius_4c = (float)ent->eventParm;
+                DynEntCl_ExplosionEvent(
+                    localClientNum,
+                    0,
+                    position,
+                    ent->lerp.u.explosion.innerRadius,
+                    innerRadius_4c,
+                    (float *)vec3_origin,
+                    ent->lerp.u.explosion.magnitude,
+                    0,
+                    0);
+                return;
+            case EV_PHYS_EXPLOSION_CYLINDER:
+                p_4d = (float)ent->eventParm;
+                Ragdoll_ExplosionEvent(
+                    localClientNum,
+                    1,
+                    position,
+                    ent->lerp.u.explosion.innerRadius,
+                    p_4d,
+                    vec3_origin,
+                    ent->lerp.u.explosion.magnitude);
+                innerRadius_4d = (float)ent->eventParm;
+                DynEntCl_ExplosionEvent(
+                    localClientNum,
+                    1,
+                    position,
+                    ent->lerp.u.explosion.innerRadius,
+                    innerRadius_4d,
+                    (float *)vec3_origin,
+                    ent->lerp.u.explosion.magnitude,
+                    0,
+                    0);
+                return;
+            case EV_PHYS_EXPLOSION_JOLT:
+                p_4e = (float)ent->eventParm;
+                Ragdoll_ExplosionEvent(
+                    localClientNum,
+                    1,
+                    position,
+                    ent->lerp.u.explosionJolt.innerRadius,
+                    p_4e,
+                    &ent->lerp.u.explosionJolt.impulse[0],
+                    1.0);
+                innerRadius_4e = (float)ent->eventParm;
+                DynEntCl_ExplosionEvent(
+                    localClientNum,
+                    1,
+                    position,
+                    ent->lerp.u.explosionJolt.innerRadius,
+                    innerRadius_4e,
+                    &ent->lerp.u.explosionJolt.impulse[0],
+                    1.0,
+                    0,
+                    0);
+                return;
+            case EV_PHYS_JITTER:
+                p_4f = (float)ent->eventParm;
+                DynEntCl_JitterEvent(
+                    localClientNum,
+                    position,
+                    ent->lerp.u.physicsJitter.innerRadius,
+                    p_4f,
+                    ent->lerp.u.physicsJitter.minDisplacement,
+                    ent->lerp.u.physicsJitter.maxDisplacement);
+                return;
+            case EV_EARTHQUAKE:
+                CG_StartShakeCamera(
+                    localClientNum,
+                    ent->lerp.u.earthquake.scale,
+                    ent->lerp.u.earthquake.duration,
+                    cent->pose.origin,
+                    ent->lerp.u.earthquake.radius);
+                return;
+            case EV_DETONATE:
+                if (isPlayerView)
+                    CG_PlayEntitySoundAlias(localClientNum, ent->number, weaponDef->detonateSoundPlayer);
+                else
+                    CG_PlayEntitySoundAlias(localClientNum, ent->number, weaponDef->detonateSound);
+                return;
+            case EV_NIGHTVISION_WEAR:
+                if (isPlayerView && ((ps->eFlags & 0x300) != 0 || !*weaponDef->szXAnims[26]))
+                    CG_PlayClientSoundAlias(localClientNum, cgMedia.nightVisionOn);
+                if (isPlayerView)
+                    CG_PlayEntitySoundAlias(localClientNum, ent->number, weaponDef->nightVisionWearSoundPlayer);
+                else
+                    CG_PlayEntitySoundAlias(localClientNum, ent->number, weaponDef->nightVisionWearSound);
+                return;
+            case EV_NIGHTVISION_REMOVE:
+                if (isPlayerView && ((ps->eFlags & 0x300) != 0 || !*weaponDef->szXAnims[27]))
+                    CG_PlayClientSoundAlias(localClientNum, cgMedia.nightVisionOff);
+                if (isPlayerView)
+                    CG_PlayEntitySoundAlias(localClientNum, ent->number, weaponDef->nightVisionRemoveSoundPlayer);
+                else
+                    CG_PlayEntitySoundAlias(localClientNum, ent->number, weaponDef->nightVisionRemoveSound);
+                return;
+#ifdef KISAK_SP
+                // KISAKTODO: Implement the missing CG rumble functions (CG_PlayRumbleOnEntity, CG_PlayRumbleOnPosition, CG_PlayRumbleLoopOnEntity, CG_PlayRumbleLoopOnPosition, CG_StopRumble, CG_StopAllRumbles).
+            case EV_PLAY_RUMBLE_ON_ENT:
+				//CG_PlayRumbleOnEntity(localClientNum, CL_GetConfigString(localClientNum, cent->nextState.eventParm + CS_RUMBLES), clientNum);
+                return;
+            case EV_PLAY_RUMBLE_ON_POS:
+				//CG_PlayRumbleOnPosition(localClientNum, CL_GetConfigString(localClientNum, cent->nextState.eventParm + CS_RUMBLES), cent->pose.origin);
+                return;
+            case EV_PLAY_RUMBLELOOP_ON_ENT:
+				//CG_PlayRumbleLoopOnEntity(localClientNum, CL_GetConfigString(localClientNum, cent->nextState.eventParm + CS_RUMBLES), clientNum);
+                return;
+            case EV_PLAY_RUMBLELOOP_ON_POS:
+				//CG_PlayRumbleLoopOnPosition(localClientNum, CL_GetConfigString(localClientNum, cent->nextState.eventParm + CS_RUMBLES), cent->pose.origin);
+                return;
+            case EV_STOP_RUMBLE:
+				//CG_StopRumble(localClientNum, clientNum, CL_GetConfigString(localClientNum, cent->nextState.eventParm + CS_RUMBLES));
+                return;
+            case EV_STOP_ALL_RUMBLES:
+				//CG_StopAllRumbles(localClientNum);
+                return;
+#endif
+#ifdef KISAK_MP
+            case EV_OBITUARY:
+                CG_Obituary(localClientNum, ent);
+                return;
+#endif
+            case EV_NO_FRAG_GRENADE_HINT:
+                if (isPlayerView)
+                    CG_SetInvalidCmdHint(cgameGlob, INVALID_CMD_NO_AMMO_FRAG_GRENADE);
+                return;
+            case EV_NO_SPECIAL_GRENADE_HINT:
+                if (isPlayerView)
+                    CG_SetInvalidCmdHint(cgameGlob, INVALID_CMD_NO_AMMO_SPECIAL_GRENADE);
+                return;
+            case EV_TARGET_TOO_CLOSE_HINT:
+                if (isPlayerView)
+                    CG_SetInvalidCmdHint(cgameGlob, INVALID_CMD_TARGET_TOO_CLOSE);
+                return;
+            case EV_TARGET_NOT_ENOUGH_CLEARANCE:
+                if (isPlayerView)
+                    CG_SetInvalidCmdHint(cgameGlob, INVALID_CMD_NOT_ENOUGH_CLEARANCE);
+                return;
+            case EV_LOCKON_REQUIRED_HINT:
+                if (isPlayerView)
+                    CG_SetInvalidCmdHint(cgameGlob, INVALID_CMD_LOCKON_REQUIRED);
+                return;
+            case EV_FOOTSTEP_SPRINT:
+                if (cg_footsteps->current.enabled)
+                {
+                    if (isPlayerView)
+                        CG_PlayEntitySoundAlias(
+                            localClientNum,
+                            ent->number,
+                            *(&cgMedia.stepSprintSoundPlayer[offset] + eventParm));
+                    else
+                        CG_PlayEntitySoundAlias(localClientNum, ent->number, *(&cgMedia.stepSprintSound[offset] + eventParm));
+                }
+                CG_EquipmentSound(
+                    localClientNum,
+                    ent->number,
+                    isPlayerView,
+                    (EquipmentSound_t)(offset != 0 ? EQS_QSPRINTING : EQS_SPRINTING));
+                return;
+            case EV_FOOTSTEP_RUN:
+                if (!cg_footsteps->current.enabled)
+                    goto LABEL_72;
+                if (isPlayerView)
+                    goto LABEL_70;
+                CG_PlayEntitySoundAlias(localClientNum, ent->number, *(&cgMedia.stepRunSound[offset] + eventParm));
+                goto LABEL_72;
+            case EV_FOOTSTEP_WALK:
+                if (cg_footsteps->current.enabled)
+                {
+                    if (isPlayerView)
+                        CG_PlayEntitySoundAlias(
+                            localClientNum,
+                            ent->number,
+                            *(&cgMedia.stepWalkSoundPlayer[offset] + eventParm));
+                    else
+                        CG_PlayEntitySoundAlias(localClientNum, ent->number, *(&cgMedia.stepWalkSound[offset] + eventParm));
+                }
+                goto LABEL_63;
+            case EV_FOOTSTEP_PRONE:
+                if (cg_footsteps->current.enabled)
+                {
+                    if (isPlayerView)
+                        CG_PlayEntitySoundAlias(
+                            localClientNum,
+                            ent->number,
+                            *(&cgMedia.stepProneSoundPlayer[offset] + eventParm));
+                    else
+                        CG_PlayEntitySoundAlias(localClientNum, ent->number, *(&cgMedia.stepProneSound[offset] + eventParm));
+                }
+            LABEL_63:
+                CG_EquipmentSound(localClientNum, ent->number, isPlayerView, offset != 0 ? EQS_QWALKING : EQS_WALKING);
+                return;
+            case EV_JUMP:
+                if (isPlayerView)
+                    LABEL_70 :
+                    CG_PlayEntitySoundAlias(localClientNum, ent->number, *(&cgMedia.stepRunSoundPlayer[offset] + eventParm));
+                else
+                    CG_PlayEntitySoundAlias(localClientNum, ent->number, *(&cgMedia.stepRunSound[offset] + eventParm));
+            LABEL_72:
+                CG_EquipmentSound(
+                    localClientNum,
+                    ent->number,
+                    isPlayerView,
+                    (EquipmentSound_t)(offset != 0 ? EQS_QRUNNING : EQS_RUNNING));
+                break;
+            default:
+                Com_Error(ERR_DROP, "Unknown event: %s", eventnames[event]);
+                break;
+            }
+        }
+    }
+    else if (cg_debugEvents->current.enabled)
+    {
+        Com_Printf(21, "CG_EntityEvent:ZERO EVENT\n");
+    }
+}
+
+#ifdef KISAK_MP
+void __cdecl CG_Obituary(int32_t localClientNum, const entityState_s *ent)
+{
+    const char *v2; // eax
+    weaponIconRatioType_t killIconRatio; // [esp+10h] [ebp-A0h]
+    uint32_t mod; // [esp+14h] [ebp-9Ch]
+    uint32_t attacker; // [esp+18h] [ebp-98h]
+    bool iconHorzFlip; // [esp+1Fh] [ebp-91h]
+    float iconWidth; // [esp+24h] [ebp-8Ch]
+    uint32_t target; // [esp+2Ch] [ebp-84h]
+    float iconHeight; // [esp+30h] [ebp-80h]
+    char targetName[40]; // [esp+34h] [ebp-7Ch] BYREF
+    char attackerName[40]; // [esp+5Ch] [ebp-54h] BYREF
+    const clientInfo_t *attackerCI; // [esp+88h] [ebp-28h]
+    const clientInfo_t *victimCI; // [esp+8Ch] [ebp-24h]
+    char attackerColor; // [esp+93h] [ebp-1Dh]
+    float baseIconSize; // [esp+94h] [ebp-1Ch]
+	const char *locMsg; // [esp+98h] [ebp-18h]
+    char victimColor; // [esp+9Fh] [ebp-11h]
+    const clientInfo_t *playerCI; // [esp+A0h] [ebp-10h]
+    const WeaponDef *weapDef; // [esp+A4h] [ebp-Ch]
+    const playerState_s *ps; // [esp+A8h] [ebp-8h]
+    Material *iconShader; // [esp+ACh] [ebp-4h]
+    const cg_s *cgameGlob;
+
+    baseIconSize = 1.4f;
+    target = ent->otherEntityNum;
+    attacker = ent->attackerEntityNum;
+    cgameGlob = CG_GetLocalClientGlobals(localClientNum);
+    iconWidth = baseIconSize;
+    iconHeight = baseIconSize;
+    iconHorzFlip = 0;
+    if ((ent->eventParm & 0x80) != 0)
+    {
+        mod = ent->eventParm & 0xFFFFFF7F;
+        weapDef = 0;
+        iconShader = Material_RegisterHandle("killicondied", 7);
+    }
+    else
+    {
+        mod = 0;
+        weapDef = BG_GetWeaponDef(ent->eventParm);
+        if (weapDef->killIcon)
+        {
+            iconShader = weapDef->killIcon;
+            iconHorzFlip = weapDef->flipKillIcon != 0;
+            killIconRatio = weapDef->killIconRatio;
+            if (killIconRatio)
+            {
+                if (killIconRatio == WEAPON_ICON_RATIO_2TO1)
+                {
+                    iconWidth = baseIconSize + baseIconSize;
+                }
+                else
+                {
+                    if (weapDef->killIconRatio != WEAPON_ICON_RATIO_4TO1)
+                    {
+                        v2 = va("killIconRatio %d, weapon %s", weapDef->killIconRatio, weapDef->szInternalName);
+                        MyAssertHandler(
+                            ".\\cgame\\cg_event.cpp",
+                            93,
+                            0,
+                            "%s\n\t%s",
+                            "weapDef->killIconRatio == WEAPON_ICON_RATIO_4TO1",
+                            v2);
+                    }
+                    iconWidth = baseIconSize + baseIconSize;
+                    iconHeight = baseIconSize * 0.5;
+                }
+            }
+        }
+        else
+        {
+            iconShader = Material_RegisterHandle("killicondied", 7);
+        }
+    }
+    switch (mod)
+    {
+    case 7u:
+        iconShader = Material_RegisterHandle("killiconmelee", 7);
+        iconWidth = baseIconSize;
+        break;
+    case 8u:
+        iconShader = Material_RegisterHandle("killiconheadshot", 7);
+        iconWidth = baseIconSize;
+        break;
+    case 9u:
+        iconShader = Material_RegisterHandle("killiconcrush", 7);
+        iconWidth = baseIconSize;
+        break;
+    case 0xBu:
+        iconShader = Material_RegisterHandle("killiconfalling", 7);
+        iconWidth = baseIconSize;
+        break;
+    case 0xCu:
+        iconShader = Material_RegisterHandle("killiconsuicide", 7);
+        iconWidth = baseIconSize;
+        break;
+    case 0xDu:
+        iconShader = Material_RegisterHandle("killicondied", 7);
+        iconWidth = baseIconSize;
+        break;
+    case 0xFu:
+        iconShader = Material_RegisterHandle("killiconimpact", 7);
+        iconWidth = baseIconSize;
+        break;
+    default:
+        break;
+    }
+    if (target >= MAX_CLIENTS)
+    {
+        Com_Error(ERR_DROP, "CG_Obituary: target out of range");
+        bcassert(target, MAX_CLIENTS);
+    }
+    victimCI = &cgameGlob->bgs.clientinfo[target];
+    if (victimCI->infoValid)
+    {
+        CL_GetClientName(localClientNum, target, targetName, 38);
+        victimColor = CG_DrawScoreboard_GetTeamColorIndex(victimCI->oldteam, localClientNum);
+
+        bcassert(cgameGlob->clientNum, MAX_CLIENTS);
+
+        playerCI = &cgameGlob->bgs.clientinfo[cgameGlob->clientNum];
+        if (playerCI->infoValid)
+        {
+            if (attacker < 0x40)
+            {
+                attackerCI = &cgameGlob->bgs.clientinfo[attacker];
+                if (!attackerCI->infoValid)
+                    return;
+                CL_GetClientName(localClientNum, attacker, attackerName, 38);
+                attackerColor = CG_DrawScoreboard_GetTeamColorIndex(attackerCI->oldteam, localClientNum);
+            }
+            else
+            {
+                attacker = ENTITYNUM_WORLD;
+                attackerCI = 0;
+                attackerName[0] = 0;
+                attackerColor = 55;
+            }
+            ps = &cgameGlob->nextSnap->ps;
+            if (attacker == target)
+            {
+                attackerName[0] = 0;
+            }
+            else if (attacker == ps->clientNum)
+            {
+                if (!cgameGlob->inKillCam)
+                {
+                    if (attackerCI->oldteam && victimCI->oldteam == attackerCI->oldteam)
+						locMsg = va("CGAME_YOUKILLED\x15%s\x14" "CGAME_TEAMMATE", targetName);
+					else
+						locMsg = va("CGAME_YOUKILLED\x15%s", targetName);
+                    CG_PriorityCenterPrint(localClientNum, locMsg, 0);
+                }
+            }
+            else if (target == ps->clientNum && attackerCI && !cgameGlob->inKillCam)
+            {
+                // KISAKTODO: double check the string literals here in va() `CGAME_...`
+                if (attackerCI->oldteam && victimCI->oldteam == attackerCI->oldteam)
+					locMsg = va("CGAME_YOUWEREKILLED\x15%s\x14" "CGAME_TEAMMATE", attackerName);
+				else
+					locMsg = va("CGAME_YOUWEREKILLED\x15%s", attackerName);
+                CG_PriorityCenterPrint(localClientNum, locMsg, 0);
+            }
+            if (!cgameGlob->inKillCam)
+                CL_DeathMessagePrint(
+                    localClientNum,
+                    attackerName,
+                    attackerColor,
+                    targetName,
+                    victimColor,
+                    iconShader,
+                    iconWidth,
+                    iconHeight,
+                    iconHorzFlip);
+        }
+    }
+}
+#endif
+void __cdecl CG_ItemPickup(int32_t localClientNum, int32_t weapIndex)
+{
+    WeaponDef *weapDef;
+    cg_s *cgameGlob;
+
+    weapDef = BG_GetWeaponDef(weapIndex);
+
+    if (weapDef->weapClass != WEAPCLASS_ITEM)
+    {
+        cgameGlob = CG_GetLocalClientGlobals(localClientNum);
+        if (weapDef->offhandClass)
+        {
+            if (!cgameGlob->equippedOffHand)
+                CG_SetEquippedOffHand(localClientNum, weapIndex);
+        }
+        else if (!cgameGlob->weaponSelect)
+        {
+            CG_SelectWeaponIndex(localClientNum, weapIndex);
+        }
+    }
+}
+
+void __cdecl CG_EquipmentSound(int32_t localClientNum, int32_t entNum, bool isPlayerView, EquipmentSound_t type)
+{
+#ifdef KISAK_MP
+    if (isPlayerView)
+    {
+        switch (type)
+        {
+        case EQS_RUNNING:
+            CG_PlayEntitySoundAlias(localClientNum, entNum, cgMedia.runningEquipmentSoundPlayer);
+            break;
+        case EQS_SPRINTING:
+            CG_PlayEntitySoundAlias(localClientNum, entNum, cgMedia.sprintingEquipmentSoundPlayer);
+            break;
+        case EQS_QWALKING:
+            CG_PlayEntitySoundAlias(localClientNum, entNum, cgMedia.qwalkingEquipmentSoundPlayer);
+            break;
+        case EQS_QRUNNING:
+            CG_PlayEntitySoundAlias(localClientNum, entNum, cgMedia.qrunningEquipmentSoundPlayer);
+            break;
+        case EQS_QSPRINTING:
+            CG_PlayEntitySoundAlias(localClientNum, entNum, cgMedia.qsprintingEquipmentSoundPlayer);
+            break;
+        default:
+            iassert(type == EQS_WALKING);
+            CG_PlayEntitySoundAlias(localClientNum, entNum, cgMedia.walkingEquipmentSoundPlayer);
+            break;
+        }
+    }
+    else
+    {
+        switch (type)
+        {
+        case EQS_RUNNING:
+            CG_PlayEntitySoundAlias(localClientNum, entNum, cgMedia.runningEquipmentSound);
+            break;
+        case EQS_SPRINTING:
+            CG_PlayEntitySoundAlias(localClientNum, entNum, cgMedia.sprintingEquipmentSound);
+            break;
+        case EQS_QWALKING:
+            CG_PlayEntitySoundAlias(localClientNum, entNum, cgMedia.qwalkingEquipmentSound);
+            break;
+        case EQS_QRUNNING:
+            CG_PlayEntitySoundAlias(localClientNum, entNum, cgMedia.qrunningEquipmentSound);
+            break;
+        case EQS_QSPRINTING:
+            CG_PlayEntitySoundAlias(localClientNum, entNum, cgMedia.qsprintingEquipmentSound);
+            break;
+        default:
+            iassert(type == EQS_WALKING);
+            CG_PlayEntitySoundAlias(localClientNum, entNum, cgMedia.walkingEquipmentSound);
+            break;
+        }
+    }
+#elif KISAK_SP
+    snd_alias_list_t *runningEquipmentSoundPlayer; // r5
+
+    if (isPlayerView)
+    {
+        if (type == EQS_RUNNING)
+        {
+            runningEquipmentSoundPlayer = cgMedia.runningEquipmentSoundPlayer;
+        }
+        else if (type == EQS_SPRINTING)
+        {
+            runningEquipmentSoundPlayer = cgMedia.sprintingEquipmentSoundPlayer;
+        }
+        else
+        {
+            iassert(type == EQS_WALKING);
+            runningEquipmentSoundPlayer = cgMedia.walkingEquipmentSoundPlayer;
+        }
+    }
+    else if (type == EQS_RUNNING)
+    {
+        runningEquipmentSoundPlayer = cgMedia.runningEquipmentSound;
+    }
+    else if (type == EQS_SPRINTING)
+    {
+        runningEquipmentSoundPlayer = cgMedia.sprintingEquipmentSound;
+    }
+    else
+    {
+        iassert(type == EQS_WALKING);
+        runningEquipmentSoundPlayer = cgMedia.walkingEquipmentSound;
+    }
+    CG_PlayEntitySoundAlias(localClientNum, entNum, runningEquipmentSoundPlayer);
+#endif
+}
+
+void __cdecl CG_PlayFx(int32_t localClientNum, centity_s *cent, const float *angles)
+{
+    const FxEffectDef *fxDef; // [esp+4h] [ebp-30h]
+    int32_t fxId; // [esp+Ch] [ebp-28h]
+    float axis[3][3]; // [esp+10h] [ebp-24h] BYREF
+
+    fxId = cent->nextState.eventParm;
+    if (fxId > 0 && fxId < 100)
+    {
+        fxDef = CG_GetLocalClientStaticGlobals(localClientNum)->fxs[fxId];
+        iassert(fxDef);
+        AnglesToAxis(angles, axis);
+        FX_PlayOrientedEffect(localClientNum, fxDef, CG_GetLocalClientGlobals(localClientNum)->time, cent->pose.origin, axis);
+    }
+    else
+    {
+        Com_PrintError(21, "ERROR: CG_PlayFx called with invalid effect id %i\n", fxId);
+    }
+}
+
+void __cdecl CG_PlayFxOnTag(int32_t localClientNum, centity_s *cent, int32_t eventParm)
+{
+    uint32_t ConfigstringConst; // eax
+    uint16_t tagName; // [esp+0h] [ebp-1Ch] BYREF
+    int32_t dobjHandle; // [esp+4h] [ebp-18h]
+    const char *tagAndEffect; // [esp+8h] [ebp-14h]
+    const FxEffectDef *fxDef; // [esp+Ch] [ebp-10h]
+    const cgs_t *cgs; // [esp+10h] [ebp-Ch]
+    int32_t fxId; // [esp+14h] [ebp-8h]
+    int32_t csIndex; // [esp+18h] [ebp-4h]
+
+    csIndex = CS_EFFECT_TAGS + eventParm;
+    tagAndEffect = CL_GetConfigString(localClientNum, csIndex);
+
+    iassert(tagAndEffect[0]);
+    iassert(tagAndEffect[1]);
+
+    fxId = 10 * (*tagAndEffect - 48) + tagAndEffect[1] - 48;
+    iassert(fxId > 0 && fxId < MAX_EFFECT_NAMES);
+    cgs = CG_GetLocalClientStaticGlobals(localClientNum);
+    fxDef = cgs->fxs[fxId];
+    iassert(fxDef);
+    dobjHandle = cent->nextState.number;
+    tagName = SL_GetString((char *)tagAndEffect + 2, 0);
+    CG_PlayBoltedEffect(localClientNum, fxDef, dobjHandle, tagName);
+    Scr_SetString(&tagName, 0);
+}
+
+void __cdecl CG_SetInvalidCmdHint(cg_s *cgameGlob, InvalidCmdHintType hintType)
+{
+    if (cgameGlob->invalidCmdHintType != hintType)
+    {
+        cgameGlob->invalidCmdHintType = hintType;
+        cgameGlob->invalidCmdHintTime = cgameGlob->time;
+    }
+}
+
+void __cdecl CG_StopWeaponSound(
+    int32_t localClientNum,
+    bool isPlayerView,
+    const WeaponDef *weaponDef,
+    int32_t entitynum,
+    weaponstate_t weaponstate)
+{
+    switch (weaponstate)
+    {
+    case WEAPON_RELOADING:
+    case WEAPON_RELOADING_INTERUPT:
+        if (isPlayerView)
+        {
+            if (weaponDef->reloadEmptySoundPlayer)
+                CG_StopSoundAlias(localClientNum, entitynum, weaponDef->reloadEmptySoundPlayer);
+            if (weaponDef->reloadSoundPlayer)
+                CG_StopSoundAlias(localClientNum, entitynum, weaponDef->reloadSoundPlayer);
+        }
+        else
+        {
+            if (weaponDef->reloadEmptySound)
+                CG_StopSoundAlias(localClientNum, entitynum, weaponDef->reloadEmptySound);
+            if (weaponDef->reloadSound)
+                CG_StopSoundAlias(localClientNum, entitynum, weaponDef->reloadSound);
+        }
+        break;
+    case WEAPON_RELOAD_START:
+    case WEAPON_RELOAD_START_INTERUPT:
+        if (isPlayerView)
+            CG_StopSoundAlias(localClientNum, entitynum, weaponDef->reloadStartSoundPlayer);
+        else
+            CG_StopSoundAlias(localClientNum, entitynum, weaponDef->reloadStartSound);
+        break;
+    case WEAPON_RELOAD_END:
+        if (isPlayerView)
+            CG_StopSoundAlias(localClientNum, entitynum, weaponDef->reloadEndSoundPlayer);
+        else
+            CG_StopSoundAlias(localClientNum, entitynum, weaponDef->reloadEndSound);
+        break;
+    default:
+        return;
+    }
+}
+
+void __cdecl CG_CheckEvents(int32_t localClientNum, centity_s *cent)
+{
+    int32_t v2; // [esp+0h] [ebp-14h]
+    int32_t previousEventSequence; // [esp+4h] [ebp-10h]
+    int32_t event; // [esp+8h] [ebp-Ch]
+    uint8_t oldEventParm; // [esp+Fh] [ebp-5h]
+    int32_t i; // [esp+10h] [ebp-4h]
+
+    if (cent->nextState.eType <= ET_EVENTS)
+    {
+        if (cent->nextState.eventSequence)
+        {
+            previousEventSequence = cent->previousEventSequence;
+            if (previousEventSequence <= cent->nextState.eventSequence + 64)
+                v2 = cent->previousEventSequence;
+            else
+                v2 = previousEventSequence - 256;
+            cent->previousEventSequence = v2;
+            if (cent->nextState.eventSequence - cent->previousEventSequence > 4)
+                cent->previousEventSequence = cent->nextState.eventSequence - 4;
+            if (cent->previousEventSequence < cent->nextState.eventSequence)
+            {
+                CG_CalcEntityLerpPositions(localClientNum, cent);
+                oldEventParm = cent->nextState.eventParm;
+                for (i = cent->previousEventSequence; i != cent->nextState.eventSequence; ++i)
+                {
+                    event = cent->nextState.events[i & 3];
+                    cent->nextState.eventParm = cent->nextState.eventParms[i & 3];
+                    BG_GetEntityTypeName(event + 17);
+                    KISAK_NULLSUB();
+                    CG_EntityEvent(localClientNum, cent, event);
+                }
+                cent->nextState.eventParm = oldEventParm;
+                cent->previousEventSequence = cent->nextState.eventSequence;
+            }
+            else
+            {
+                cent->previousEventSequence = cent->nextState.eventSequence;
+            }
+        }
+        else
+        {
+            cent->previousEventSequence = 0;
+        }
+    }
+    else
+    {
+        iassert(!cent->nextState.eventSequence);
+
+        if (!cent->previousEventSequence)
+        {
+            cent->previousEventSequence = 1;
+            BG_GetEntityTypeName(cent->nextState.eType);
+            KISAK_NULLSUB();
+            CG_CalcEntityLerpPositions(localClientNum, cent);
+            CG_EntityEvent(localClientNum, cent, cent->nextState.eType - ET_EVENTS);
+        }
+    }
+}
+
