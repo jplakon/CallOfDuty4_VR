@@ -1,4 +1,7 @@
 #include "rb_draw3d.h"
+#if defined(XR_USE_GRAPHICS_API_D3D11)
+#include "vr/vr_d3d9_capture.h"
+#endif
 #include "rb_logfile.h"
 #include "r_dvars.h"
 #include "r_state.h"
@@ -355,6 +358,15 @@ void __cdecl RB_StandardDrawCommands(const GfxViewInfo *viewInfo)
     int savedregs; // [esp+70h] [ebp+0h] BYREF
 
     data = backEndData;
+
+#if defined(XR_USE_GRAPHICS_API_D3D11)
+    const bool vrSecondaryStereoView =
+        VR_D3D9IsSameFrameStereoEnabled() &&
+        data->viewInfoCount == 2u &&
+        viewInfo == &data->viewInfo[1];
+#else
+    const bool vrSecondaryStereoView = false;
+#endif
     dynamicShadowType = viewInfo->dynamicShadowType;
     isRenderingFullScreen = viewInfo->isRenderingFullScreen;
     if (dynamicShadowType == SHADOW_MAP)
@@ -384,7 +396,8 @@ void __cdecl RB_StandardDrawCommands(const GfxViewInfo *viewInfo)
         memset(gfxCmdBufState.pixelShaderConstState, 0, sizeof(gfxCmdBufState.pixelShaderConstState));
         R_SetRenderTargetSize(&gfxCmdBufSourceState, setupRenderTargetId);
         R_SetRenderTarget(gfxCmdBufContext, setupRenderTargetId);
-        R_ClearScreen(gfxCmdBufState.prim.device, whichToClearForSetup, colorWhite, 1.0, 0, 0);
+        if (!vrSecondaryStereoView)
+            R_ClearScreen(gfxCmdBufState.prim.device, whichToClearForSetup, colorWhite, 1.0, 0, 0);
         memcpy(&gfxCmdBufState, &gfxCmdBufState, sizeof(gfxCmdBufState));
         R_InitContext(data, &cmdBuf);
         R_DepthPrepass(setupRenderTargetId, viewInfo, &cmdBuf);
@@ -401,8 +414,18 @@ void __cdecl RB_StandardDrawCommands(const GfxViewInfo *viewInfo)
     memset(gfxCmdBufState.pixelShaderConstState, 0, sizeof(gfxCmdBufState.pixelShaderConstState));
     R_SetRenderTargetSize(&gfxCmdBufSourceState, R_RENDERTARGET_SCENE);
     R_SetRenderTarget(gfxCmdBufContext, R_RENDERTARGET_SCENE);
-    if (R_GetClearColor(clearColor) || (whichToClearForScene & 0xFE) != 0)
-        R_ClearScreen(gfxCmdBufState.prim.device, whichToClearForScene, clearColor, 1.0, 0, 0);
+    if (!vrSecondaryStereoView &&
+        (R_GetClearColor(clearColor) ||
+         (whichToClearForScene & 0xFE) != 0))
+    {
+        R_ClearScreen(
+            gfxCmdBufState.prim.device,
+            whichToClearForScene,
+            clearColor,
+            1.0,
+            0,
+            0);
+    }
     memcpy(&gfxCmdBufState, &gfxCmdBufState, sizeof(gfxCmdBufState));
     if (needsDepthPrepass)
     {

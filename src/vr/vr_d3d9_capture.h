@@ -5,16 +5,14 @@
 
 struct IDirect3DDevice9;
 
-// Enables or disables the alternating-eye D3D9 diagnostic readback.
+// Enables or disables the same-frame side-by-side stereo diagnostic.
 void VR_D3D9CaptureSetEnabled(bool enabled);
 
-// Returns the eye currently selected for the next desktop render.
-// 0 = left eye, 1 = right eye.
-std::uint32_t VR_D3D9GetRenderEye();
+// Used by the renderer frontend/backend to gate the diagnostic path.
+bool VR_D3D9IsSameFrameStereoEnabled();
 
-// Called on the renderer thread immediately before Present(). The function
-// tags the completed backbuffer with the eye that CG_CalcViewValues rendered,
-// then switches the requested eye for the next desktop frame.
+// Called on the renderer thread immediately before Present(). One completed
+// side-by-side D3D9 backbuffer is read back and split into left/right images.
 void VR_D3D9CaptureFrame(IDirect3DDevice9* device);
 
 // Copies a newly captured frame for one eye when its serial differs from

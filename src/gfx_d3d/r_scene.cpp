@@ -1,4 +1,7 @@
 #include "r_scene.h"
+#if defined(XR_USE_GRAPHICS_API_D3D11)
+#include "vr/vr_d3d9_capture.h"
+#endif
 #include <qcommon/mem_track.h>
 #include "r_init.h"
 #include "r_debug.h"
@@ -1475,6 +1478,15 @@ void __cdecl R_GenerateSortedDrawSurfs(
     bcassert(viewInfoIndex, GFX_MAX_CLIENT_VIEWS);
     frontEndDataOut->viewInfoIndex = viewInfoIndex;
     viewInfo = &frontEndDataOut->viewInfo[viewInfoIndex];
+
+#if defined(XR_USE_GRAPHICS_API_D3D11)
+    if (VR_D3D9IsSameFrameStereoEnabled() &&
+        viewInfoIndex == 1)
+    {
+        viewInfo->cmds =
+            frontEndDataOut->viewInfo[0].cmds;
+    }
+#endif
     dynamicShadowType = R_DynamicShadowType();
     rg.sunShadowFull = r_rendererInUse->current.integer == 1;
     if (rg.sunShadowFull)

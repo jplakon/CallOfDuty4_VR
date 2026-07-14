@@ -2636,14 +2636,44 @@ void __cdecl RB_ExecuteRenderCommandsLoop(const void *cmds)
 
 void __cdecl RB_Draw3D()
 {
-    const GfxBackEndData *data; // [esp+30h] [ebp-8h]
+    const GfxBackEndData *data;
 
     data = backEndData;
-    if (backEndData->viewInfoCount)
+
+    if (!data->viewInfoCount)
     {
-        PROF_SCOPED("ExecuteRenderCmds");
-        RB_Draw3DInternal(&data->viewInfo[data->viewInfoIndex]);
+        return;
     }
+
+    PROF_SCOPED("ExecuteRenderCmds");
+
+    if (VR_D3D9IsSameFrameStereoEnabled() &&
+        data->viewInfoCount == 2u)
+    {
+        for (std::uint32_t viewInfoIndex = 0;
+             viewInfoIndex < data->viewInfoCount;
+             ++viewInfoIndex)
+        {
+            RB_Draw3DInternal(
+                &data->viewInfo[viewInfoIndex]);
+        }
+
+        static bool loggedSameFrameViews = false;
+
+        if (!loggedSameFrameViews)
+        {
+            Com_Printf(
+                0,
+                "[VR] Rendered two same-frame stereo GfxViewInfo records.\n");
+
+            loggedSameFrameViews = true;
+        }
+
+        return;
+    }
+
+    RB_Draw3DInternal(
+        &data->viewInfo[data->viewInfoIndex]);
 }
 
 int RB_AdaptiveGpuSyncFinal()

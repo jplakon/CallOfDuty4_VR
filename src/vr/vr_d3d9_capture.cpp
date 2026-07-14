@@ -14,13 +14,12 @@ namespace
 {
 constexpr std::uint32_t kStereoEyeCount = 2u;
 
-// An odd divider is essential: with alternating render eyes, an even divider
-// would repeatedly capture only one eye. A divider of three captures each eye
-// once every six presented desktop frames.
+// Both eyes are now captured together. One readback every three desktop
+// frames is still intentionally conservative because GetRenderTargetData is
+// a synchronous CPU/GPU stall.
 constexpr unsigned int kCaptureDivider = 3u;
 
 std::atomic<bool> g_captureEnabled{false};
-std::atomic<std::uint32_t> g_renderEye{0u};
 
 unsigned int g_captureCounter = 0u;
 
@@ -38,16 +37,9 @@ std::array<std::uint32_t, kStereoEyeCount>
 std::array<std::uint64_t, kStereoEyeCount>
     g_latestSerial = {};
 
-std::array<bool, kStereoEyeCount>
-    g_loggedFirstCapture = {};
-
+bool g_loggedFirstCapture = false;
 bool g_loggedFirstFailure = false;
 bool g_loggedStereoDiagnostic = false;
-
-const char* VR_EyeName(const std::uint32_t eyeIndex)
-{
-    return eyeIndex == 0u ? "left" : "right";
-}
 
 void VR_ReleaseSurface(IDirect3DSurface9*& surface)
 {
@@ -65,10 +57,6 @@ void VR_D3D9CaptureSetEnabled(const bool enabled)
         enabled,
         std::memory_order_release);
 
-    g_renderEye.store(
-        0u,
-        std::memory_order_release);
-
     g_captureCounter = 0u;
 
     if (enabled)
@@ -77,7 +65,8 @@ void VR_D3D9CaptureSetEnabled(const bool enabled)
         {
             Com_Printf(
                 0,
-                "[VR] Alternating-eye stereo diagnostic enabled.\n");
+                "[VR] Same-frame side-by-side stereo "
+                "diagnostic enabled.\n");
 
             g_loggedStereoDiagnostic = true;
         }
@@ -95,37 +84,26 @@ void VR_D3D9CaptureSetEnabled(const bool enabled)
         g_latestWidth[eyeIndex] = 0u;
         g_latestHeight[eyeIndex] = 0u;
         g_latestSerial[eyeIndex] = 0u;
-        g_loggedFirstCapture[eyeIndex] = false;
     }
 
+    g_loggedFirstCapture = false;
     g_loggedFirstFailure = false;
 }
 
-std::uint32_t VR_D3D9GetRenderEye()
+bool VR_D3D9IsSameFrameStereoEnabled()
 {
     return
-        g_renderEye.load(
-            std::memory_order_acquire) %
-        kStereoEyeCount;
+        g_captureEnabled.load(
+            std::memory_order_acquire);
 }
 
 void VR_D3D9CaptureFrame(IDirect3DDevice9* device)
 {
     if (device == nullptr ||
-        !g_captureEnabled.load(
-            std::memory_order_acquire))
+        !VR_D3D9IsSameFrameStereoEnabled())
     {
         return;
     }
-
-    // The camera used this eye for the frame that has just completed.
-    const std::uint32_t capturedEye =
-        VR_D3D9GetRenderEye();
-
-    // Select the opposite eye before the next game frame builds its camera.
-    g_renderEye.store(
-        capturedEye ^ 1u,
-        std::memory_order_release);
 
     ++g_captureCounter;
 
@@ -164,7 +142,7 @@ void VR_D3D9CaptureFrame(IDirect3DDevice9* device)
 
     hr = backBuffer->GetDesc(&description);
 
-    if (FAILED(hr))
+    if (FAILED(hr) || description.Width < 2u)
     {
         VR_ReleaseSurface(backBuffer);
         return;
@@ -269,33 +247,50 @@ void VR_D3D9CaptureFrame(IDirect3DDevice9* device)
         return;
     }
 
-    const std::size_t rowBytes =
-        static_cast<std::size_t>(
-            description.Width) * 4u;
+    const std::uint32_t eyeWidth =
+        description.Width / 2u;
 
-    std::vector<std::uint8_t> capturedPixels(
-        rowBytes *
+    const std::size_t eyeRowBytes =
+        static_cast<std::size_t>(eyeWidth) * 4u;
+
+    const std::size_t eyeImageBytes =
+        eyeRowBytes *
         static_cast<std::size_t>(
-            description.Height));
+            description.Height);
+
+    std::array<std::vector<std::uint8_t>, kStereoEyeCount>
+        capturedPixels = {
+            std::vector<std::uint8_t>(eyeImageBytes),
+            std::vector<std::uint8_t>(eyeImageBytes),
+        };
 
     const auto* sourceRow =
         static_cast<const std::uint8_t*>(
             lockedRect.pBits);
 
-    auto* destinationRow =
-        capturedPixels.data();
+    auto* leftDestination =
+        capturedPixels[0].data();
+
+    auto* rightDestination =
+        capturedPixels[1].data();
 
     for (UINT row = 0;
          row < description.Height;
          ++row)
     {
         std::memcpy(
-            destinationRow,
+            leftDestination,
             sourceRow,
-            rowBytes);
+            eyeRowBytes);
+
+        std::memcpy(
+            rightDestination,
+            sourceRow + eyeRowBytes,
+            eyeRowBytes);
 
         sourceRow += lockedRect.Pitch;
-        destinationRow += rowBytes;
+        leftDestination += eyeRowBytes;
+        rightDestination += eyeRowBytes;
     }
 
     readbackSurface->UnlockRect();
@@ -307,29 +302,31 @@ void VR_D3D9CaptureFrame(IDirect3DDevice9* device)
     {
         std::lock_guard<std::mutex> lock(g_captureMutex);
 
-        g_latestPixels[capturedEye].swap(
-            capturedPixels);
+        for (std::uint32_t eyeIndex = 0;
+             eyeIndex < kStereoEyeCount;
+             ++eyeIndex)
+        {
+            g_latestPixels[eyeIndex].swap(
+                capturedPixels[eyeIndex]);
 
-        g_latestWidth[capturedEye] =
-            description.Width;
+            g_latestWidth[eyeIndex] = eyeWidth;
+            g_latestHeight[eyeIndex] =
+                description.Height;
 
-        g_latestHeight[capturedEye] =
-            description.Height;
-
-        ++g_latestSerial[capturedEye];
+            ++g_latestSerial[eyeIndex];
+        }
     }
 
-    if (!g_loggedFirstCapture[capturedEye])
+    if (!g_loggedFirstCapture)
     {
         Com_Printf(
             0,
-            "[VR] Captured first D3D9 %s-eye frame: "
-            "%u x %u.\n",
-            VR_EyeName(capturedEye),
-            description.Width,
+            "[VR] Captured first same-frame stereo pair: "
+            "%u x %u per eye.\n",
+            eyeWidth,
             description.Height);
 
-        g_loggedFirstCapture[capturedEye] = true;
+        g_loggedFirstCapture = true;
     }
 }
 

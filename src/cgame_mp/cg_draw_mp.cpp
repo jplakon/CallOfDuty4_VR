@@ -2,6 +2,8 @@
 #error This File is MultiPlayer Only
 #endif
 
+#include "vr/vr_openxr.h"
+
 #include "cg_local_mp.h"
 #include "cg_public_mp.h"
 #include <qcommon/mem_track.h>
@@ -1431,7 +1433,53 @@ void __cdecl CG_DrawActive(int32_t localClientNum)
     CL_SetUserCmdWeapons(localClientNum, cgameGlob->weaponSelect, cgameGlob->equippedOffHand);
     CL_SetExtraButtons(localClientNum, cgameGlob->extraButtons);
     cgameGlob->extraButtons = 0;
-    CL_RenderScene(&cgameGlob->refdef);
+    if (!VR_IsInitialized() ||
+        cgameGlob->refdef.width < 2)
+    {
+        CL_RenderScene(&cgameGlob->refdef);
+        return;
+    }
+
+    refdef_s leftEyeRefdef =
+        cgameGlob->refdef;
+
+    refdef_s rightEyeRefdef =
+        cgameGlob->refdef;
+
+    const int stereoWidth =
+        cgameGlob->refdef.width;
+
+    const int leftEyeWidth =
+        stereoWidth / 2;
+
+    const int rightEyeWidth =
+        stereoWidth - leftEyeWidth;
+
+    leftEyeRefdef.width = leftEyeWidth;
+
+    rightEyeRefdef.x =
+        cgameGlob->refdef.x +
+        leftEyeWidth;
+
+    rightEyeRefdef.width =
+        rightEyeWidth;
+
+    // Each eye owns its half of the shared scene and framebuffer targets.
+    leftEyeRefdef.useScissorViewport = 0;
+    rightEyeRefdef.useScissorViewport = 0;
+
+    VR_ApplyStereoEyeOffsetForEye(
+        leftEyeRefdef.vieworg,
+        leftEyeRefdef.viewaxis,
+        0u);
+
+    VR_ApplyStereoEyeOffsetForEye(
+        rightEyeRefdef.vieworg,
+        rightEyeRefdef.viewaxis,
+        1u);
+
+    CL_RenderScene(&leftEyeRefdef);
+    CL_RenderScene(&rightEyeRefdef);
 }
 
 void __cdecl CG_AddSceneTracerBeams(int32_t localClientNum)

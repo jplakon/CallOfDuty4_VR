@@ -2662,12 +2662,14 @@ bool VR_ApplyHeadPosition(
 }
 
 
-bool VR_ApplyStereoEyeOffset(
+bool VR_ApplyStereoEyeOffsetForEye(
     float viewOrigin[3],
-    const float viewAxis[3][3])
+    const float viewAxis[3][3],
+    const unsigned int eyeIndex)
 {
     if (viewOrigin == nullptr ||
-        viewAxis == nullptr)
+        viewAxis == nullptr ||
+        eyeIndex >= kVrStereoEyeCount)
     {
         return false;
     }
@@ -2687,9 +2689,6 @@ bool VR_ApplyStereoEyeOffset(
         halfIpdGameUnits =
             g_vrHalfIpdGameUnits;
     }
-
-    const std::uint32_t eyeIndex =
-        VR_D3D9GetRenderEye();
 
     // CoD's camera basis uses row 1 as left. Left eye therefore moves in
     // +left, while right eye moves in -left.
@@ -2711,8 +2710,8 @@ bool VR_ApplyStereoEyeOffset(
     {
         Com_Printf(
             0,
-            "[VR] Applied alternating stereo eye "
-            "offset; half IPD is %.3f CoD units.\n",
+            "[VR] Applied same-frame stereo eye "
+            "offsets; half IPD is %.3f CoD units.\n",
             halfIpdGameUnits);
 
         g_vrLoggedFirstStereoEyeOffset = true;
