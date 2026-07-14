@@ -1,4 +1,5 @@
 #include <qcommon/qcommon.h>
+#include "vr/vr_openxr.h"
 
 #include "cg_local.h"
 #include "cg_public.h"
@@ -1660,6 +1661,16 @@ void __cdecl CG_AddViewWeapon(int32_t localClientNum)
 
                 AxisToQuat(axis, placement.base.quat);
 
+                if (VR_ApplyRightControllerToWeaponPlacement(
+                        cgameGlob->refdef.vieworg,
+                        cgameGlob->refdef.viewaxis,
+                        placement.base.origin,
+                        axis))
+                {
+                    AxisToQuat(
+                        axis,
+                        placement.base.quat);
+                }
 
                 weapDef = BG_GetWeaponDef(weaponIndex);
                 if (!BG_IsAimDownSightWeapon(ps->weapon) || ps->fWeaponPosFrac == 0.0 || weapDef->overlayReticle)
