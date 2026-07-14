@@ -2478,18 +2478,69 @@ bool VR_ApplyHeadOrientation(
         return false;
     }
 
-    // Diagnostic bisection: prove that the cross-module camera hook and
-    // calling convention are safe before restoring any matrix or mutex work.
-    static bool loggedEntry = false;
+    float headAxis[3][3] = {};
 
-    if (!loggedEntry)
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrHeadOrientationMutex);
+
+        if (!g_vrHeadOrientationValid)
+        {
+            return false;
+        }
+
+        for (int row = 0; row < 3; ++row)
+        {
+            for (int column = 0;
+                 column < 3;
+                 ++column)
+            {
+                headAxis[row][column] =
+                    g_vrHeadOrientationAxis[row][column];
+            }
+        }
+    }
+
+    float originalAxis[3][3] = {};
+
+    for (int row = 0; row < 3; ++row)
+    {
+        for (int column = 0;
+             column < 3;
+             ++column)
+        {
+            originalAxis[row][column] =
+                viewAxis[row][column];
+        }
+    }
+
+    // The headset matrix is expressed in the camera-local
+    // forward/left/up basis. Compose it with CoD4's completed
+    // world-space render-camera axis.
+    for (int row = 0; row < 3; ++row)
+    {
+        for (int column = 0;
+             column < 3;
+             ++column)
+        {
+            viewAxis[row][column] =
+                headAxis[row][0] *
+                    originalAxis[0][column] +
+                headAxis[row][1] *
+                    originalAxis[1][column] +
+                headAxis[row][2] *
+                    originalAxis[2][column];
+        }
+    }
+
+    if (!g_vrLoggedFirstCameraApply)
     {
         Com_Printf(
             0,
-            "[VR] Entered OpenXR camera hook "
-            "(no-op diagnostic).\n");
+            "[VR] Applied OpenXR headset orientation "
+            "to the CoD4 camera.\n");
 
-        loggedEntry = true;
+        g_vrLoggedFirstCameraApply = true;
     }
 
     return true;
@@ -2505,7 +2556,7 @@ bool VR_Init()
 
     Com_Printf(
         0,
-        "[VR] Initializing OpenXR low-memory swapchain diagnostic...\n");
+        "[VR] Initializing OpenXR head-rotation frame bridge...\n");
 
     if (!VR_HasInstanceExtension(
             XR_KHR_D3D11_ENABLE_EXTENSION_NAME))

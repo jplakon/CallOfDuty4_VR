@@ -20,6 +20,7 @@
 #include <gfx_d3d/r_workercmds_common.h>
 #include <universal/profile.h>
 #include <game_mp/g_main_mp.h>
+#include "../vr/vr_openxr.h"
 
 TestEffect s_testEffect[1];
 ClientViewParams clientViewParamsArray[1][1];
@@ -643,6 +644,9 @@ void __cdecl CG_CalcViewValues(int32_t localClientNum)
             CG_CalcFov(localClientNum);
         }
     }
+    VR_ApplyHeadOrientation(
+        cgameGlob->refdef.viewaxis);
+
 }
 
 void __cdecl CG_OffsetThirdPersonView(cg_s *cgameGlob)

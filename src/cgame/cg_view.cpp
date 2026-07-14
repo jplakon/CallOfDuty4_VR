@@ -1518,9 +1518,6 @@ void __cdecl CG_CalcViewValues(int localClientNum)
     CG_PerturbCamera(cgArray);
     CG_CalcFov(localClientNum);
 
-    VR_ApplyHeadOrientation(
-        cgameGlob->refdef.viewaxis);
-
     if (cgameGlob->predictedPlayerState.pm_type == 4)
         CG_ModelPreviewerUpdateView(
             cgameGlob->refdef.vieworg,
