@@ -34,6 +34,57 @@ XrSystemId g_vrSystemId = XR_NULL_SYSTEM_ID;
 XrSession g_vrSession = XR_NULL_HANDLE;
 XrSpace g_vrAppSpace = XR_NULL_HANDLE;
 
+constexpr std::uint32_t kVrControllerCount = 2u;
+
+enum VrControllerHand : std::uint32_t
+{
+    VR_CONTROLLER_LEFT = 0u,
+    VR_CONTROLLER_RIGHT = 1u,
+};
+
+XrActionSet g_vrControllerActionSet = XR_NULL_HANDLE;
+
+XrAction g_vrGripPoseAction = XR_NULL_HANDLE;
+XrAction g_vrAimPoseAction = XR_NULL_HANDLE;
+XrAction g_vrTriggerValueAction = XR_NULL_HANDLE;
+XrAction g_vrSqueezeValueAction = XR_NULL_HANDLE;
+
+std::array<XrPath, kVrControllerCount>
+    g_vrControllerHandPaths = {
+        XR_NULL_PATH,
+        XR_NULL_PATH,
+    };
+
+std::array<XrSpace, kVrControllerCount>
+    g_vrControllerGripSpaces = {
+        XR_NULL_HANDLE,
+        XR_NULL_HANDLE,
+    };
+
+std::array<XrSpace, kVrControllerCount>
+    g_vrControllerAimSpaces = {
+        XR_NULL_HANDLE,
+        XR_NULL_HANDLE,
+    };
+
+bool g_vrControllerActionsCreated = false;
+bool g_vrControllerActionsAttached = false;
+bool g_vrControllerSpacesCreated = false;
+
+std::array<bool, kVrControllerCount>
+    g_vrLoggedFirstGripPose = {};
+
+std::array<bool, kVrControllerCount>
+    g_vrLoggedFirstAimPose = {};
+
+std::array<bool, kVrControllerCount>
+    g_vrControllerTriggerPressed = {};
+
+std::array<bool, kVrControllerCount>
+    g_vrControllerSqueezePressed = {};
+
+std::uint64_t g_vrControllerDiagnosticFrame = 0u;
+
 XrSessionState g_vrSessionState = XR_SESSION_STATE_UNKNOWN;
 XrEnvironmentBlendMode g_vrBlendMode =
     XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
@@ -1675,6 +1726,912 @@ bool VR_SelectEnvironmentBlendMode()
     return true;
 }
 
+
+const char* VR_ControllerHandName(
+    const std::uint32_t handIndex)
+{
+    return
+        handIndex == VR_CONTROLLER_LEFT
+            ? "left"
+            : "right";
+}
+
+bool VR_ControllerStringToPath(
+    const char* pathString,
+    XrPath* path)
+{
+    if (pathString == nullptr ||
+        path == nullptr)
+    {
+        return false;
+    }
+
+    const XrResult result =
+        xrStringToPath(
+            g_vrInstance,
+            pathString,
+            path);
+
+    if (XR_FAILED(result))
+    {
+        VR_LogXrFailure(
+            "xrStringToPath",
+            result);
+
+        return false;
+    }
+
+    return true;
+}
+
+void VR_DestroyControllerInput()
+{
+    for (XrSpace& space :
+         g_vrControllerAimSpaces)
+    {
+        if (space != XR_NULL_HANDLE)
+        {
+            xrDestroySpace(space);
+            space = XR_NULL_HANDLE;
+        }
+    }
+
+    for (XrSpace& space :
+         g_vrControllerGripSpaces)
+    {
+        if (space != XR_NULL_HANDLE)
+        {
+            xrDestroySpace(space);
+            space = XR_NULL_HANDLE;
+        }
+    }
+
+    if (g_vrSqueezeValueAction != XR_NULL_HANDLE)
+    {
+        xrDestroyAction(g_vrSqueezeValueAction);
+        g_vrSqueezeValueAction = XR_NULL_HANDLE;
+    }
+
+    if (g_vrTriggerValueAction != XR_NULL_HANDLE)
+    {
+        xrDestroyAction(g_vrTriggerValueAction);
+        g_vrTriggerValueAction = XR_NULL_HANDLE;
+    }
+
+    if (g_vrAimPoseAction != XR_NULL_HANDLE)
+    {
+        xrDestroyAction(g_vrAimPoseAction);
+        g_vrAimPoseAction = XR_NULL_HANDLE;
+    }
+
+    if (g_vrGripPoseAction != XR_NULL_HANDLE)
+    {
+        xrDestroyAction(g_vrGripPoseAction);
+        g_vrGripPoseAction = XR_NULL_HANDLE;
+    }
+
+    if (g_vrControllerActionSet != XR_NULL_HANDLE)
+    {
+        xrDestroyActionSet(g_vrControllerActionSet);
+        g_vrControllerActionSet = XR_NULL_HANDLE;
+    }
+
+    g_vrControllerHandPaths = {
+        XR_NULL_PATH,
+        XR_NULL_PATH,
+    };
+
+    g_vrControllerActionsCreated = false;
+    g_vrControllerActionsAttached = false;
+    g_vrControllerSpacesCreated = false;
+
+    g_vrLoggedFirstGripPose.fill(false);
+    g_vrLoggedFirstAimPose.fill(false);
+    g_vrControllerTriggerPressed.fill(false);
+    g_vrControllerSqueezePressed.fill(false);
+    g_vrControllerDiagnosticFrame = 0u;
+}
+
+bool VR_CreateControllerAction(
+    const XrActionType actionType,
+    const char* actionName,
+    const char* localizedName,
+    XrAction* action)
+{
+    if (actionName == nullptr ||
+        localizedName == nullptr ||
+        action == nullptr)
+    {
+        return false;
+    }
+
+    XrActionCreateInfo createInfo{
+        XR_TYPE_ACTION_CREATE_INFO
+    };
+
+    createInfo.actionType = actionType;
+
+    std::snprintf(
+        createInfo.actionName,
+        XR_MAX_ACTION_NAME_SIZE,
+        "%s",
+        actionName);
+
+    std::snprintf(
+        createInfo.localizedActionName,
+        XR_MAX_LOCALIZED_ACTION_NAME_SIZE,
+        "%s",
+        localizedName);
+
+    createInfo.countSubactionPaths =
+        static_cast<std::uint32_t>(
+            g_vrControllerHandPaths.size());
+
+    createInfo.subactionPaths =
+        g_vrControllerHandPaths.data();
+
+    const XrResult result =
+        xrCreateAction(
+            g_vrControllerActionSet,
+            &createInfo,
+            action);
+
+    if (XR_FAILED(result))
+    {
+        VR_LogXrFailure(
+            "xrCreateAction",
+            result);
+
+        return false;
+    }
+
+    return true;
+}
+
+bool VR_SuggestControllerBindings()
+{
+    XrPath touchProfile = XR_NULL_PATH;
+
+    if (!VR_ControllerStringToPath(
+            "/interaction_profiles/oculus/"
+            "touch_controller",
+            &touchProfile))
+    {
+        return false;
+    }
+
+    std::array<XrPath, 8> touchBindingPaths = {};
+
+    const std::array<const char*, 8>
+        touchBindingStrings = {
+            "/user/hand/left/input/grip/pose",
+            "/user/hand/right/input/grip/pose",
+            "/user/hand/left/input/aim/pose",
+            "/user/hand/right/input/aim/pose",
+            "/user/hand/left/input/trigger/value",
+            "/user/hand/right/input/trigger/value",
+            "/user/hand/left/input/squeeze/value",
+            "/user/hand/right/input/squeeze/value",
+        };
+
+    for (std::uint32_t bindingIndex = 0u;
+         bindingIndex < touchBindingPaths.size();
+         ++bindingIndex)
+    {
+        if (!VR_ControllerStringToPath(
+                touchBindingStrings[bindingIndex],
+                &touchBindingPaths[bindingIndex]))
+        {
+            return false;
+        }
+    }
+
+    const std::array<XrActionSuggestedBinding, 8>
+        touchBindings = {{
+            {
+                g_vrGripPoseAction,
+                touchBindingPaths[0],
+            },
+            {
+                g_vrGripPoseAction,
+                touchBindingPaths[1],
+            },
+            {
+                g_vrAimPoseAction,
+                touchBindingPaths[2],
+            },
+            {
+                g_vrAimPoseAction,
+                touchBindingPaths[3],
+            },
+            {
+                g_vrTriggerValueAction,
+                touchBindingPaths[4],
+            },
+            {
+                g_vrTriggerValueAction,
+                touchBindingPaths[5],
+            },
+            {
+                g_vrSqueezeValueAction,
+                touchBindingPaths[6],
+            },
+            {
+                g_vrSqueezeValueAction,
+                touchBindingPaths[7],
+            },
+        }};
+
+    XrInteractionProfileSuggestedBinding
+        touchSuggestion{
+            XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING
+        };
+
+    touchSuggestion.interactionProfile =
+        touchProfile;
+
+    touchSuggestion.countSuggestedBindings =
+        static_cast<std::uint32_t>(
+            touchBindings.size());
+
+    touchSuggestion.suggestedBindings =
+        touchBindings.data();
+
+    XrResult result =
+        xrSuggestInteractionProfileBindings(
+            g_vrInstance,
+            &touchSuggestion);
+
+    if (XR_FAILED(result))
+    {
+        VR_LogXrFailure(
+            "xrSuggestInteractionProfileBindings("
+            "Oculus Touch)",
+            result);
+
+        return false;
+    }
+
+    XrPath simpleProfile = XR_NULL_PATH;
+
+    if (VR_ControllerStringToPath(
+            "/interaction_profiles/khr/"
+            "simple_controller",
+            &simpleProfile))
+    {
+        std::array<XrPath, 4> simpleBindingPaths = {};
+
+        const std::array<const char*, 4>
+            simpleBindingStrings = {
+                "/user/hand/left/input/grip/pose",
+                "/user/hand/right/input/grip/pose",
+                "/user/hand/left/input/aim/pose",
+                "/user/hand/right/input/aim/pose",
+            };
+
+        bool simplePathsValid = true;
+
+        for (std::uint32_t bindingIndex = 0u;
+             bindingIndex < simpleBindingPaths.size();
+             ++bindingIndex)
+        {
+            simplePathsValid =
+                simplePathsValid &&
+                VR_ControllerStringToPath(
+                    simpleBindingStrings[bindingIndex],
+                    &simpleBindingPaths[bindingIndex]);
+        }
+
+        if (simplePathsValid)
+        {
+            const std::array<
+                XrActionSuggestedBinding,
+                4>
+                simpleBindings = {{
+                    {
+                        g_vrGripPoseAction,
+                        simpleBindingPaths[0],
+                    },
+                    {
+                        g_vrGripPoseAction,
+                        simpleBindingPaths[1],
+                    },
+                    {
+                        g_vrAimPoseAction,
+                        simpleBindingPaths[2],
+                    },
+                    {
+                        g_vrAimPoseAction,
+                        simpleBindingPaths[3],
+                    },
+                }};
+
+            XrInteractionProfileSuggestedBinding
+                simpleSuggestion{
+                    XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING
+                };
+
+            simpleSuggestion.interactionProfile =
+                simpleProfile;
+
+            simpleSuggestion.countSuggestedBindings =
+                static_cast<std::uint32_t>(
+                    simpleBindings.size());
+
+            simpleSuggestion.suggestedBindings =
+                simpleBindings.data();
+
+            result =
+                xrSuggestInteractionProfileBindings(
+                    g_vrInstance,
+                    &simpleSuggestion);
+
+            if (XR_FAILED(result))
+            {
+                Com_PrintWarning(
+                    0,
+                    "[VR] Simple-controller fallback "
+                    "bindings were not accepted.\n");
+            }
+        }
+    }
+
+    Com_Printf(
+        0,
+        "[VR] Suggested Oculus Touch controller "
+        "pose and analog bindings.\n");
+
+    return true;
+}
+
+bool VR_CreateControllerActions()
+{
+    if (g_vrInstance == XR_NULL_HANDLE)
+    {
+        return false;
+    }
+
+    if (g_vrControllerActionsCreated)
+    {
+        return true;
+    }
+
+    if (!VR_ControllerStringToPath(
+            "/user/hand/left",
+            &g_vrControllerHandPaths[
+                VR_CONTROLLER_LEFT]) ||
+        !VR_ControllerStringToPath(
+            "/user/hand/right",
+            &g_vrControllerHandPaths[
+                VR_CONTROLLER_RIGHT]))
+    {
+        VR_DestroyControllerInput();
+        return false;
+    }
+
+    XrActionSetCreateInfo actionSetInfo{
+        XR_TYPE_ACTION_SET_CREATE_INFO
+    };
+
+    std::snprintf(
+        actionSetInfo.actionSetName,
+        XR_MAX_ACTION_SET_NAME_SIZE,
+        "%s",
+        "gameplay");
+
+    std::snprintf(
+        actionSetInfo.localizedActionSetName,
+        XR_MAX_LOCALIZED_ACTION_SET_NAME_SIZE,
+        "%s",
+        "KisakCOD Gameplay");
+
+    actionSetInfo.priority = 0u;
+
+    XrResult result =
+        xrCreateActionSet(
+            g_vrInstance,
+            &actionSetInfo,
+            &g_vrControllerActionSet);
+
+    if (XR_FAILED(result))
+    {
+        VR_LogXrFailure(
+            "xrCreateActionSet",
+            result);
+
+        VR_DestroyControllerInput();
+        return false;
+    }
+
+    if (!VR_CreateControllerAction(
+            XR_ACTION_TYPE_POSE_INPUT,
+            "grip_pose",
+            "Grip Pose",
+            &g_vrGripPoseAction) ||
+        !VR_CreateControllerAction(
+            XR_ACTION_TYPE_POSE_INPUT,
+            "aim_pose",
+            "Aim Pose",
+            &g_vrAimPoseAction) ||
+        !VR_CreateControllerAction(
+            XR_ACTION_TYPE_FLOAT_INPUT,
+            "trigger_value",
+            "Trigger Value",
+            &g_vrTriggerValueAction) ||
+        !VR_CreateControllerAction(
+            XR_ACTION_TYPE_FLOAT_INPUT,
+            "squeeze_value",
+            "Squeeze Value",
+            &g_vrSqueezeValueAction))
+    {
+        VR_DestroyControllerInput();
+        return false;
+    }
+
+    if (!VR_SuggestControllerBindings())
+    {
+        VR_DestroyControllerInput();
+        return false;
+    }
+
+    g_vrControllerActionsCreated = true;
+
+    Com_Printf(
+        0,
+        "[VR] Created OpenXR controller action set.\n");
+
+    return true;
+}
+
+bool VR_CreateControllerActionSpaces()
+{
+    for (std::uint32_t handIndex = 0u;
+         handIndex < kVrControllerCount;
+         ++handIndex)
+    {
+        XrActionSpaceCreateInfo gripSpaceInfo{
+            XR_TYPE_ACTION_SPACE_CREATE_INFO
+        };
+
+        gripSpaceInfo.action =
+            g_vrGripPoseAction;
+
+        gripSpaceInfo.subactionPath =
+            g_vrControllerHandPaths[handIndex];
+
+        gripSpaceInfo.poseInActionSpace.orientation.w =
+            1.0f;
+
+        XrResult result =
+            xrCreateActionSpace(
+                g_vrSession,
+                &gripSpaceInfo,
+                &g_vrControllerGripSpaces[
+                    handIndex]);
+
+        if (XR_FAILED(result))
+        {
+            VR_LogXrFailure(
+                "xrCreateActionSpace(grip)",
+                result);
+
+            return false;
+        }
+
+        XrActionSpaceCreateInfo aimSpaceInfo{
+            XR_TYPE_ACTION_SPACE_CREATE_INFO
+        };
+
+        aimSpaceInfo.action =
+            g_vrAimPoseAction;
+
+        aimSpaceInfo.subactionPath =
+            g_vrControllerHandPaths[handIndex];
+
+        aimSpaceInfo.poseInActionSpace.orientation.w =
+            1.0f;
+
+        result =
+            xrCreateActionSpace(
+                g_vrSession,
+                &aimSpaceInfo,
+                &g_vrControllerAimSpaces[
+                    handIndex]);
+
+        if (XR_FAILED(result))
+        {
+            VR_LogXrFailure(
+                "xrCreateActionSpace(aim)",
+                result);
+
+            return false;
+        }
+    }
+
+    g_vrControllerSpacesCreated = true;
+    return true;
+}
+
+bool VR_AttachControllerActions()
+{
+    if (!g_vrControllerActionsCreated ||
+        g_vrSession == XR_NULL_HANDLE)
+    {
+        return false;
+    }
+
+    const XrActionSet actionSets[] = {
+        g_vrControllerActionSet,
+    };
+
+    XrSessionActionSetsAttachInfo attachInfo{
+        XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO
+    };
+
+    attachInfo.countActionSets = 1u;
+    attachInfo.actionSets = actionSets;
+
+    XrResult result =
+        xrAttachSessionActionSets(
+            g_vrSession,
+            &attachInfo);
+
+    if (XR_FAILED(result))
+    {
+        VR_LogXrFailure(
+            "xrAttachSessionActionSets",
+            result);
+
+        return false;
+    }
+
+    g_vrControllerActionsAttached = true;
+
+    if (!VR_CreateControllerActionSpaces())
+    {
+        return false;
+    }
+
+    Com_Printf(
+        0,
+        "[VR] OpenXR controller action set and "
+        "pose spaces are ready.\n");
+
+    return true;
+}
+
+bool VR_GetControllerPoseState(
+    const XrAction action,
+    const XrPath handPath,
+    bool* active)
+{
+    if (active == nullptr)
+    {
+        return false;
+    }
+
+    XrActionStateGetInfo getInfo{
+        XR_TYPE_ACTION_STATE_GET_INFO
+    };
+
+    getInfo.action = action;
+    getInfo.subactionPath = handPath;
+
+    XrActionStatePose state{
+        XR_TYPE_ACTION_STATE_POSE
+    };
+
+    const XrResult result =
+        xrGetActionStatePose(
+            g_vrSession,
+            &getInfo,
+            &state);
+
+    if (XR_FAILED(result))
+    {
+        VR_LogXrFailure(
+            "xrGetActionStatePose",
+            result);
+
+        return false;
+    }
+
+    *active = state.isActive == XR_TRUE;
+    return true;
+}
+
+bool VR_GetControllerFloatState(
+    const XrAction action,
+    const XrPath handPath,
+    float* value,
+    bool* active)
+{
+    if (value == nullptr ||
+        active == nullptr)
+    {
+        return false;
+    }
+
+    XrActionStateGetInfo getInfo{
+        XR_TYPE_ACTION_STATE_GET_INFO
+    };
+
+    getInfo.action = action;
+    getInfo.subactionPath = handPath;
+
+    XrActionStateFloat state{
+        XR_TYPE_ACTION_STATE_FLOAT
+    };
+
+    const XrResult result =
+        xrGetActionStateFloat(
+            g_vrSession,
+            &getInfo,
+            &state);
+
+    if (XR_FAILED(result))
+    {
+        VR_LogXrFailure(
+            "xrGetActionStateFloat",
+            result);
+
+        return false;
+    }
+
+    *active = state.isActive == XR_TRUE;
+    *value = *active ? state.currentState : 0.0f;
+
+    return true;
+}
+
+bool VR_LocateControllerSpace(
+    const XrSpace controllerSpace,
+    const XrTime displayTime,
+    XrSpaceLocation* location)
+{
+    if (controllerSpace == XR_NULL_HANDLE ||
+        location == nullptr)
+    {
+        return false;
+    }
+
+    *location =
+        XrSpaceLocation{
+            XR_TYPE_SPACE_LOCATION
+        };
+
+    const XrResult result =
+        xrLocateSpace(
+            controllerSpace,
+            g_vrAppSpace,
+            displayTime,
+            location);
+
+    if (XR_FAILED(result))
+    {
+        VR_LogXrFailure(
+            "xrLocateSpace(controller)",
+            result);
+
+        return false;
+    }
+
+    const XrSpaceLocationFlags requiredFlags =
+        XR_SPACE_LOCATION_POSITION_VALID_BIT |
+        XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
+
+    return
+        (location->locationFlags & requiredFlags) ==
+        requiredFlags;
+}
+
+void VR_LogControllerPoseSnapshot(
+    const std::uint32_t handIndex,
+    const XrSpaceLocation& aimLocation,
+    const float triggerValue,
+    const float squeezeValue)
+{
+    const VrHeadVector aimForward =
+        VR_RotateHeadVector(
+            aimLocation.pose.orientation,
+            {0.0f, 0.0f, -1.0f});
+
+    Com_Printf(
+        0,
+        "[VR] Controller %s aim snapshot: "
+        "pos %.3f %.3f %.3f m, "
+        "forward %.3f %.3f %.3f, "
+        "trigger %.3f, squeeze %.3f.\n",
+        VR_ControllerHandName(handIndex),
+        aimLocation.pose.position.x,
+        aimLocation.pose.position.y,
+        aimLocation.pose.position.z,
+        aimForward.x,
+        aimForward.y,
+        aimForward.z,
+        triggerValue,
+        squeezeValue);
+}
+
+void VR_UpdateControllerActions(
+    const XrTime displayTime)
+{
+    if (!g_vrControllerActionsAttached ||
+        !g_vrControllerSpacesCreated ||
+        !g_vrSessionRunning)
+    {
+        return;
+    }
+
+    XrActiveActionSet activeActionSet = {};
+    activeActionSet.actionSet =
+        g_vrControllerActionSet;
+    activeActionSet.subactionPath =
+        XR_NULL_PATH;
+
+    XrActionsSyncInfo syncInfo{
+        XR_TYPE_ACTIONS_SYNC_INFO
+    };
+
+    syncInfo.countActiveActionSets = 1u;
+    syncInfo.activeActionSets =
+        &activeActionSet;
+
+    const XrResult syncResult =
+        xrSyncActions(
+            g_vrSession,
+            &syncInfo);
+
+    if (XR_FAILED(syncResult))
+    {
+        VR_LogXrFailure(
+            "xrSyncActions",
+            syncResult);
+
+        return;
+    }
+
+    ++g_vrControllerDiagnosticFrame;
+
+    const bool logPeriodicSnapshot =
+        (g_vrControllerDiagnosticFrame % 180u) ==
+        0u;
+
+    for (std::uint32_t handIndex = 0u;
+         handIndex < kVrControllerCount;
+         ++handIndex)
+    {
+        const XrPath handPath =
+            g_vrControllerHandPaths[handIndex];
+
+        bool gripActive = false;
+        bool aimActive = false;
+
+        VR_GetControllerPoseState(
+            g_vrGripPoseAction,
+            handPath,
+            &gripActive);
+
+        VR_GetControllerPoseState(
+            g_vrAimPoseAction,
+            handPath,
+            &aimActive);
+
+        XrSpaceLocation gripLocation{
+            XR_TYPE_SPACE_LOCATION
+        };
+
+        XrSpaceLocation aimLocation{
+            XR_TYPE_SPACE_LOCATION
+        };
+
+        const bool gripValid =
+            gripActive &&
+            VR_LocateControllerSpace(
+                g_vrControllerGripSpaces[
+                    handIndex],
+                displayTime,
+                &gripLocation);
+
+        const bool aimValid =
+            aimActive &&
+            VR_LocateControllerSpace(
+                g_vrControllerAimSpaces[
+                    handIndex],
+                displayTime,
+                &aimLocation);
+
+        if (gripValid &&
+            !g_vrLoggedFirstGripPose[handIndex])
+        {
+            Com_Printf(
+                0,
+                "[VR] Located first valid %s "
+                "controller grip pose.\n",
+                VR_ControllerHandName(handIndex));
+
+            g_vrLoggedFirstGripPose[handIndex] =
+                true;
+        }
+
+        if (aimValid &&
+            !g_vrLoggedFirstAimPose[handIndex])
+        {
+            Com_Printf(
+                0,
+                "[VR] Located first valid %s "
+                "controller aim pose.\n",
+                VR_ControllerHandName(handIndex));
+
+            g_vrLoggedFirstAimPose[handIndex] =
+                true;
+        }
+
+        float triggerValue = 0.0f;
+        float squeezeValue = 0.0f;
+        bool triggerActive = false;
+        bool squeezeActive = false;
+
+        VR_GetControllerFloatState(
+            g_vrTriggerValueAction,
+            handPath,
+            &triggerValue,
+            &triggerActive);
+
+        VR_GetControllerFloatState(
+            g_vrSqueezeValueAction,
+            handPath,
+            &squeezeValue,
+            &squeezeActive);
+
+        const bool triggerPressed =
+            triggerActive &&
+            triggerValue >= 0.75f;
+
+        const bool squeezePressed =
+            squeezeActive &&
+            squeezeValue >= 0.75f;
+
+        if (triggerPressed &&
+            !g_vrControllerTriggerPressed[
+                handIndex])
+        {
+            Com_Printf(
+                0,
+                "[VR] Controller %s trigger "
+                "crossed 0.75.\n",
+                VR_ControllerHandName(handIndex));
+        }
+
+        if (squeezePressed &&
+            !g_vrControllerSqueezePressed[
+                handIndex])
+        {
+            Com_Printf(
+                0,
+                "[VR] Controller %s squeeze "
+                "crossed 0.75.\n",
+                VR_ControllerHandName(handIndex));
+        }
+
+        g_vrControllerTriggerPressed[handIndex] =
+            triggerPressed;
+
+        g_vrControllerSqueezePressed[handIndex] =
+            squeezePressed;
+
+        if (logPeriodicSnapshot &&
+            aimValid)
+        {
+            VR_LogControllerPoseSnapshot(
+                handIndex,
+                aimLocation,
+                triggerValue,
+                squeezeValue);
+        }
+    }
+}
+
 bool VR_CreateSession()
 {
     PFN_xrGetD3D11GraphicsRequirementsKHR
@@ -1768,7 +2725,22 @@ bool VR_CreateSession()
         return false;
     }
 
-    return VR_SelectEnvironmentBlendMode();
+    if (!VR_SelectEnvironmentBlendMode())
+    {
+        return false;
+    }
+
+    if (g_vrControllerActionsCreated &&
+        !VR_AttachControllerActions())
+    {
+        Com_PrintWarning(
+            0,
+            "[VR] Controller actions could not be "
+            "attached. Rendering will continue "
+            "without controller tracking.\n");
+    }
+
+    return true;
 }
 
 int64_t VR_SelectSwapchainFormat(
@@ -2362,6 +3334,9 @@ bool VR_RenderSolidColorFrame(
 
         return false;
     }
+
+    VR_UpdateControllerActions(
+        frameState.predictedDisplayTime);
 
     projectionViews.resize(locatedViewCount);
 
@@ -3169,6 +4144,15 @@ bool VR_Init()
         "[VR] OpenXR system: %s.\n",
         systemProperties.systemName);
 
+    if (!VR_CreateControllerActions())
+    {
+        Com_PrintWarning(
+            0,
+            "[VR] Controller action setup failed. "
+            "Rendering will continue without "
+            "controller tracking.\n");
+    }
+
     if (!VR_CreateSession())
     {
         VR_Shutdown();
@@ -3316,6 +4300,8 @@ void VR_Shutdown()
     VR_D3D9CaptureSetEnabled(false);
 
     g_vrSessionRunning = false;
+
+    VR_DestroyControllerInput();
 
     for (VrEyeSwapchain& eyeSwapchain :
          g_vrEyeSwapchains)
