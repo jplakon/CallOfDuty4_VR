@@ -1,4 +1,5 @@
 #include "rb_backend.h"
+#include "vr/vr_d3d9_capture.h"
 #include <qcommon/mem_track.h>
 
 #include "rb_logfile.h"
@@ -2566,6 +2567,7 @@ GfxIndexBufferState *RB_SwapBuffers()
     iassert(dx.targetWindowIndex >= 0 && dx.targetWindowIndex < dx.windowCount);
 
     {
+        VR_D3D9CaptureFrame(dx.device);
         PROF_SCOPED("Present");
         hr = dx.windows[dx.targetWindowIndex].swapChain->Present(0, 0, 0, 0, 0);
     }

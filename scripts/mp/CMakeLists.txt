@@ -107,3 +107,11 @@ target_link_libraries(
         dxgi
 )
 # KISAK_OPENXR_D3D11_SOLID_FRAME_END
+
+# KISAK_OPENXR_D3D9_CAPTURE_BEGIN
+target_sources(
+    ${PROJECT_NAME}
+    PRIVATE
+        ../../src/vr/vr_d3d9_capture.cpp
+)
+# KISAK_OPENXR_D3D9_CAPTURE_END

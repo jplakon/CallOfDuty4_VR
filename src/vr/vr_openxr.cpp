@@ -1,4 +1,5 @@
 #include "vr/vr_openxr.h"
+#include "vr/vr_d3d9_capture.h"
 
 #include "qcommon/qcommon.h"
 
@@ -54,6 +55,19 @@ ComPtr<ID3D11DepthStencilState> g_vrTestDepthStencilState;
 UINT g_vrTestIndexCount = 0;
 UINT g_vrGridVertexCount = 0;
 bool g_vrLoggedFirstTestFrame = false;
+
+ComPtr<ID3D11VertexShader> g_vrBlitVertexShader;
+ComPtr<ID3D11PixelShader> g_vrBlitPixelShader;
+ComPtr<ID3D11InputLayout> g_vrBlitInputLayout;
+ComPtr<ID3D11Buffer> g_vrBlitVertexBuffer;
+ComPtr<ID3D11SamplerState> g_vrBlitSampler;
+ComPtr<ID3D11Texture2D> g_vrCapturedFrameTexture;
+ComPtr<ID3D11ShaderResourceView> g_vrCapturedFrameView;
+
+std::uint32_t g_vrCapturedFrameWidth = 0;
+std::uint32_t g_vrCapturedFrameHeight = 0;
+std::uint64_t g_vrUploadedCaptureSerial = 0;
+bool g_vrLoggedFirstUpload = false;
 
 std::vector<XrViewConfigurationView> g_vrViewConfigs;
 std::vector<XrView> g_vrViews;
@@ -534,6 +548,301 @@ bool VR_TestCompileShader(
     // Keep the D3DCompiler module loaded for the process lifetime.
 // ID3DBlob instances returned by D3DCompile are implemented by this
 // DLL and may still be alive after this function returns.
+    return true;
+}
+
+
+struct VrBlitVertex
+{
+    float position[2];
+    float uv[2];
+};
+
+bool VR_CreateCapturedFrameBlitResources()
+{
+    static const char* shaderSource = R"(
+Texture2D capturedFrame : register(t0);
+SamplerState capturedSampler : register(s0);
+
+struct VertexInput
+{
+    float2 position : POSITION;
+    float2 uv : TEXCOORD0;
+};
+
+struct PixelInput
+{
+    float4 position : SV_POSITION;
+    float2 uv : TEXCOORD0;
+};
+
+PixelInput VSMain(VertexInput input)
+{
+    PixelInput output;
+    output.position = float4(input.position, 0.0f, 1.0f);
+    output.uv = input.uv;
+    return output;
+}
+
+float4 PSMain(PixelInput input) : SV_TARGET
+{
+    return capturedFrame.Sample(
+        capturedSampler,
+        input.uv);
+}
+)";
+
+    ComPtr<ID3DBlob> vertexCode;
+    ComPtr<ID3DBlob> pixelCode;
+
+    if (!VR_TestCompileShader(
+            shaderSource,
+            "VSMain",
+            "vs_4_0",
+            vertexCode))
+    {
+        return false;
+    }
+
+    if (!VR_TestCompileShader(
+            shaderSource,
+            "PSMain",
+            "ps_4_0",
+            pixelCode))
+    {
+        return false;
+    }
+
+    HRESULT hr =
+        g_vrD3dDevice->CreateVertexShader(
+            vertexCode->GetBufferPointer(),
+            vertexCode->GetBufferSize(),
+            nullptr,
+            g_vrBlitVertexShader.GetAddressOf());
+
+    if (FAILED(hr))
+    {
+        VR_LogHrFailure(
+            "CreateVertexShader(capture blit)",
+            hr);
+
+        return false;
+    }
+
+    hr =
+        g_vrD3dDevice->CreatePixelShader(
+            pixelCode->GetBufferPointer(),
+            pixelCode->GetBufferSize(),
+            nullptr,
+            g_vrBlitPixelShader.GetAddressOf());
+
+    if (FAILED(hr))
+    {
+        VR_LogHrFailure(
+            "CreatePixelShader(capture blit)",
+            hr);
+
+        return false;
+    }
+
+    const D3D11_INPUT_ELEMENT_DESC layout[] = {
+        {
+            "POSITION",
+            0,
+            DXGI_FORMAT_R32G32_FLOAT,
+            0,
+            0,
+            D3D11_INPUT_PER_VERTEX_DATA,
+            0,
+        },
+        {
+            "TEXCOORD",
+            0,
+            DXGI_FORMAT_R32G32_FLOAT,
+            0,
+            8,
+            D3D11_INPUT_PER_VERTEX_DATA,
+            0,
+        },
+    };
+
+    hr =
+        g_vrD3dDevice->CreateInputLayout(
+            layout,
+            2,
+            vertexCode->GetBufferPointer(),
+            vertexCode->GetBufferSize(),
+            g_vrBlitInputLayout.GetAddressOf());
+
+    if (FAILED(hr))
+    {
+        VR_LogHrFailure(
+            "CreateInputLayout(capture blit)",
+            hr);
+
+        return false;
+    }
+
+    static const VrBlitVertex vertices[] = {
+        {{-1.0f,  1.0f}, {0.0f, 0.0f}},
+        {{ 1.0f,  1.0f}, {1.0f, 0.0f}},
+        {{-1.0f, -1.0f}, {0.0f, 1.0f}},
+        {{ 1.0f, -1.0f}, {1.0f, 1.0f}},
+    };
+
+    D3D11_BUFFER_DESC vertexDescription = {};
+    vertexDescription.ByteWidth =
+        static_cast<UINT>(sizeof(vertices));
+    vertexDescription.Usage =
+        D3D11_USAGE_IMMUTABLE;
+    vertexDescription.BindFlags =
+        D3D11_BIND_VERTEX_BUFFER;
+
+    D3D11_SUBRESOURCE_DATA vertexData = {};
+    vertexData.pSysMem = vertices;
+
+    hr =
+        g_vrD3dDevice->CreateBuffer(
+            &vertexDescription,
+            &vertexData,
+            g_vrBlitVertexBuffer.GetAddressOf());
+
+    if (FAILED(hr))
+    {
+        VR_LogHrFailure(
+            "CreateBuffer(capture blit)",
+            hr);
+
+        return false;
+    }
+
+    D3D11_SAMPLER_DESC samplerDescription = {};
+    samplerDescription.Filter =
+        D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+    samplerDescription.AddressU =
+        D3D11_TEXTURE_ADDRESS_CLAMP;
+    samplerDescription.AddressV =
+        D3D11_TEXTURE_ADDRESS_CLAMP;
+    samplerDescription.AddressW =
+        D3D11_TEXTURE_ADDRESS_CLAMP;
+    samplerDescription.MaxLOD =
+        D3D11_FLOAT32_MAX;
+
+    hr =
+        g_vrD3dDevice->CreateSamplerState(
+            &samplerDescription,
+            g_vrBlitSampler.GetAddressOf());
+
+    if (FAILED(hr))
+    {
+        VR_LogHrFailure(
+            "CreateSamplerState(capture blit)",
+            hr);
+
+        return false;
+    }
+
+    Com_Printf(
+        0,
+        "[VR] D3D9 captured-frame blit resources created.\n");
+
+    return true;
+}
+
+bool VR_UpdateCapturedFrameTexture()
+{
+    std::vector<std::uint8_t> pixels;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    std::uint64_t serial = 0;
+
+    if (!VR_D3D9CopyLatestFrame(
+            g_vrUploadedCaptureSerial,
+            pixels,
+            width,
+            height,
+            serial))
+    {
+        return g_vrCapturedFrameView != nullptr;
+    }
+
+    if (!g_vrCapturedFrameTexture ||
+        width != g_vrCapturedFrameWidth ||
+        height != g_vrCapturedFrameHeight)
+    {
+        g_vrCapturedFrameView.Reset();
+        g_vrCapturedFrameTexture.Reset();
+
+        D3D11_TEXTURE2D_DESC textureDescription = {};
+        textureDescription.Width = width;
+        textureDescription.Height = height;
+        textureDescription.MipLevels = 1;
+        textureDescription.ArraySize = 1;
+        textureDescription.Format =
+            DXGI_FORMAT_B8G8R8A8_UNORM;
+        textureDescription.SampleDesc.Count = 1;
+        textureDescription.Usage =
+            D3D11_USAGE_DEFAULT;
+        textureDescription.BindFlags =
+            D3D11_BIND_SHADER_RESOURCE;
+
+        HRESULT hr =
+            g_vrD3dDevice->CreateTexture2D(
+                &textureDescription,
+                nullptr,
+                g_vrCapturedFrameTexture.GetAddressOf());
+
+        if (FAILED(hr))
+        {
+            VR_LogHrFailure(
+                "CreateTexture2D(captured frame)",
+                hr);
+
+            return false;
+        }
+
+        hr =
+            g_vrD3dDevice->CreateShaderResourceView(
+                g_vrCapturedFrameTexture.Get(),
+                nullptr,
+                g_vrCapturedFrameView.GetAddressOf());
+
+        if (FAILED(hr))
+        {
+            VR_LogHrFailure(
+                "CreateShaderResourceView(captured frame)",
+                hr);
+
+            g_vrCapturedFrameTexture.Reset();
+            return false;
+        }
+
+        g_vrCapturedFrameWidth = width;
+        g_vrCapturedFrameHeight = height;
+    }
+
+    g_vrD3dContext->UpdateSubresource(
+        g_vrCapturedFrameTexture.Get(),
+        0,
+        nullptr,
+        pixels.data(),
+        width * 4u,
+        0);
+
+    g_vrUploadedCaptureSerial = serial;
+
+    if (!g_vrLoggedFirstUpload)
+    {
+        Com_Printf(
+            0,
+            "[VR] Uploaded first D3D9 frame to D3D11: "
+            "%u x %u.\n",
+            width,
+            height);
+
+        g_vrLoggedFirstUpload = true;
+    }
+
     return true;
 }
 
@@ -1592,6 +1901,8 @@ bool VR_RenderSolidColorFrame(
 
     projectionViews.resize(locatedViewCount);
 
+    VR_UpdateCapturedFrameTexture();
+
     constexpr float clearColor[4] = {
         0.03f,
         0.08f,
@@ -1697,119 +2008,78 @@ bool VR_RenderSolidColorFrame(
             g_vrTestDepthStencilState.Get(),
             0);
 
-        g_vrD3dContext->IASetInputLayout(
-            g_vrTestInputLayout.Get());
+        if (g_vrCapturedFrameView)
+        {
+            g_vrD3dContext->OMSetRenderTargets(
+                1,
+                &renderTarget,
+                nullptr);
 
-        g_vrD3dContext->VSSetShader(
-            g_vrTestVertexShader.Get(),
-            nullptr,
-            0);
+            g_vrD3dContext->OMSetDepthStencilState(
+                nullptr,
+                0);
 
-        ID3D11Buffer* constantBuffer =
-            g_vrTestConstantBuffer.Get();
+            g_vrD3dContext->IASetInputLayout(
+                g_vrBlitInputLayout.Get());
 
-        g_vrD3dContext->VSSetConstantBuffers(
-            0,
-            1,
-            &constantBuffer);
+            const UINT stride =
+                sizeof(VrBlitVertex);
 
-        g_vrD3dContext->PSSetShader(
-            g_vrTestPixelShader.Get(),
-            nullptr,
-            0);
+            const UINT offset = 0;
 
-        const VrTestMatrix view =
-            VR_TestView(g_vrViews[eyeIndex].pose);
+            ID3D11Buffer* vertexBuffer =
+                g_vrBlitVertexBuffer.Get();
 
-        const VrTestMatrix projection =
-            VR_TestProjection(
-                g_vrViews[eyeIndex].fov,
-                0.05f,
-                100.0f);
+            g_vrD3dContext->IASetVertexBuffers(
+                0,
+                1,
+                &vertexBuffer,
+                &stride,
+                &offset);
 
-        // Draw the colored cube.
-        const UINT vertexStride = sizeof(VrTestVertex);
-        const UINT vertexOffset = 0;
+            g_vrD3dContext->IASetIndexBuffer(
+                nullptr,
+                DXGI_FORMAT_UNKNOWN,
+                0);
 
-        ID3D11Buffer* cubeVertexBuffer =
-            g_vrTestVertexBuffer.Get();
+            g_vrD3dContext->IASetPrimitiveTopology(
+                D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
 
-        g_vrD3dContext->IASetVertexBuffers(
-            0,
-            1,
-            &cubeVertexBuffer,
-            &vertexStride,
-            &vertexOffset);
+            g_vrD3dContext->VSSetShader(
+                g_vrBlitVertexShader.Get(),
+                nullptr,
+                0);
 
-        g_vrD3dContext->IASetIndexBuffer(
-            g_vrTestIndexBuffer.Get(),
-            DXGI_FORMAT_R16_UINT,
-            0);
+            g_vrD3dContext->PSSetShader(
+                g_vrBlitPixelShader.Get(),
+                nullptr,
+                0);
 
-        g_vrD3dContext->IASetPrimitiveTopology(
-            D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            ID3D11ShaderResourceView* capturedView =
+                g_vrCapturedFrameView.Get();
 
-        const VrTestMatrix cubeModel =
-            VR_TestTranslation(
-                0.0f,
-                -0.25f,
-                -2.50f);
+            g_vrD3dContext->PSSetShaderResources(
+                0,
+                1,
+                &capturedView);
 
-        VrTestConstants constants = {};
+            ID3D11SamplerState* sampler =
+                g_vrBlitSampler.Get();
 
-        constants.modelViewProjection =
-            VR_TestMultiply(
-                VR_TestMultiply(cubeModel, view),
-                projection);
+            g_vrD3dContext->PSSetSamplers(
+                0,
+                1,
+                &sampler);
 
-        g_vrD3dContext->UpdateSubresource(
-            g_vrTestConstantBuffer.Get(),
-            0,
-            nullptr,
-            &constants,
-            0,
-            0);
+            g_vrD3dContext->Draw(4, 0);
 
-        g_vrD3dContext->DrawIndexed(
-            g_vrTestIndexCount,
-            0,
-            0);
+            ID3D11ShaderResourceView* nullView = nullptr;
 
-        // Draw the floor grid in local-space world coordinates.
-        ID3D11Buffer* gridVertexBuffer =
-            g_vrGridVertexBuffer.Get();
-
-        g_vrD3dContext->IASetVertexBuffers(
-            0,
-            1,
-            &gridVertexBuffer,
-            &vertexStride,
-            &vertexOffset);
-
-        g_vrD3dContext->IASetIndexBuffer(
-            nullptr,
-            DXGI_FORMAT_UNKNOWN,
-            0);
-
-        g_vrD3dContext->IASetPrimitiveTopology(
-            D3D11_PRIMITIVE_TOPOLOGY_LINELIST);
-
-        constants.modelViewProjection =
-            VR_TestMultiply(
-                view,
-                projection);
-
-        g_vrD3dContext->UpdateSubresource(
-            g_vrTestConstantBuffer.Get(),
-            0,
-            nullptr,
-            &constants,
-            0,
-            0);
-
-        g_vrD3dContext->Draw(
-            g_vrGridVertexCount,
-            0);
+            g_vrD3dContext->PSSetShaderResources(
+                0,
+                1,
+                &nullView);
+        }
 
         g_vrD3dContext->Flush();
 
@@ -1869,7 +2139,7 @@ bool VR_RenderSolidColorFrame(
     {
         Com_Printf(
             0,
-            "[VR] Submitted first head-tracked cube-and-grid frame.\n");
+            "[VR] Submitted first OpenXR frame during D3D9 bridge.\n");
 
         g_vrLoggedFirstTestFrame = true;
     }
@@ -1900,7 +2170,7 @@ bool VR_Init()
 
     Com_Printf(
         0,
-        "[VR] Initializing OpenXR head-tracked cube-and-grid test...\n");
+        "[VR] Initializing OpenXR D3D9 frame-bridge diagnostic...\n");
 
     if (!VR_HasInstanceExtension(
             XR_KHR_D3D11_ENABLE_EXTENSION_NAME))
@@ -2039,6 +2309,14 @@ bool VR_Init()
         return false;
     }
 
+    if (!VR_CreateCapturedFrameBlitResources())
+    {
+        VR_Shutdown();
+        return false;
+    }
+
+    VR_D3D9CaptureSetEnabled(true);
+
     g_vrInitialized = true;
 
     Com_Printf(
@@ -2156,6 +2434,8 @@ void VR_Shutdown()
         0,
         "[VR] Shutting down OpenXR D3D11 subsystem...\n");
 
+    VR_D3D9CaptureSetEnabled(false);
+
     g_vrSessionRunning = false;
 
     for (VrEyeSwapchain& eyeSwapchain :
@@ -2194,6 +2474,19 @@ void VR_Shutdown()
         g_vrD3dContext->ClearState();
         g_vrD3dContext->Flush();
     }
+
+    g_vrCapturedFrameView.Reset();
+    g_vrCapturedFrameTexture.Reset();
+    g_vrBlitSampler.Reset();
+    g_vrBlitVertexBuffer.Reset();
+    g_vrBlitInputLayout.Reset();
+    g_vrBlitPixelShader.Reset();
+    g_vrBlitVertexShader.Reset();
+
+    g_vrCapturedFrameWidth = 0;
+    g_vrCapturedFrameHeight = 0;
+    g_vrUploadedCaptureSerial = 0;
+    g_vrLoggedFirstUpload = false;
 
     g_vrTestDepthStencilState.Reset();
     g_vrTestRasterizerState.Reset();
