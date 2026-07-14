@@ -11,6 +11,7 @@
 #elif KISAK_SP
 #include "g_main.h"
 #include "g_local.h"
+#include "vr/vr_openxr.h"
 #endif
 
 
@@ -553,6 +554,13 @@ void __cdecl FireWeapon(gentity_s *ent, int gametime)
     }
 }
 
+// VR aim snapshot used by CalcMuzzlePoints.
+// Placed here so it shares CalcMuzzlePoints' active compile scope.
+bool VR_GetRightControllerWeaponCommand(
+    float* gunPitch,
+    float* gunYaw,
+    bool* attackPressed);
+
 void __cdecl CalcMuzzlePoints(const gentity_s *ent, weaponParms *wp)
 {
     float viewang[3]; // [esp+4h] [ebp-Ch] BYREF
@@ -569,7 +577,77 @@ void __cdecl CalcMuzzlePoints(const gentity_s *ent, weaponParms *wp)
         viewang[0] = ent->client->fGunPitch;
         viewang[1] = ent->client->fGunYaw;
     }
+
+#if defined(KISAK_MP) && !defined(DEDICATED)
+    float vrGunPitch = 0.0f;
+    float vrGunYaw = 0.0f;
+    bool vrAttackPressed = false;
+
+    if (VR_GetRightControllerWeaponCommand(
+            &vrGunPitch,
+            &vrGunYaw,
+            &vrAttackPressed))
+    {
+        viewang[0] = vrGunPitch;
+        viewang[1] = vrGunYaw;
+
+        static bool loggedVrMuzzleAim = false;
+
+        if (!loggedVrMuzzleAim)
+        {
+            Com_Printf(
+                0,
+                "[VR] Applied right-controller aim at "
+                "CalcMuzzlePoints.\n");
+
+            loggedVrMuzzleAim = true;
+        }
+    }
+    else
+    {
+        static bool loggedMissingVrMuzzleAim = false;
+
+        if (!loggedMissingVrMuzzleAim)
+        {
+            Com_PrintWarning(
+                0,
+                "[VR] CalcMuzzlePoints could not read a valid "
+                "right-controller aim snapshot.\n");
+
+            loggedMissingVrMuzzleAim = true;
+        }
+    }
+#endif
+
     AngleVectors(viewang, wp->forward, wp->right, wp->up);
+
+#if defined(KISAK_MP) && !defined(DEDICATED)
+    if (vrAttackPressed)
+    {
+        static int vrMuzzleDiagnosticCount = 0;
+
+        if (vrMuzzleDiagnosticCount < 20)
+        {
+            Com_Printf(
+                0,
+                "[VR] Muzzle aim diagnostic %d: "
+                "controller angles %.3f %.3f, "
+                "player angles %.3f %.3f, "
+                "forward %.4f %.4f %.4f.\n",
+                vrMuzzleDiagnosticCount,
+                vrGunPitch,
+                vrGunYaw,
+                ent->client->ps.viewangles[0],
+                ent->client->ps.viewangles[1],
+                wp->forward[0],
+                wp->forward[1],
+                wp->forward[2]);
+
+            ++vrMuzzleDiagnosticCount;
+        }
+    }
+#endif
+
     G_GetPlayerViewOrigin(&ent->client->ps, wp->muzzleTrace);
 #ifdef KISAK_SP
     wp->muzzleTrace[0] = ent->client->fGunXOfs + wp->muzzleTrace[0];

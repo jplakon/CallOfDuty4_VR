@@ -293,6 +293,42 @@ void __cdecl Bullet_Fire(
         v9.start[1] = wp->muzzleTrace[1];
         v9.start[2] = wp->muzzleTrace[2];
         Bullet_Endpos(shotIndex + randSeed, spread, v9.end, v9.dir, wp, range);
+
+#ifdef KISAK_MP
+        if (shotIndex == 0)
+        {
+            static int vrBulletDiagnosticCount = 0;
+
+            if (vrBulletDiagnosticCount < 20)
+            {
+                const float bulletDelta[3] = {
+                    v9.end[0] - v9.start[0],
+                    v9.end[1] - v9.start[1],
+                    v9.end[2] - v9.start[2],
+                };
+
+                Com_Printf(
+                    0,
+                    "[VR] Bullet direction diagnostic %d: "
+                    "wp forward %.4f %.4f %.4f, "
+                    "dir %.4f %.4f %.4f, "
+                    "end delta %.2f %.2f %.2f.\n",
+                    vrBulletDiagnosticCount,
+                    wp->forward[0],
+                    wp->forward[1],
+                    wp->forward[2],
+                    v9.dir[0],
+                    v9.dir[1],
+                    v9.dir[2],
+                    bulletDelta[0],
+                    bulletDelta[1],
+                    bulletDelta[2]);
+
+                ++vrBulletDiagnosticCount;
+            }
+        }
+#endif
+
         if (bullet_penetrationEnabled->current.enabled && wp->weapDef->penetrateType)
             Bullet_FirePenetrate(&v9, wp->weapDef, attacker, randSeed);
         else

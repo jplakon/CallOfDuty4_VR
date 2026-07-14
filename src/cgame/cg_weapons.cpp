@@ -2598,6 +2598,12 @@ void __cdecl CG_FireWeapon(
 }
 
 #ifdef KISAK_MP
+// OpenXR weapon-command snapshot used by local client bullet effects.
+bool VR_GetRightControllerWeaponCommand(
+    float* gunPitch,
+    float* gunYaw,
+    bool* attackPressed);
+
 void __cdecl DrawBulletImpacts(
     int32_t localClientNum,
     const centity_s *ent,
@@ -2667,7 +2673,38 @@ void __cdecl DrawBulletImpacts(
             tracerStart[0] = gunOrient.origin[0];
             tracerStart[1] = gunOrient.origin[1];
             tracerStart[2] = gunOrient.origin[2];
-            AngleVectors(viewang, orient.axis[0], orient.axis[1], orient.axis[2]);
+
+            float vrGunPitch = 0.0f;
+            float vrGunYaw = 0.0f;
+            bool ignoredVrAttackPressed = false;
+
+            if (VR_GetRightControllerWeaponCommand(
+                    &vrGunPitch,
+                    &vrGunYaw,
+                    &ignoredVrAttackPressed))
+            {
+                viewang[0] = vrGunPitch;
+                viewang[1] = vrGunYaw;
+                viewang[2] = 0.0f;
+
+                static bool loggedClientVrBulletAim = false;
+
+                if (!loggedClientVrBulletAim)
+                {
+                    Com_Printf(
+                        0,
+                        "[VR] Applied right-controller aim to "
+                        "client-side bullet construction.\n");
+
+                    loggedClientVrBulletAim = true;
+                }
+            }
+
+            AngleVectors(
+                viewang,
+                orient.axis[0],
+                orient.axis[1],
+                orient.axis[2]);
         }
         drawTracers = cg_firstPersonTracerChance->current.value * 32768.0 > (double)rand();
         goto LABEL_33;
