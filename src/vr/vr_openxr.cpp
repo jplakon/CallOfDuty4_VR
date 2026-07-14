@@ -45,7 +45,14 @@ ComPtr<ID3D11VertexShader> g_vrTestVertexShader;
 ComPtr<ID3D11PixelShader> g_vrTestPixelShader;
 ComPtr<ID3D11InputLayout> g_vrTestInputLayout;
 ComPtr<ID3D11Buffer> g_vrTestVertexBuffer;
+ComPtr<ID3D11Buffer> g_vrTestIndexBuffer;
+ComPtr<ID3D11Buffer> g_vrGridVertexBuffer;
 ComPtr<ID3D11Buffer> g_vrTestConstantBuffer;
+ComPtr<ID3D11RasterizerState> g_vrTestRasterizerState;
+ComPtr<ID3D11DepthStencilState> g_vrTestDepthStencilState;
+
+UINT g_vrTestIndexCount = 0;
+UINT g_vrGridVertexCount = 0;
 bool g_vrLoggedFirstTestFrame = false;
 
 std::vector<XrViewConfigurationView> g_vrViewConfigs;
@@ -59,6 +66,8 @@ struct VrEyeSwapchain
 
     std::vector<XrSwapchainImageD3D11KHR> images;
     std::vector<ComPtr<ID3D11RenderTargetView>> renderTargetViews;
+    std::vector<ComPtr<ID3D11Texture2D>> depthTextures;
+    std::vector<ComPtr<ID3D11DepthStencilView>> depthStencilViews;
 };
 
 std::vector<VrEyeSwapchain> g_vrEyeSwapchains;
@@ -528,7 +537,7 @@ bool VR_TestCompileShader(
     return true;
 }
 
-bool VR_CreateHeadTrackedTriangle()
+bool VR_CreateHeadTrackedScene()
 {
     static const char* shaderSource = R"(
 cbuffer TestConstants : register(b0)
@@ -551,11 +560,13 @@ struct PixelInput
 PixelInput VSMain(VertexInput input)
 {
     PixelInput output;
-    // Apply the per-eye OpenXR view and projection matrices.
+
     output.position =
         mul(float4(input.position, 1.0f),
             modelViewProjection);
+
     output.color = input.color;
+
     return output;
 }
 
@@ -647,44 +658,153 @@ float4 PSMain(PixelInput input) : SV_TARGET
         return false;
     }
 
-    static const VrTestVertex vertices[] = {
-        // Draw the triangle twice with opposite winding so that back-face
-        // culling cannot hide it during this diagnostic.
-        {{ 0.0f,  0.75f, 0.0f}, {1.0f, 1.0f, 1.0f}},
-        {{-0.75f, -0.70f, 0.0f}, {1.0f, 0.0f, 1.0f}},
-        {{ 0.75f, -0.70f, 0.0f}, {0.0f, 1.0f, 1.0f}},
-
-        {{ 0.0f,  0.75f, 0.0f}, {1.0f, 1.0f, 1.0f}},
-        {{ 0.75f, -0.70f, 0.0f}, {0.0f, 1.0f, 1.0f}},
-        {{-0.75f, -0.70f, 0.0f}, {1.0f, 0.0f, 1.0f}},
+    static const VrTestVertex cubeVertices[] = {
+        {{-0.40f, -0.40f, -0.40f}, {1.0f, 0.1f, 0.1f}},
+        {{-0.40f,  0.40f, -0.40f}, {0.1f, 1.0f, 0.1f}},
+        {{ 0.40f,  0.40f, -0.40f}, {0.1f, 0.2f, 1.0f}},
+        {{ 0.40f, -0.40f, -0.40f}, {1.0f, 1.0f, 0.1f}},
+        {{-0.40f, -0.40f,  0.40f}, {1.0f, 0.1f, 1.0f}},
+        {{-0.40f,  0.40f,  0.40f}, {0.1f, 1.0f, 1.0f}},
+        {{ 0.40f,  0.40f,  0.40f}, {1.0f, 1.0f, 1.0f}},
+        {{ 0.40f, -0.40f,  0.40f}, {0.8f, 0.4f, 0.1f}},
     };
 
-    D3D11_BUFFER_DESC vertexDescription = {};
-    vertexDescription.ByteWidth =
-        static_cast<UINT>(sizeof(vertices));
-    vertexDescription.Usage = D3D11_USAGE_IMMUTABLE;
-    vertexDescription.BindFlags =
+    static const unsigned short cubeIndices[] = {
+        0, 1, 2,  0, 2, 3,
+        4, 6, 5,  4, 7, 6,
+        4, 5, 1,  4, 1, 0,
+        3, 2, 6,  3, 6, 7,
+        1, 5, 6,  1, 6, 2,
+        4, 0, 3,  4, 3, 7,
+    };
+
+    g_vrTestIndexCount =
+        static_cast<UINT>(
+            sizeof(cubeIndices) /
+            sizeof(cubeIndices[0]));
+
+    D3D11_BUFFER_DESC cubeVertexDescription = {};
+    cubeVertexDescription.ByteWidth =
+        static_cast<UINT>(sizeof(cubeVertices));
+    cubeVertexDescription.Usage =
+        D3D11_USAGE_IMMUTABLE;
+    cubeVertexDescription.BindFlags =
         D3D11_BIND_VERTEX_BUFFER;
 
-    D3D11_SUBRESOURCE_DATA vertexData = {};
-    vertexData.pSysMem = vertices;
+    D3D11_SUBRESOURCE_DATA cubeVertexData = {};
+    cubeVertexData.pSysMem = cubeVertices;
 
     hr =
         g_vrD3dDevice->CreateBuffer(
-            &vertexDescription,
-            &vertexData,
+            &cubeVertexDescription,
+            &cubeVertexData,
             g_vrTestVertexBuffer.GetAddressOf());
 
     if (FAILED(hr))
     {
-        VR_LogHrFailure("CreateBuffer(vertex)", hr);
+        VR_LogHrFailure("CreateBuffer(cube vertices)", hr);
+        return false;
+    }
+
+    D3D11_BUFFER_DESC cubeIndexDescription = {};
+    cubeIndexDescription.ByteWidth =
+        static_cast<UINT>(sizeof(cubeIndices));
+    cubeIndexDescription.Usage =
+        D3D11_USAGE_IMMUTABLE;
+    cubeIndexDescription.BindFlags =
+        D3D11_BIND_INDEX_BUFFER;
+
+    D3D11_SUBRESOURCE_DATA cubeIndexData = {};
+    cubeIndexData.pSysMem = cubeIndices;
+
+    hr =
+        g_vrD3dDevice->CreateBuffer(
+            &cubeIndexDescription,
+            &cubeIndexData,
+            g_vrTestIndexBuffer.GetAddressOf());
+
+    if (FAILED(hr))
+    {
+        VR_LogHrFailure("CreateBuffer(cube indices)", hr);
+        return false;
+    }
+
+    std::vector<VrTestVertex> gridVertices;
+
+    constexpr int gridHalfSize = 10;
+    constexpr float gridSpacing = 0.50f;
+    constexpr float gridY = -1.40f;
+
+    for (int line = -gridHalfSize;
+         line <= gridHalfSize;
+         ++line)
+    {
+        const float coordinate =
+            static_cast<float>(line) * gridSpacing;
+
+        const bool majorLine = (line % 5) == 0;
+
+        const float brightness =
+            majorLine ? 0.50f : 0.20f;
+
+        const float extent =
+            static_cast<float>(gridHalfSize) *
+            gridSpacing;
+
+        gridVertices.push_back({
+            {-extent, gridY, coordinate},
+            {brightness, brightness, brightness},
+        });
+
+        gridVertices.push_back({
+            { extent, gridY, coordinate},
+            {brightness, brightness, brightness},
+        });
+
+        gridVertices.push_back({
+            {coordinate, gridY, -extent},
+            {brightness, brightness, brightness},
+        });
+
+        gridVertices.push_back({
+            {coordinate, gridY,  extent},
+            {brightness, brightness, brightness},
+        });
+    }
+
+    g_vrGridVertexCount =
+        static_cast<UINT>(gridVertices.size());
+
+    D3D11_BUFFER_DESC gridDescription = {};
+    gridDescription.ByteWidth =
+        static_cast<UINT>(
+            gridVertices.size() *
+            sizeof(VrTestVertex));
+    gridDescription.Usage =
+        D3D11_USAGE_IMMUTABLE;
+    gridDescription.BindFlags =
+        D3D11_BIND_VERTEX_BUFFER;
+
+    D3D11_SUBRESOURCE_DATA gridData = {};
+    gridData.pSysMem = gridVertices.data();
+
+    hr =
+        g_vrD3dDevice->CreateBuffer(
+            &gridDescription,
+            &gridData,
+            g_vrGridVertexBuffer.GetAddressOf());
+
+    if (FAILED(hr))
+    {
+        VR_LogHrFailure("CreateBuffer(grid vertices)", hr);
         return false;
     }
 
     D3D11_BUFFER_DESC constantDescription = {};
     constantDescription.ByteWidth =
         sizeof(VrTestConstants);
-    constantDescription.Usage = D3D11_USAGE_DEFAULT;
+    constantDescription.Usage =
+        D3D11_USAGE_DEFAULT;
     constantDescription.BindFlags =
         D3D11_BIND_CONSTANT_BUFFER;
 
@@ -700,9 +820,43 @@ float4 PSMain(PixelInput input) : SV_TARGET
         return false;
     }
 
+    D3D11_RASTERIZER_DESC rasterizerDescription = {};
+    rasterizerDescription.FillMode = D3D11_FILL_SOLID;
+    rasterizerDescription.CullMode = D3D11_CULL_NONE;
+    rasterizerDescription.DepthClipEnable = TRUE;
+
+    hr =
+        g_vrD3dDevice->CreateRasterizerState(
+            &rasterizerDescription,
+            g_vrTestRasterizerState.GetAddressOf());
+
+    if (FAILED(hr))
+    {
+        VR_LogHrFailure("CreateRasterizerState", hr);
+        return false;
+    }
+
+    D3D11_DEPTH_STENCIL_DESC depthDescription = {};
+    depthDescription.DepthEnable = TRUE;
+    depthDescription.DepthWriteMask =
+        D3D11_DEPTH_WRITE_MASK_ALL;
+    depthDescription.DepthFunc =
+        D3D11_COMPARISON_LESS_EQUAL;
+
+    hr =
+        g_vrD3dDevice->CreateDepthStencilState(
+            &depthDescription,
+            g_vrTestDepthStencilState.GetAddressOf());
+
+    if (FAILED(hr))
+    {
+        VR_LogHrFailure("CreateDepthStencilState", hr);
+        return false;
+    }
+
     Com_Printf(
         0,
-        "[VR] Head-tracked triangle resources created.\n");
+        "[VR] Head-tracked cube and floor-grid resources created.\n");
 
     return true;
 }
@@ -1099,6 +1253,8 @@ bool VR_CreateSwapchains()
         }
 
         eyeSwapchain.renderTargetViews.resize(imageCount);
+        eyeSwapchain.depthTextures.resize(imageCount);
+        eyeSwapchain.depthStencilViews.resize(imageCount);
 
         for (uint32_t imageIndex = 0;
              imageIndex < imageCount;
@@ -1191,6 +1347,58 @@ bool VR_CreateSwapchains()
                 VR_LogHrFailure(
                     "ID3D11Device::CreateRenderTargetView",
                     hr);
+
+                return false;
+            }
+
+            D3D11_TEXTURE2D_DESC depthTextureDescription = {};
+            depthTextureDescription.Width =
+                textureDescription.Width;
+            depthTextureDescription.Height =
+                textureDescription.Height;
+            depthTextureDescription.MipLevels = 1;
+            depthTextureDescription.ArraySize = 1;
+            depthTextureDescription.Format =
+                DXGI_FORMAT_D24_UNORM_S8_UINT;
+            depthTextureDescription.SampleDesc =
+                textureDescription.SampleDesc;
+            depthTextureDescription.Usage =
+                D3D11_USAGE_DEFAULT;
+            depthTextureDescription.BindFlags =
+                D3D11_BIND_DEPTH_STENCIL;
+
+            HRESULT depthHr =
+                g_vrD3dDevice->CreateTexture2D(
+                    &depthTextureDescription,
+                    nullptr,
+                    eyeSwapchain
+                        .depthTextures[imageIndex]
+                        .GetAddressOf());
+
+            if (FAILED(depthHr))
+            {
+                VR_LogHrFailure(
+                    "CreateTexture2D(depth)",
+                    depthHr);
+
+                return false;
+            }
+
+            depthHr =
+                g_vrD3dDevice->CreateDepthStencilView(
+                    eyeSwapchain
+                        .depthTextures[imageIndex]
+                        .Get(),
+                    nullptr,
+                    eyeSwapchain
+                        .depthStencilViews[imageIndex]
+                        .GetAddressOf());
+
+            if (FAILED(depthHr))
+            {
+                VR_LogHrFailure(
+                    "CreateDepthStencilView",
+                    depthHr);
 
                 return false;
             }
@@ -1452,14 +1660,26 @@ bool VR_RenderSolidColorFrame(
                 .renderTargetViews[imageIndex]
                 .Get();
 
+        ID3D11DepthStencilView* depthStencilView =
+            eyeSwapchain
+                .depthStencilViews[imageIndex]
+                .Get();
+
         g_vrD3dContext->OMSetRenderTargets(
             1,
             &renderTarget,
-            nullptr);
+            depthStencilView);
 
         g_vrD3dContext->ClearRenderTargetView(
             renderTarget,
             clearColor);
+
+        g_vrD3dContext->ClearDepthStencilView(
+            depthStencilView,
+            D3D11_CLEAR_DEPTH |
+                D3D11_CLEAR_STENCIL,
+            1.0f,
+            0);
 
         D3D11_VIEWPORT viewport = {};
         viewport.Width =
@@ -1470,24 +1690,15 @@ bool VR_RenderSolidColorFrame(
         viewport.MaxDepth = 1.0f;
 
         g_vrD3dContext->RSSetViewports(1, &viewport);
+        g_vrD3dContext->RSSetState(
+            g_vrTestRasterizerState.Get());
 
-        const UINT stride = sizeof(VrTestVertex);
-        const UINT offset = 0;
-        ID3D11Buffer* vertexBuffer =
-            g_vrTestVertexBuffer.Get();
+        g_vrD3dContext->OMSetDepthStencilState(
+            g_vrTestDepthStencilState.Get(),
+            0);
 
         g_vrD3dContext->IASetInputLayout(
             g_vrTestInputLayout.Get());
-
-        g_vrD3dContext->IASetVertexBuffers(
-            0,
-            1,
-            &vertexBuffer,
-            &stride,
-            &offset);
-
-        g_vrD3dContext->IASetPrimitiveTopology(
-            D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
         g_vrD3dContext->VSSetShader(
             g_vrTestVertexShader.Get(),
@@ -1507,9 +1718,6 @@ bool VR_RenderSolidColorFrame(
             nullptr,
             0);
 
-        const VrTestMatrix model =
-            VR_TestTranslation(0.0f, 0.0f, -2.0f);
-
         const VrTestMatrix view =
             VR_TestView(g_vrViews[eyeIndex].pose);
 
@@ -1519,10 +1727,39 @@ bool VR_RenderSolidColorFrame(
                 0.05f,
                 100.0f);
 
+        // Draw the colored cube.
+        const UINT vertexStride = sizeof(VrTestVertex);
+        const UINT vertexOffset = 0;
+
+        ID3D11Buffer* cubeVertexBuffer =
+            g_vrTestVertexBuffer.Get();
+
+        g_vrD3dContext->IASetVertexBuffers(
+            0,
+            1,
+            &cubeVertexBuffer,
+            &vertexStride,
+            &vertexOffset);
+
+        g_vrD3dContext->IASetIndexBuffer(
+            g_vrTestIndexBuffer.Get(),
+            DXGI_FORMAT_R16_UINT,
+            0);
+
+        g_vrD3dContext->IASetPrimitiveTopology(
+            D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+        const VrTestMatrix cubeModel =
+            VR_TestTranslation(
+                0.0f,
+                -0.25f,
+                -2.50f);
+
         VrTestConstants constants = {};
+
         constants.modelViewProjection =
             VR_TestMultiply(
-                VR_TestMultiply(model, view),
+                VR_TestMultiply(cubeModel, view),
                 projection);
 
         g_vrD3dContext->UpdateSubresource(
@@ -1533,7 +1770,47 @@ bool VR_RenderSolidColorFrame(
             0,
             0);
 
-        g_vrD3dContext->Draw(6, 0);
+        g_vrD3dContext->DrawIndexed(
+            g_vrTestIndexCount,
+            0,
+            0);
+
+        // Draw the floor grid in local-space world coordinates.
+        ID3D11Buffer* gridVertexBuffer =
+            g_vrGridVertexBuffer.Get();
+
+        g_vrD3dContext->IASetVertexBuffers(
+            0,
+            1,
+            &gridVertexBuffer,
+            &vertexStride,
+            &vertexOffset);
+
+        g_vrD3dContext->IASetIndexBuffer(
+            nullptr,
+            DXGI_FORMAT_UNKNOWN,
+            0);
+
+        g_vrD3dContext->IASetPrimitiveTopology(
+            D3D11_PRIMITIVE_TOPOLOGY_LINELIST);
+
+        constants.modelViewProjection =
+            VR_TestMultiply(
+                view,
+                projection);
+
+        g_vrD3dContext->UpdateSubresource(
+            g_vrTestConstantBuffer.Get(),
+            0,
+            nullptr,
+            &constants,
+            0,
+            0);
+
+        g_vrD3dContext->Draw(
+            g_vrGridVertexCount,
+            0);
+
         g_vrD3dContext->Flush();
 
         XrSwapchainImageReleaseInfo releaseInfo{
@@ -1592,7 +1869,7 @@ bool VR_RenderSolidColorFrame(
     {
         Com_Printf(
             0,
-            "[VR] Submitted first double-sided head-tracked triangle frame.\n");
+            "[VR] Submitted first head-tracked cube-and-grid frame.\n");
 
         g_vrLoggedFirstTestFrame = true;
     }
@@ -1623,7 +1900,7 @@ bool VR_Init()
 
     Com_Printf(
         0,
-        "[VR] Initializing OpenXR double-sided head-tracked triangle test...\n");
+        "[VR] Initializing OpenXR head-tracked cube-and-grid test...\n");
 
     if (!VR_HasInstanceExtension(
             XR_KHR_D3D11_ENABLE_EXTENSION_NAME))
@@ -1756,7 +2033,7 @@ bool VR_Init()
         return false;
     }
 
-    if (!VR_CreateHeadTrackedTriangle())
+    if (!VR_CreateHeadTrackedScene())
     {
         VR_Shutdown();
         return false;
@@ -1884,6 +2161,8 @@ void VR_Shutdown()
     for (VrEyeSwapchain& eyeSwapchain :
          g_vrEyeSwapchains)
     {
+        eyeSwapchain.depthStencilViews.clear();
+        eyeSwapchain.depthTextures.clear();
         eyeSwapchain.renderTargetViews.clear();
         eyeSwapchain.images.clear();
 
@@ -1916,11 +2195,18 @@ void VR_Shutdown()
         g_vrD3dContext->Flush();
     }
 
+    g_vrTestDepthStencilState.Reset();
+    g_vrTestRasterizerState.Reset();
     g_vrTestConstantBuffer.Reset();
+    g_vrGridVertexBuffer.Reset();
+    g_vrTestIndexBuffer.Reset();
     g_vrTestVertexBuffer.Reset();
     g_vrTestInputLayout.Reset();
     g_vrTestPixelShader.Reset();
     g_vrTestVertexShader.Reset();
+
+    g_vrTestIndexCount = 0;
+    g_vrGridVertexCount = 0;
     g_vrLoggedFirstTestFrame = false;
 
     g_vrD3dContext.Reset();
