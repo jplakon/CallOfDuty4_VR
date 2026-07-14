@@ -91,3 +91,19 @@ else()
 # Tracy
     include(${SCRIPTS_DIR}/extern/tracy.cmake)
 endif()
+
+# KISAK_OPENXR_D3D11_SOLID_FRAME_BEGIN
+target_compile_definitions(
+    ${PROJECT_NAME}
+    PRIVATE
+        XR_USE_PLATFORM_WIN32
+        XR_USE_GRAPHICS_API_D3D11
+)
+
+target_link_libraries(
+    ${PROJECT_NAME}
+    PRIVATE
+        d3d11
+        dxgi
+)
+# KISAK_OPENXR_D3D11_SOLID_FRAME_END

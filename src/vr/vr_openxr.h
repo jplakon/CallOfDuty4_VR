@@ -1,16 +1,17 @@
 #pragma once
 
-// Initializes the persistent OpenXR runtime connection.
+// Initializes OpenXR, creates a dedicated D3D11 device, creates an OpenXR
+// session, and prepares one color swapchain for each eye.
 //
-// This currently creates an instance and selects the HMD, but it does not
-// create a graphics session or submit images yet.
+// The normal Call of Duty Direct3D 9 renderer remains untouched.
 bool VR_Init();
 
-// Polls OpenXR runtime events. Call once per game frame.
+// Polls OpenXR events and, while the session is running, submits a solid-color
+// stereo frame to the headset. Call once per game frame.
 void VR_Frame();
 
-// Releases all OpenXR resources.
+// Releases swapchains, session, D3D11 resources, and the OpenXR instance.
 void VR_Shutdown();
 
-// Returns true while the OpenXR instance is active.
+// Returns true after OpenXR and its D3D11 session have initialized.
 bool VR_IsInitialized();

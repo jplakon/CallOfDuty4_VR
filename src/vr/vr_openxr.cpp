@@ -2,21 +2,1108 @@
 
 #include "qcommon/qcommon.h"
 
-#include <openxr/openxr.h>
+#include <Windows.h>
+#include <d3d11.h>
+#include <dxgi.h>
+#include <wrl/client.h>
 
+#include <openxr/openxr.h>
+#include <openxr/openxr_platform.h>
+
+#include <algorithm>
+#include <array>
 #include <cstdio>
+#include <cstring>
+#include <vector>
 
 namespace
 {
+using Microsoft::WRL::ComPtr;
+
+constexpr XrViewConfigurationType kViewConfiguration =
+    XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
+
 XrInstance g_vrInstance = XR_NULL_HANDLE;
 XrSystemId g_vrSystemId = XR_NULL_SYSTEM_ID;
-bool g_vrInitialized = false;
+XrSession g_vrSession = XR_NULL_HANDLE;
+XrSpace g_vrAppSpace = XR_NULL_HANDLE;
 
-void VR_ResetHandles()
+XrSessionState g_vrSessionState = XR_SESSION_STATE_UNKNOWN;
+XrEnvironmentBlendMode g_vrBlendMode =
+    XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+
+bool g_vrInitialized = false;
+bool g_vrSessionRunning = false;
+bool g_vrExitRequested = false;
+
+ComPtr<ID3D11Device> g_vrD3dDevice;
+ComPtr<ID3D11DeviceContext> g_vrD3dContext;
+
+std::vector<XrViewConfigurationView> g_vrViewConfigs;
+std::vector<XrView> g_vrViews;
+
+struct VrEyeSwapchain
+{
+    XrSwapchain handle = XR_NULL_HANDLE;
+    int32_t width = 0;
+    int32_t height = 0;
+
+    std::vector<XrSwapchainImageD3D11KHR> images;
+    std::vector<ComPtr<ID3D11RenderTargetView>> renderTargetViews;
+};
+
+std::vector<VrEyeSwapchain> g_vrEyeSwapchains;
+
+const char* VR_SessionStateName(const XrSessionState state)
+{
+    switch (state)
+    {
+        case XR_SESSION_STATE_UNKNOWN:
+            return "UNKNOWN";
+        case XR_SESSION_STATE_IDLE:
+            return "IDLE";
+        case XR_SESSION_STATE_READY:
+            return "READY";
+        case XR_SESSION_STATE_SYNCHRONIZED:
+            return "SYNCHRONIZED";
+        case XR_SESSION_STATE_VISIBLE:
+            return "VISIBLE";
+        case XR_SESSION_STATE_FOCUSED:
+            return "FOCUSED";
+        case XR_SESSION_STATE_STOPPING:
+            return "STOPPING";
+        case XR_SESSION_STATE_LOSS_PENDING:
+            return "LOSS_PENDING";
+        case XR_SESSION_STATE_EXITING:
+            return "EXITING";
+        default:
+            return "UNRECOGNIZED";
+    }
+}
+
+void VR_LogXrFailure(const char* operation, const XrResult result)
+{
+    char resultText[XR_MAX_RESULT_STRING_SIZE] = {};
+
+    if (g_vrInstance != XR_NULL_HANDLE &&
+        XR_SUCCEEDED(
+            xrResultToString(
+                g_vrInstance,
+                result,
+                resultText)))
+    {
+        Com_PrintWarning(
+            0,
+            "[VR] %s failed: %s (%d).\n",
+            operation,
+            resultText,
+            static_cast<int>(result));
+    }
+    else
+    {
+        Com_PrintWarning(
+            0,
+            "[VR] %s failed with result %d.\n",
+            operation,
+            static_cast<int>(result));
+    }
+}
+
+void VR_LogHrFailure(const char* operation, const HRESULT hr)
+{
+    Com_PrintWarning(
+        0,
+        "[VR] %s failed with HRESULT 0x%08lX.\n",
+        operation,
+        static_cast<unsigned long>(hr));
+}
+
+bool VR_HasInstanceExtension(const char* requestedExtension)
+{
+    uint32_t extensionCount = 0;
+
+    XrResult result =
+        xrEnumerateInstanceExtensionProperties(
+            nullptr,
+            0,
+            &extensionCount,
+            nullptr);
+
+    if (XR_FAILED(result))
+    {
+        VR_LogXrFailure(
+            "xrEnumerateInstanceExtensionProperties(count)",
+            result);
+
+        return false;
+    }
+
+    std::vector<XrExtensionProperties> extensions(extensionCount);
+
+    for (XrExtensionProperties& extension : extensions)
+    {
+        extension = XrExtensionProperties{
+            XR_TYPE_EXTENSION_PROPERTIES
+        };
+    }
+
+    result =
+        xrEnumerateInstanceExtensionProperties(
+            nullptr,
+            extensionCount,
+            &extensionCount,
+            extensions.data());
+
+    if (XR_FAILED(result))
+    {
+        VR_LogXrFailure(
+            "xrEnumerateInstanceExtensionProperties(list)",
+            result);
+
+        return false;
+    }
+
+    for (const XrExtensionProperties& extension : extensions)
+    {
+        if (std::strcmp(
+                extension.extensionName,
+                requestedExtension) == 0)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool VR_LuidMatches(const LUID& left, const LUID& right)
+{
+    return
+        left.LowPart == right.LowPart &&
+        left.HighPart == right.HighPart;
+}
+
+bool VR_CreateD3D11Device(
+    const XrGraphicsRequirementsD3D11KHR& requirements)
+{
+    ComPtr<IDXGIFactory> factory;
+
+    HRESULT hr =
+        CreateDXGIFactory(
+            IID_PPV_ARGS(factory.GetAddressOf()));
+
+    if (FAILED(hr))
+    {
+        VR_LogHrFailure("CreateDXGIFactory", hr);
+        return false;
+    }
+
+    ComPtr<IDXGIAdapter> selectedAdapter;
+
+    for (UINT adapterIndex = 0; ; ++adapterIndex)
+    {
+        ComPtr<IDXGIAdapter> candidateAdapter;
+
+        hr = factory->EnumAdapters(
+            adapterIndex,
+            candidateAdapter.GetAddressOf());
+
+        if (hr == DXGI_ERROR_NOT_FOUND)
+        {
+            break;
+        }
+
+        if (FAILED(hr))
+        {
+            VR_LogHrFailure("IDXGIFactory::EnumAdapters", hr);
+            return false;
+        }
+
+        DXGI_ADAPTER_DESC description = {};
+
+        hr = candidateAdapter->GetDesc(&description);
+
+        if (FAILED(hr))
+        {
+            VR_LogHrFailure("IDXGIAdapter::GetDesc", hr);
+            return false;
+        }
+
+        if (VR_LuidMatches(
+                description.AdapterLuid,
+                requirements.adapterLuid))
+        {
+            selectedAdapter = candidateAdapter;
+            break;
+        }
+    }
+
+    if (!selectedAdapter)
+    {
+        Com_PrintWarning(
+            0,
+            "[VR] Could not find the DXGI adapter requested by OpenXR.\n");
+
+        return false;
+    }
+
+    // The June 2010 DirectX SDK headers stop at feature level 11_0.
+    // OpenXR already tells us the minimum level required by the runtime, so
+    // request that exact level without referring to newer enum constants.
+    D3D_FEATURE_LEVEL requestedFeatureLevel =
+        requirements.minFeatureLevel;
+
+    D3D_FEATURE_LEVEL createdFeatureLevel =
+        D3D_FEATURE_LEVEL_10_0;
+
+    hr = D3D11CreateDevice(
+        selectedAdapter.Get(),
+        D3D_DRIVER_TYPE_UNKNOWN,
+        nullptr,
+        D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+        &requestedFeatureLevel,
+        1,
+        D3D11_SDK_VERSION,
+        g_vrD3dDevice.GetAddressOf(),
+        &createdFeatureLevel,
+        g_vrD3dContext.GetAddressOf());
+
+    if (FAILED(hr))
+    {
+        VR_LogHrFailure("D3D11CreateDevice", hr);
+        return false;
+    }
+
+    Com_Printf(
+        0,
+        "[VR] Created OpenXR D3D11 device at feature level 0x%X.\n",
+        static_cast<unsigned int>(createdFeatureLevel));
+
+    return true;
+}
+
+bool VR_SelectEnvironmentBlendMode()
+{
+    uint32_t blendModeCount = 0;
+
+    XrResult result =
+        xrEnumerateEnvironmentBlendModes(
+            g_vrInstance,
+            g_vrSystemId,
+            kViewConfiguration,
+            0,
+            &blendModeCount,
+            nullptr);
+
+    if (XR_FAILED(result) || blendModeCount == 0)
+    {
+        VR_LogXrFailure(
+            "xrEnumerateEnvironmentBlendModes(count)",
+            result);
+
+        return false;
+    }
+
+    std::vector<XrEnvironmentBlendMode> blendModes(
+        blendModeCount);
+
+    result =
+        xrEnumerateEnvironmentBlendModes(
+            g_vrInstance,
+            g_vrSystemId,
+            kViewConfiguration,
+            blendModeCount,
+            &blendModeCount,
+            blendModes.data());
+
+    if (XR_FAILED(result))
+    {
+        VR_LogXrFailure(
+            "xrEnumerateEnvironmentBlendModes(list)",
+            result);
+
+        return false;
+    }
+
+    const auto opaque =
+        std::find(
+            blendModes.begin(),
+            blendModes.end(),
+            XR_ENVIRONMENT_BLEND_MODE_OPAQUE);
+
+    g_vrBlendMode =
+        opaque != blendModes.end()
+            ? XR_ENVIRONMENT_BLEND_MODE_OPAQUE
+            : blendModes.front();
+
+    return true;
+}
+
+bool VR_CreateSession()
+{
+    PFN_xrGetD3D11GraphicsRequirementsKHR
+        getD3D11GraphicsRequirements = nullptr;
+
+    XrResult result =
+        xrGetInstanceProcAddr(
+            g_vrInstance,
+            "xrGetD3D11GraphicsRequirementsKHR",
+            reinterpret_cast<PFN_xrVoidFunction*>(
+                &getD3D11GraphicsRequirements));
+
+    if (XR_FAILED(result) ||
+        getD3D11GraphicsRequirements == nullptr)
+    {
+        VR_LogXrFailure(
+            "xrGetInstanceProcAddr("
+            "xrGetD3D11GraphicsRequirementsKHR)",
+            result);
+
+        return false;
+    }
+
+    XrGraphicsRequirementsD3D11KHR requirements{
+        XR_TYPE_GRAPHICS_REQUIREMENTS_D3D11_KHR
+    };
+
+    result =
+        getD3D11GraphicsRequirements(
+            g_vrInstance,
+            g_vrSystemId,
+            &requirements);
+
+    if (XR_FAILED(result))
+    {
+        VR_LogXrFailure(
+            "xrGetD3D11GraphicsRequirementsKHR",
+            result);
+
+        return false;
+    }
+
+    if (!VR_CreateD3D11Device(requirements))
+    {
+        return false;
+    }
+
+    XrGraphicsBindingD3D11KHR graphicsBinding{
+        XR_TYPE_GRAPHICS_BINDING_D3D11_KHR
+    };
+
+    graphicsBinding.device = g_vrD3dDevice.Get();
+
+    XrSessionCreateInfo sessionCreateInfo{
+        XR_TYPE_SESSION_CREATE_INFO
+    };
+
+    sessionCreateInfo.next = &graphicsBinding;
+    sessionCreateInfo.systemId = g_vrSystemId;
+
+    result =
+        xrCreateSession(
+            g_vrInstance,
+            &sessionCreateInfo,
+            &g_vrSession);
+
+    if (XR_FAILED(result))
+    {
+        VR_LogXrFailure("xrCreateSession", result);
+        return false;
+    }
+
+    XrReferenceSpaceCreateInfo spaceCreateInfo{
+        XR_TYPE_REFERENCE_SPACE_CREATE_INFO
+    };
+
+    spaceCreateInfo.referenceSpaceType =
+        XR_REFERENCE_SPACE_TYPE_LOCAL;
+
+    spaceCreateInfo.poseInReferenceSpace.orientation.w = 1.0f;
+
+    result =
+        xrCreateReferenceSpace(
+            g_vrSession,
+            &spaceCreateInfo,
+            &g_vrAppSpace);
+
+    if (XR_FAILED(result))
+    {
+        VR_LogXrFailure("xrCreateReferenceSpace", result);
+        return false;
+    }
+
+    return VR_SelectEnvironmentBlendMode();
+}
+
+int64_t VR_SelectSwapchainFormat(
+    const std::vector<int64_t>& runtimeFormats)
+{
+    constexpr std::array<DXGI_FORMAT, 4> preferredFormats = {
+        DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+        DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
+        DXGI_FORMAT_R8G8B8A8_UNORM,
+        DXGI_FORMAT_B8G8R8A8_UNORM,
+    };
+
+    for (const DXGI_FORMAT preferredFormat : preferredFormats)
+    {
+        const int64_t candidate =
+            static_cast<int64_t>(preferredFormat);
+
+        if (std::find(
+                runtimeFormats.begin(),
+                runtimeFormats.end(),
+                candidate) != runtimeFormats.end())
+        {
+            return candidate;
+        }
+    }
+
+    return -1;
+}
+
+bool VR_CreateSwapchains()
+{
+    uint32_t viewCount = 0;
+
+    XrResult result =
+        xrEnumerateViewConfigurationViews(
+            g_vrInstance,
+            g_vrSystemId,
+            kViewConfiguration,
+            0,
+            &viewCount,
+            nullptr);
+
+    if (XR_FAILED(result) || viewCount == 0)
+    {
+        VR_LogXrFailure(
+            "xrEnumerateViewConfigurationViews(count)",
+            result);
+
+        return false;
+    }
+
+    g_vrViewConfigs.resize(viewCount);
+
+    for (XrViewConfigurationView& viewConfig :
+         g_vrViewConfigs)
+    {
+        viewConfig = XrViewConfigurationView{
+            XR_TYPE_VIEW_CONFIGURATION_VIEW
+        };
+    }
+
+    result =
+        xrEnumerateViewConfigurationViews(
+            g_vrInstance,
+            g_vrSystemId,
+            kViewConfiguration,
+            viewCount,
+            &viewCount,
+            g_vrViewConfigs.data());
+
+    if (XR_FAILED(result))
+    {
+        VR_LogXrFailure(
+            "xrEnumerateViewConfigurationViews(list)",
+            result);
+
+        return false;
+    }
+
+    if (viewCount != 2)
+    {
+        Com_PrintWarning(
+            0,
+            "[VR] Expected two stereo views but runtime returned %u.\n",
+            viewCount);
+
+        return false;
+    }
+
+    uint32_t formatCount = 0;
+
+    result =
+        xrEnumerateSwapchainFormats(
+            g_vrSession,
+            0,
+            &formatCount,
+            nullptr);
+
+    if (XR_FAILED(result) || formatCount == 0)
+    {
+        VR_LogXrFailure(
+            "xrEnumerateSwapchainFormats(count)",
+            result);
+
+        return false;
+    }
+
+    std::vector<int64_t> runtimeFormats(formatCount);
+
+    result =
+        xrEnumerateSwapchainFormats(
+            g_vrSession,
+            formatCount,
+            &formatCount,
+            runtimeFormats.data());
+
+    if (XR_FAILED(result))
+    {
+        VR_LogXrFailure(
+            "xrEnumerateSwapchainFormats(list)",
+            result);
+
+        return false;
+    }
+
+    const int64_t selectedFormat =
+        VR_SelectSwapchainFormat(runtimeFormats);
+
+    if (selectedFormat < 0)
+    {
+        Com_PrintWarning(
+            0,
+            "[VR] Runtime did not expose a supported RGBA/BGRA "
+            "swapchain format.\n");
+
+        return false;
+    }
+
+    g_vrEyeSwapchains.resize(viewCount);
+    g_vrViews.resize(viewCount);
+
+    for (XrView& view : g_vrViews)
+    {
+        view = XrView{XR_TYPE_VIEW};
+    }
+
+    for (uint32_t eyeIndex = 0;
+         eyeIndex < viewCount;
+         ++eyeIndex)
+    {
+        const XrViewConfigurationView& viewConfig =
+            g_vrViewConfigs[eyeIndex];
+
+        VrEyeSwapchain& eyeSwapchain =
+            g_vrEyeSwapchains[eyeIndex];
+
+        eyeSwapchain.width =
+            static_cast<int32_t>(
+                viewConfig.recommendedImageRectWidth);
+
+        eyeSwapchain.height =
+            static_cast<int32_t>(
+                viewConfig.recommendedImageRectHeight);
+
+        XrSwapchainCreateInfo swapchainCreateInfo{
+            XR_TYPE_SWAPCHAIN_CREATE_INFO
+        };
+
+        swapchainCreateInfo.usageFlags =
+            XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT |
+            XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
+
+        swapchainCreateInfo.format = selectedFormat;
+        swapchainCreateInfo.sampleCount =
+            viewConfig.recommendedSwapchainSampleCount;
+        swapchainCreateInfo.width =
+            viewConfig.recommendedImageRectWidth;
+        swapchainCreateInfo.height =
+            viewConfig.recommendedImageRectHeight;
+        swapchainCreateInfo.faceCount = 1;
+        swapchainCreateInfo.arraySize = 1;
+        swapchainCreateInfo.mipCount = 1;
+
+        result =
+            xrCreateSwapchain(
+                g_vrSession,
+                &swapchainCreateInfo,
+                &eyeSwapchain.handle);
+
+        if (XR_FAILED(result))
+        {
+            VR_LogXrFailure("xrCreateSwapchain", result);
+            return false;
+        }
+
+        uint32_t imageCount = 0;
+
+        result =
+            xrEnumerateSwapchainImages(
+                eyeSwapchain.handle,
+                0,
+                &imageCount,
+                nullptr);
+
+        if (XR_FAILED(result) || imageCount == 0)
+        {
+            VR_LogXrFailure(
+                "xrEnumerateSwapchainImages(count)",
+                result);
+
+            return false;
+        }
+
+        eyeSwapchain.images.resize(imageCount);
+
+        for (XrSwapchainImageD3D11KHR& image :
+             eyeSwapchain.images)
+        {
+            image = XrSwapchainImageD3D11KHR{
+                XR_TYPE_SWAPCHAIN_IMAGE_D3D11_KHR
+            };
+        }
+
+        result =
+            xrEnumerateSwapchainImages(
+                eyeSwapchain.handle,
+                imageCount,
+                &imageCount,
+                reinterpret_cast<XrSwapchainImageBaseHeader*>(
+                    eyeSwapchain.images.data()));
+
+        if (XR_FAILED(result))
+        {
+            VR_LogXrFailure(
+                "xrEnumerateSwapchainImages(list)",
+                result);
+
+            return false;
+        }
+
+        eyeSwapchain.renderTargetViews.resize(imageCount);
+
+        for (uint32_t imageIndex = 0;
+             imageIndex < imageCount;
+             ++imageIndex)
+        {
+            ID3D11Texture2D* texture =
+                eyeSwapchain.images[imageIndex].texture;
+
+            D3D11_TEXTURE2D_DESC textureDescription = {};
+            texture->GetDesc(&textureDescription);
+
+            D3D11_RENDER_TARGET_VIEW_DESC
+                renderTargetViewDescription = {};
+
+            // OpenXR runtimes may expose the swapchain texture through a
+            // typeless resource. A null RTV description then fails because
+            // Direct3D cannot infer the typed view format. Use the exact
+            // typed format selected through xrEnumerateSwapchainFormats.
+            renderTargetViewDescription.Format =
+                static_cast<DXGI_FORMAT>(selectedFormat);
+
+            const bool isMultisampled =
+                textureDescription.SampleDesc.Count > 1;
+
+            const bool isArrayTexture =
+                textureDescription.ArraySize > 1;
+
+            if (isArrayTexture && isMultisampled)
+            {
+                renderTargetViewDescription.ViewDimension =
+                    D3D11_RTV_DIMENSION_TEXTURE2DMSARRAY;
+
+                renderTargetViewDescription
+                    .Texture2DMSArray.FirstArraySlice = 0;
+
+                renderTargetViewDescription
+                    .Texture2DMSArray.ArraySize = 1;
+            }
+            else if (isArrayTexture)
+            {
+                renderTargetViewDescription.ViewDimension =
+                    D3D11_RTV_DIMENSION_TEXTURE2DARRAY;
+
+                renderTargetViewDescription
+                    .Texture2DArray.MipSlice = 0;
+
+                renderTargetViewDescription
+                    .Texture2DArray.FirstArraySlice = 0;
+
+                renderTargetViewDescription
+                    .Texture2DArray.ArraySize = 1;
+            }
+            else if (isMultisampled)
+            {
+                renderTargetViewDescription.ViewDimension =
+                    D3D11_RTV_DIMENSION_TEXTURE2DMS;
+            }
+            else
+            {
+                renderTargetViewDescription.ViewDimension =
+                    D3D11_RTV_DIMENSION_TEXTURE2D;
+
+                renderTargetViewDescription
+                    .Texture2D.MipSlice = 0;
+            }
+
+            const HRESULT hr =
+                g_vrD3dDevice->CreateRenderTargetView(
+                    texture,
+                    &renderTargetViewDescription,
+                    eyeSwapchain
+                        .renderTargetViews[imageIndex]
+                        .GetAddressOf());
+
+            if (FAILED(hr))
+            {
+                Com_PrintWarning(
+                    0,
+                    "[VR] RTV failure: eye %u image %u, "
+                    "resource format %u, selected format %lld, "
+                    "array size %u, sample count %u.\n",
+                    eyeIndex,
+                    imageIndex,
+                    static_cast<unsigned int>(
+                        textureDescription.Format),
+                    static_cast<long long>(selectedFormat),
+                    textureDescription.ArraySize,
+                    textureDescription.SampleDesc.Count);
+
+                VR_LogHrFailure(
+                    "ID3D11Device::CreateRenderTargetView",
+                    hr);
+
+                return false;
+            }
+        }
+
+        Com_Printf(
+            0,
+            "[VR] Eye %u swapchain: %d x %d, %u images.\n",
+            eyeIndex,
+            eyeSwapchain.width,
+            eyeSwapchain.height,
+            imageCount);
+    }
+
+    Com_Printf(
+        0,
+        "[VR] Selected OpenXR swapchain DXGI format %lld.\n",
+        static_cast<long long>(selectedFormat));
+
+    return true;
+}
+
+void VR_HandleSessionStateChanged(
+    const XrEventDataSessionStateChanged& stateChanged)
+{
+    g_vrSessionState = stateChanged.state;
+
+    Com_Printf(
+        0,
+        "[VR] OpenXR session state: %s.\n",
+        VR_SessionStateName(g_vrSessionState));
+
+    if (g_vrSessionState == XR_SESSION_STATE_READY &&
+        !g_vrSessionRunning)
+    {
+        XrSessionBeginInfo beginInfo{
+            XR_TYPE_SESSION_BEGIN_INFO
+        };
+
+        beginInfo.primaryViewConfigurationType =
+            kViewConfiguration;
+
+        const XrResult result =
+            xrBeginSession(g_vrSession, &beginInfo);
+
+        if (XR_SUCCEEDED(result))
+        {
+            g_vrSessionRunning = true;
+
+            Com_Printf(
+                0,
+                "[VR] OpenXR session started.\n");
+        }
+        else
+        {
+            VR_LogXrFailure("xrBeginSession", result);
+        }
+    }
+    else if (
+        g_vrSessionState == XR_SESSION_STATE_STOPPING &&
+        g_vrSessionRunning)
+    {
+        const XrResult result =
+            xrEndSession(g_vrSession);
+
+        if (XR_FAILED(result))
+        {
+            VR_LogXrFailure("xrEndSession", result);
+        }
+
+        g_vrSessionRunning = false;
+    }
+    else if (
+        g_vrSessionState == XR_SESSION_STATE_EXITING ||
+        g_vrSessionState == XR_SESSION_STATE_LOSS_PENDING)
+    {
+        g_vrSessionRunning = false;
+        g_vrExitRequested = true;
+    }
+}
+
+void VR_PollEvents()
+{
+    XrEventDataBuffer eventData{
+        XR_TYPE_EVENT_DATA_BUFFER
+    };
+
+    while (true)
+    {
+        const XrResult result =
+            xrPollEvent(g_vrInstance, &eventData);
+
+        if (result == XR_EVENT_UNAVAILABLE)
+        {
+            return;
+        }
+
+        if (XR_FAILED(result))
+        {
+            VR_LogXrFailure("xrPollEvent", result);
+            return;
+        }
+
+        switch (eventData.type)
+        {
+            case XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED:
+            {
+                const auto* stateChanged =
+                    reinterpret_cast<
+                        const XrEventDataSessionStateChanged*>(
+                            &eventData);
+
+                VR_HandleSessionStateChanged(*stateChanged);
+                break;
+            }
+
+            case XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING:
+                Com_PrintWarning(
+                    0,
+                    "[VR] OpenXR runtime reported instance loss "
+                    "pending.\n");
+                g_vrExitRequested = true;
+                break;
+
+            default:
+                break;
+        }
+
+        eventData = XrEventDataBuffer{
+            XR_TYPE_EVENT_DATA_BUFFER
+        };
+    }
+}
+
+bool VR_RenderSolidColorFrame(
+    const XrFrameState& frameState,
+    XrCompositionLayerProjection& projectionLayer,
+    std::vector<XrCompositionLayerProjectionView>&
+        projectionViews)
+{
+    XrViewLocateInfo viewLocateInfo{
+        XR_TYPE_VIEW_LOCATE_INFO
+    };
+
+    viewLocateInfo.viewConfigurationType =
+        kViewConfiguration;
+    viewLocateInfo.displayTime =
+        frameState.predictedDisplayTime;
+    viewLocateInfo.space = g_vrAppSpace;
+
+    XrViewState viewState{XR_TYPE_VIEW_STATE};
+
+    uint32_t locatedViewCount = 0;
+
+    XrResult result =
+        xrLocateViews(
+            g_vrSession,
+            &viewLocateInfo,
+            &viewState,
+            static_cast<uint32_t>(g_vrViews.size()),
+            &locatedViewCount,
+            g_vrViews.data());
+
+    if (XR_FAILED(result))
+    {
+        VR_LogXrFailure("xrLocateViews", result);
+        return false;
+    }
+
+    const XrViewStateFlags requiredFlags =
+        XR_VIEW_STATE_ORIENTATION_VALID_BIT |
+        XR_VIEW_STATE_POSITION_VALID_BIT;
+
+    if ((viewState.viewStateFlags & requiredFlags) !=
+        requiredFlags)
+    {
+        return false;
+    }
+
+    if (locatedViewCount != g_vrEyeSwapchains.size())
+    {
+        Com_PrintWarning(
+            0,
+            "[VR] xrLocateViews returned %u views; expected %u.\n",
+            locatedViewCount,
+            static_cast<unsigned int>(
+                g_vrEyeSwapchains.size()));
+
+        return false;
+    }
+
+    projectionViews.resize(locatedViewCount);
+
+    constexpr float clearColor[4] = {
+        0.03f,
+        0.08f,
+        0.20f,
+        1.0f,
+    };
+
+    for (uint32_t eyeIndex = 0;
+         eyeIndex < locatedViewCount;
+         ++eyeIndex)
+    {
+        VrEyeSwapchain& eyeSwapchain =
+            g_vrEyeSwapchains[eyeIndex];
+
+        uint32_t imageIndex = 0;
+
+        XrSwapchainImageAcquireInfo acquireInfo{
+            XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO
+        };
+
+        result =
+            xrAcquireSwapchainImage(
+                eyeSwapchain.handle,
+                &acquireInfo,
+                &imageIndex);
+
+        if (XR_FAILED(result))
+        {
+            VR_LogXrFailure(
+                "xrAcquireSwapchainImage",
+                result);
+
+            return false;
+        }
+
+        XrSwapchainImageWaitInfo waitInfo{
+            XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO
+        };
+
+        waitInfo.timeout = XR_INFINITE_DURATION;
+
+        result =
+            xrWaitSwapchainImage(
+                eyeSwapchain.handle,
+                &waitInfo);
+
+        if (XR_FAILED(result))
+        {
+            VR_LogXrFailure(
+                "xrWaitSwapchainImage",
+                result);
+
+            XrSwapchainImageReleaseInfo releaseInfo{
+                XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO
+            };
+
+            xrReleaseSwapchainImage(
+                eyeSwapchain.handle,
+                &releaseInfo);
+
+            return false;
+        }
+
+        ID3D11RenderTargetView* renderTarget =
+            eyeSwapchain
+                .renderTargetViews[imageIndex]
+                .Get();
+
+        g_vrD3dContext->OMSetRenderTargets(
+            1,
+            &renderTarget,
+            nullptr);
+
+        g_vrD3dContext->ClearRenderTargetView(
+            renderTarget,
+            clearColor);
+
+        g_vrD3dContext->Flush();
+
+        XrSwapchainImageReleaseInfo releaseInfo{
+            XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO
+        };
+
+        result =
+            xrReleaseSwapchainImage(
+                eyeSwapchain.handle,
+                &releaseInfo);
+
+        if (XR_FAILED(result))
+        {
+            VR_LogXrFailure(
+                "xrReleaseSwapchainImage",
+                result);
+
+            return false;
+        }
+
+        XrCompositionLayerProjectionView& projectionView =
+            projectionViews[eyeIndex];
+
+        projectionView =
+            XrCompositionLayerProjectionView{
+                XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW
+            };
+
+        projectionView.pose = g_vrViews[eyeIndex].pose;
+        projectionView.fov = g_vrViews[eyeIndex].fov;
+
+        projectionView.subImage.swapchain =
+            eyeSwapchain.handle;
+
+        projectionView.subImage.imageRect.offset = {0, 0};
+
+        projectionView.subImage.imageRect.extent = {
+            eyeSwapchain.width,
+            eyeSwapchain.height,
+        };
+
+        projectionView.subImage.imageArrayIndex = 0;
+    }
+
+    projectionLayer =
+        XrCompositionLayerProjection{
+            XR_TYPE_COMPOSITION_LAYER_PROJECTION
+        };
+
+    projectionLayer.space = g_vrAppSpace;
+    projectionLayer.viewCount =
+        static_cast<uint32_t>(projectionViews.size());
+    projectionLayer.views = projectionViews.data();
+
+    return true;
+}
+
+void VR_ResetState()
 {
     g_vrInstance = XR_NULL_HANDLE;
     g_vrSystemId = XR_NULL_SYSTEM_ID;
+    g_vrSession = XR_NULL_HANDLE;
+    g_vrAppSpace = XR_NULL_HANDLE;
+    g_vrSessionState = XR_SESSION_STATE_UNKNOWN;
+    g_vrBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
     g_vrInitialized = false;
+    g_vrSessionRunning = false;
+    g_vrExitRequested = false;
 }
 }
 
@@ -29,7 +1116,22 @@ bool VR_Init()
 
     Com_Printf(
         0,
-        "[VR] Initializing persistent OpenXR subsystem...\n");
+        "[VR] Initializing OpenXR D3D11 solid-frame test...\n");
+
+    if (!VR_HasInstanceExtension(
+            XR_KHR_D3D11_ENABLE_EXTENSION_NAME))
+    {
+        Com_PrintWarning(
+            0,
+            "[VR] Runtime does not expose "
+            "XR_KHR_D3D11_enable.\n");
+
+        return false;
+    }
+
+    const char* enabledExtensions[] = {
+        XR_KHR_D3D11_ENABLE_EXTENSION_NAME,
+    };
 
     XrInstanceCreateInfo createInfo{
         XR_TYPE_INSTANCE_CREATE_INFO
@@ -53,17 +1155,16 @@ bool VR_Init()
     createInfo.applicationInfo.apiVersion =
         XR_MAKE_VERSION(1, 0, 0);
 
+    createInfo.enabledExtensionCount = 1;
+    createInfo.enabledExtensionNames = enabledExtensions;
+
     XrResult result =
         xrCreateInstance(&createInfo, &g_vrInstance);
 
     if (XR_FAILED(result))
     {
-        Com_PrintWarning(
-            0,
-            "[VR] xrCreateInstance failed with result %d.\n",
-            static_cast<int>(result));
-
-        VR_ResetHandles();
+        VR_LogXrFailure("xrCreateInstance", result);
+        VR_ResetState();
         return false;
     }
 
@@ -71,16 +1172,16 @@ bool VR_Init()
         XR_TYPE_INSTANCE_PROPERTIES
     };
 
-    result = xrGetInstanceProperties(
-        g_vrInstance,
-        &runtimeProperties);
+    result =
+        xrGetInstanceProperties(
+            g_vrInstance,
+            &runtimeProperties);
 
     if (XR_FAILED(result))
     {
-        Com_PrintWarning(
-            0,
-            "[VR] xrGetInstanceProperties failed with result %d.\n",
-            static_cast<int>(result));
+        VR_LogXrFailure(
+            "xrGetInstanceProperties",
+            result);
 
         VR_Shutdown();
         return false;
@@ -88,7 +1189,7 @@ bool VR_Init()
 
     Com_Printf(
         0,
-        "[VR] OpenXR runtime: %s\n",
+        "[VR] OpenXR runtime: %s.\n",
         runtimeProperties.runtimeName);
 
     XrSystemGetInfo systemInfo{
@@ -98,18 +1199,15 @@ bool VR_Init()
     systemInfo.formFactor =
         XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
 
-    result = xrGetSystem(
-        g_vrInstance,
-        &systemInfo,
-        &g_vrSystemId);
+    result =
+        xrGetSystem(
+            g_vrInstance,
+            &systemInfo,
+            &g_vrSystemId);
 
     if (XR_FAILED(result))
     {
-        Com_PrintWarning(
-            0,
-            "[VR] xrGetSystem failed with result %d.\n",
-            static_cast<int>(result));
-
+        VR_LogXrFailure("xrGetSystem", result);
         VR_Shutdown();
         return false;
     }
@@ -118,17 +1216,17 @@ bool VR_Init()
         XR_TYPE_SYSTEM_PROPERTIES
     };
 
-    result = xrGetSystemProperties(
-        g_vrInstance,
-        g_vrSystemId,
-        &systemProperties);
+    result =
+        xrGetSystemProperties(
+            g_vrInstance,
+            g_vrSystemId,
+            &systemProperties);
 
     if (XR_FAILED(result))
     {
-        Com_PrintWarning(
-            0,
-            "[VR] xrGetSystemProperties failed with result %d.\n",
-            static_cast<int>(result));
+        VR_LogXrFailure(
+            "xrGetSystemProperties",
+            result);
 
         VR_Shutdown();
         return false;
@@ -136,34 +1234,26 @@ bool VR_Init()
 
     Com_Printf(
         0,
-        "[VR] OpenXR system: %s\n",
+        "[VR] OpenXR system: %s.\n",
         systemProperties.systemName);
 
-    Com_Printf(
-        0,
-        "[VR] Orientation tracking: %s\n",
-        systemProperties.trackingProperties.orientationTracking
-            ? "yes"
-            : "no");
+    if (!VR_CreateSession())
+    {
+        VR_Shutdown();
+        return false;
+    }
 
-    Com_Printf(
-        0,
-        "[VR] Position tracking: %s\n",
-        systemProperties.trackingProperties.positionTracking
-            ? "yes"
-            : "no");
-
-    Com_Printf(
-        0,
-        "[VR] Maximum swapchain size: %u x %u\n",
-        systemProperties.graphicsProperties.maxSwapchainImageWidth,
-        systemProperties.graphicsProperties.maxSwapchainImageHeight);
+    if (!VR_CreateSwapchains())
+    {
+        VR_Shutdown();
+        return false;
+    }
 
     g_vrInitialized = true;
 
     Com_Printf(
         0,
-        "[VR] Persistent OpenXR subsystem initialized successfully.\n");
+        "[VR] OpenXR D3D11 session and swapchains are ready.\n");
 
     return true;
 }
@@ -171,70 +1261,158 @@ bool VR_Init()
 void VR_Frame()
 {
     if (!g_vrInitialized ||
-        g_vrInstance == XR_NULL_HANDLE)
+        g_vrInstance == XR_NULL_HANDLE ||
+        g_vrSession == XR_NULL_HANDLE)
     {
         return;
     }
 
-    XrEventDataBuffer eventData{
-        XR_TYPE_EVENT_DATA_BUFFER
+    VR_PollEvents();
+
+    if (!g_vrSessionRunning ||
+        g_vrExitRequested)
+    {
+        return;
+    }
+
+    XrFrameWaitInfo waitInfo{XR_TYPE_FRAME_WAIT_INFO};
+    XrFrameState frameState{XR_TYPE_FRAME_STATE};
+
+    XrResult result =
+        xrWaitFrame(
+            g_vrSession,
+            &waitInfo,
+            &frameState);
+
+    if (XR_FAILED(result))
+    {
+        VR_LogXrFailure("xrWaitFrame", result);
+        return;
+    }
+
+    XrFrameBeginInfo beginInfo{XR_TYPE_FRAME_BEGIN_INFO};
+
+    result =
+        xrBeginFrame(g_vrSession, &beginInfo);
+
+    if (XR_FAILED(result))
+    {
+        VR_LogXrFailure("xrBeginFrame", result);
+        return;
+    }
+
+    XrCompositionLayerProjection projectionLayer{
+        XR_TYPE_COMPOSITION_LAYER_PROJECTION
     };
 
-    while (true)
+    std::vector<XrCompositionLayerProjectionView>
+        projectionViews;
+
+    bool submittedProjectionLayer = false;
+
+    if (frameState.shouldRender)
     {
-        const XrResult result =
-            xrPollEvent(g_vrInstance, &eventData);
+        submittedProjectionLayer =
+            VR_RenderSolidColorFrame(
+                frameState,
+                projectionLayer,
+                projectionViews);
+    }
 
-        if (result == XR_EVENT_UNAVAILABLE)
-        {
-            break;
-        }
+    const XrCompositionLayerBaseHeader* layers[1] = {};
 
-        if (XR_FAILED(result))
-        {
-            Com_PrintWarning(
-                0,
-                "[VR] xrPollEvent failed with result %d.\n",
-                static_cast<int>(result));
+    uint32_t layerCount = 0;
 
-            break;
-        }
+    if (submittedProjectionLayer)
+    {
+        layers[0] =
+            reinterpret_cast<
+                const XrCompositionLayerBaseHeader*>(
+                    &projectionLayer);
 
-        if (eventData.type ==
-            XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING)
-        {
-            Com_PrintWarning(
-                0,
-                "[VR] OpenXR runtime reported instance loss pending.\n");
-        }
+        layerCount = 1;
+    }
 
-        eventData = XrEventDataBuffer{
-            XR_TYPE_EVENT_DATA_BUFFER
-        };
+    XrFrameEndInfo endInfo{XR_TYPE_FRAME_END_INFO};
+
+    endInfo.displayTime =
+        frameState.predictedDisplayTime;
+    endInfo.environmentBlendMode = g_vrBlendMode;
+    endInfo.layerCount = layerCount;
+    endInfo.layers =
+        layerCount > 0
+            ? layers
+            : nullptr;
+
+    result =
+        xrEndFrame(g_vrSession, &endInfo);
+
+    if (XR_FAILED(result))
+    {
+        VR_LogXrFailure("xrEndFrame", result);
     }
 }
 
 void VR_Shutdown()
 {
-    if (g_vrInstance != XR_NULL_HANDLE)
+    if (g_vrInstance == XR_NULL_HANDLE &&
+        g_vrSession == XR_NULL_HANDLE)
     {
-        Com_Printf(
-            0,
-            "[VR] Shutting down OpenXR subsystem...\n");
+        VR_ResetState();
+        return;
+    }
 
-        const XrResult result =
-            xrDestroyInstance(g_vrInstance);
+    Com_Printf(
+        0,
+        "[VR] Shutting down OpenXR D3D11 subsystem...\n");
 
-        if (XR_FAILED(result))
+    g_vrSessionRunning = false;
+
+    for (VrEyeSwapchain& eyeSwapchain :
+         g_vrEyeSwapchains)
+    {
+        eyeSwapchain.renderTargetViews.clear();
+        eyeSwapchain.images.clear();
+
+        if (eyeSwapchain.handle != XR_NULL_HANDLE)
         {
-            Com_PrintWarning(
-                0,
-                "[VR] xrDestroyInstance failed with result %d.\n",
-                static_cast<int>(result));
+            xrDestroySwapchain(eyeSwapchain.handle);
+            eyeSwapchain.handle = XR_NULL_HANDLE;
         }
     }
 
-    VR_ResetHandles();
+    g_vrEyeSwapchains.clear();
+    g_vrViews.clear();
+    g_vrViewConfigs.clear();
+
+    if (g_vrAppSpace != XR_NULL_HANDLE)
+    {
+        xrDestroySpace(g_vrAppSpace);
+        g_vrAppSpace = XR_NULL_HANDLE;
+    }
+
+    if (g_vrSession != XR_NULL_HANDLE)
+    {
+        xrDestroySession(g_vrSession);
+        g_vrSession = XR_NULL_HANDLE;
+    }
+
+    if (g_vrD3dContext)
+    {
+        g_vrD3dContext->ClearState();
+        g_vrD3dContext->Flush();
+    }
+
+    g_vrD3dContext.Reset();
+    g_vrD3dDevice.Reset();
+
+    if (g_vrInstance != XR_NULL_HANDLE)
+    {
+        xrDestroyInstance(g_vrInstance);
+        g_vrInstance = XR_NULL_HANDLE;
+    }
+
+    VR_ResetState();
 }
 
 bool VR_IsInitialized()
