@@ -1,3 +1,6 @@
 [submodule "deps/openxr-sdk"]
 	path = deps/openxr-sdk
 	url = https://github.com/KhronosGroup/OpenXR-SDK.git
+[submodule "deps/openxr-sdk-source"]
+	path = deps/openxr-sdk-source
+	url = https://github.com/KhronosGroup/OpenXR-SDK-Source.git
