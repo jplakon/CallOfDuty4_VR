@@ -1478,8 +1478,23 @@ void __cdecl CG_DrawActive(int32_t localClientNum)
         rightEyeRefdef.viewaxis,
         1u);
 
+    VR_GetStereoEyeFovBounds(
+        0u,
+        &leftEyeRefdef.tanHalfFovX,
+        &leftEyeRefdef.tanHalfFovY);
+
+    VR_GetStereoEyeFovBounds(
+        1u,
+        &rightEyeRefdef.tanHalfFovX,
+        &rightEyeRefdef.tanHalfFovY);
+
+    VR_BeginStereoEyeRender(0u);
     CL_RenderScene(&leftEyeRefdef);
+    VR_EndStereoEyeRender();
+
+    VR_BeginStereoEyeRender(1u);
     CL_RenderScene(&rightEyeRefdef);
+    VR_EndStereoEyeRender();
 }
 
 void __cdecl CG_AddSceneTracerBeams(int32_t localClientNum)

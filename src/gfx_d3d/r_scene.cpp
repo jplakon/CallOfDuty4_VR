@@ -1,4 +1,5 @@
 #include "r_scene.h"
+#include "vr/vr_openxr.h"
 #if defined(XR_USE_GRAPHICS_API_D3D11)
 #include "vr/vr_d3d9_capture.h"
 #endif
@@ -1232,10 +1233,79 @@ void __cdecl R_SetViewParmsForScene(const refdef_s *refdef, GfxViewParms *viewPa
     R_SetupViewProjectionMatrices(viewParms);
 }
 
-void __cdecl R_SetupProjection(float tanHalfFovX, float tanHalfFovY, GfxViewParms *viewParms)
+void __cdecl R_SetupProjection(
+    float tanHalfFovX,
+    float tanHalfFovY,
+    GfxViewParms* viewParms)
 {
-    InfinitePerspectiveMatrix(viewParms->projectionMatrix.m, tanHalfFovX, tanHalfFovY, viewParms->zNear);
-    viewParms->depthHackNearClip = -r_znear_depthhack->current.value;
+    float tanLeft = 0.0f;
+    float tanRight = 0.0f;
+    float tanDown = 0.0f;
+    float tanUp = 0.0f;
+
+    if (VR_GetCurrentRenderEyeProjection(
+            &tanLeft,
+            &tanRight,
+            &tanDown,
+            &tanUp))
+    {
+        const float horizontalRange =
+            tanRight - tanLeft;
+
+        const float verticalRange =
+            tanUp - tanDown;
+
+        if (horizontalRange > 0.0f &&
+            verticalRange > 0.0f)
+        {
+            memset(
+                viewParms->projectionMatrix.m,
+                0,
+                sizeof(viewParms->projectionMatrix.m));
+
+            viewParms->projectionMatrix.m[0][0] =
+                2.0f * MAX_11BIT_FLT /
+                horizontalRange;
+
+            viewParms->projectionMatrix.m[1][1] =
+                2.0f * MAX_11BIT_FLT /
+                verticalRange;
+
+            viewParms->projectionMatrix.m[2][0] =
+                -MAX_11BIT_FLT *
+                (tanRight + tanLeft) /
+                horizontalRange;
+
+            viewParms->projectionMatrix.m[2][1] =
+                -MAX_11BIT_FLT *
+                (tanUp + tanDown) /
+                verticalRange;
+
+            viewParms->projectionMatrix.m[2][2] =
+                MAX_11BIT_FLT;
+
+            viewParms->projectionMatrix.m[2][3] =
+                1.0f;
+
+            viewParms->projectionMatrix.m[3][2] =
+                -viewParms->zNear *
+                MAX_11BIT_FLT;
+
+            viewParms->depthHackNearClip =
+                -r_znear_depthhack->current.value;
+
+            return;
+        }
+    }
+
+    InfinitePerspectiveMatrix(
+        viewParms->projectionMatrix.m,
+        tanHalfFovX,
+        tanHalfFovY,
+        viewParms->zNear);
+
+    viewParms->depthHackNearClip =
+        -r_znear_depthhack->current.value;
 }
 
 bool R_UpdateFrameSun()

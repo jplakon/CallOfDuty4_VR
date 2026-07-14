@@ -25,3 +25,23 @@ bool VR_ApplyStereoEyeOffsetForEye(
     float viewOrigin[3],
     const float viewAxis[3][3],
     unsigned int eyeIndex);
+
+// Publishes which eye the following CL_RenderScene call is building.
+// The renderer uses this only while constructing that eye's camera view.
+void VR_BeginStereoEyeRender(unsigned int eyeIndex);
+void VR_EndStereoEyeRender();
+
+// Returns a conservative symmetric FOV bound for legacy CoD systems such as
+// LOD selection. The actual render projection remains asymmetric.
+bool VR_GetStereoEyeFovBounds(
+    unsigned int eyeIndex,
+    float* tanHalfFovX,
+    float* tanHalfFovY);
+
+// Returns the active eye's exact OpenXR frustum tangents. Values use the
+// OpenXR convention: left/down negative, right/up positive.
+bool VR_GetCurrentRenderEyeProjection(
+    float* tanLeft,
+    float* tanRight,
+    float* tanDown,
+    float* tanUp);

@@ -121,6 +121,30 @@ bool g_vrLoggedFirstCameraApply = false;
 std::vector<XrViewConfigurationView> g_vrViewConfigs;
 std::vector<XrView> g_vrViews;
 
+struct VrEyeProjectionTangents
+{
+    float left = 0.0f;
+    float right = 0.0f;
+    float down = 0.0f;
+    float up = 0.0f;
+};
+
+std::mutex g_vrProjectionMutex;
+
+std::array<
+    VrEyeProjectionTangents,
+    kVrStereoEyeCount>
+    g_vrEyeProjectionTangents = {};
+
+bool g_vrEyeProjectionValid = false;
+
+thread_local int g_vrCurrentRenderEye = -1;
+
+std::array<bool, kVrStereoEyeCount>
+    g_vrLoggedProjectionApply = {};
+
+bool g_vrLoggedProjectionPublish = false;
+
 struct VrEyeSwapchain
 {
     XrSwapchain handle = XR_NULL_HANDLE;
@@ -2341,6 +2365,82 @@ bool VR_RenderSolidColorFrame(
 
     projectionViews.resize(locatedViewCount);
 
+    if (locatedViewCount >= kVrStereoEyeCount)
+    {
+        std::array<
+            VrEyeProjectionTangents,
+            kVrStereoEyeCount>
+            publishedTangents = {};
+
+        bool projectionValid = true;
+
+        for (std::uint32_t eyeIndex = 0u;
+             eyeIndex < kVrStereoEyeCount;
+             ++eyeIndex)
+        {
+            const XrFovf& fov =
+                g_vrViews[eyeIndex].fov;
+
+            VrEyeProjectionTangents& tangents =
+                publishedTangents[eyeIndex];
+
+            tangents.left =
+                std::tan(fov.angleLeft);
+
+            tangents.right =
+                std::tan(fov.angleRight);
+
+            tangents.down =
+                std::tan(fov.angleDown);
+
+            tangents.up =
+                std::tan(fov.angleUp);
+
+            projectionValid =
+                projectionValid &&
+                tangents.left < tangents.right &&
+                tangents.down < tangents.up &&
+                tangents.left < 0.0f &&
+                tangents.right > 0.0f &&
+                tangents.down < 0.0f &&
+                tangents.up > 0.0f;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(
+                g_vrProjectionMutex);
+
+            if (projectionValid)
+            {
+                g_vrEyeProjectionTangents =
+                    publishedTangents;
+
+                g_vrEyeProjectionValid = true;
+            }
+        }
+
+        if (projectionValid &&
+            !g_vrLoggedProjectionPublish)
+        {
+            Com_Printf(
+                0,
+                "[VR] Published OpenXR per-eye "
+                "projection tangents: "
+                "L %.4f %.4f %.4f %.4f, "
+                "R %.4f %.4f %.4f %.4f.\n",
+                publishedTangents[0].left,
+                publishedTangents[0].right,
+                publishedTangents[0].down,
+                publishedTangents[0].up,
+                publishedTangents[1].left,
+                publishedTangents[1].right,
+                publishedTangents[1].down,
+                publishedTangents[1].up);
+
+            g_vrLoggedProjectionPublish = true;
+        }
+    }
+
     if (locatedViewCount > 0)
     {
         VR_PublishHeadOrientation(
@@ -2672,6 +2772,125 @@ bool VR_ApplyHeadPosition(
 }
 
 
+
+void VR_BeginStereoEyeRender(
+    const unsigned int eyeIndex)
+{
+    g_vrCurrentRenderEye =
+        eyeIndex < kVrStereoEyeCount
+            ? static_cast<int>(eyeIndex)
+            : -1;
+}
+
+void VR_EndStereoEyeRender()
+{
+    g_vrCurrentRenderEye = -1;
+}
+
+bool VR_GetStereoEyeFovBounds(
+    const unsigned int eyeIndex,
+    float* tanHalfFovX,
+    float* tanHalfFovY)
+{
+    if (eyeIndex >= kVrStereoEyeCount ||
+        tanHalfFovX == nullptr ||
+        tanHalfFovY == nullptr)
+    {
+        return false;
+    }
+
+    VrEyeProjectionTangents tangents = {};
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrProjectionMutex);
+
+        if (!g_vrEyeProjectionValid)
+        {
+            return false;
+        }
+
+        tangents =
+            g_vrEyeProjectionTangents[eyeIndex];
+    }
+
+    const float leftMagnitude =
+        -tangents.left;
+
+    const float downMagnitude =
+        -tangents.down;
+
+    *tanHalfFovX =
+        leftMagnitude > tangents.right
+            ? leftMagnitude
+            : tangents.right;
+
+    *tanHalfFovY =
+        downMagnitude > tangents.up
+            ? downMagnitude
+            : tangents.up;
+
+    return
+        *tanHalfFovX > 0.0f &&
+        *tanHalfFovY > 0.0f;
+}
+
+bool VR_GetCurrentRenderEyeProjection(
+    float* tanLeft,
+    float* tanRight,
+    float* tanDown,
+    float* tanUp)
+{
+    if (tanLeft == nullptr ||
+        tanRight == nullptr ||
+        tanDown == nullptr ||
+        tanUp == nullptr ||
+        g_vrCurrentRenderEye < 0 ||
+        g_vrCurrentRenderEye >=
+            static_cast<int>(
+                kVrStereoEyeCount))
+    {
+        return false;
+    }
+
+    const unsigned int eyeIndex =
+        static_cast<unsigned int>(
+            g_vrCurrentRenderEye);
+
+    VrEyeProjectionTangents tangents = {};
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrProjectionMutex);
+
+        if (!g_vrEyeProjectionValid)
+        {
+            return false;
+        }
+
+        tangents =
+            g_vrEyeProjectionTangents[eyeIndex];
+    }
+
+    *tanLeft = tangents.left;
+    *tanRight = tangents.right;
+    *tanDown = tangents.down;
+    *tanUp = tangents.up;
+
+    if (!g_vrLoggedProjectionApply[eyeIndex])
+    {
+        Com_Printf(
+            0,
+            "[VR] Supplying OpenXR asymmetric "
+            "projection for eye %u.\n",
+            eyeIndex);
+
+        g_vrLoggedProjectionApply[eyeIndex] = true;
+    }
+
+    return true;
+}
+
 bool VR_ApplyStereoEyeOffsetForEye(
     float viewOrigin[3],
     const float viewAxis[3][3],
@@ -2810,6 +3029,18 @@ bool VR_ApplyHeadOrientation(
 bool VR_Init()
 {
     VR_ResetHeadOrientation();
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrProjectionMutex);
+
+        g_vrEyeProjectionTangents = {};
+        g_vrEyeProjectionValid = false;
+    }
+
+    g_vrCurrentRenderEye = -1;
+    g_vrLoggedProjectionApply.fill(false);
+    g_vrLoggedProjectionPublish = false;
     if (g_vrInitialized)
     {
         return true;
