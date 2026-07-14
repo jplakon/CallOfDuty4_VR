@@ -107,6 +107,7 @@ target_link_libraries(
     PRIVATE
         d3d11
         dxgi
+        d3dcompiler
 )
 # KISAK_OPENXR_D3D11_SOLID_FRAME_END
 

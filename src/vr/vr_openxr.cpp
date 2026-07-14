@@ -85,6 +85,49 @@ std::array<bool, kVrControllerCount>
 
 std::uint64_t g_vrControllerDiagnosticFrame = 0u;
 
+struct VrControllerRenderPose
+{
+    bool gripValid = false;
+    bool aimValid = false;
+    XrPosef gripPose = {
+        {0.0f, 0.0f, 0.0f, 1.0f},
+        {0.0f, 0.0f, 0.0f},
+    };
+    XrPosef aimPose = {
+        {0.0f, 0.0f, 0.0f, 1.0f},
+        {0.0f, 0.0f, 0.0f},
+    };
+};
+
+std::array<
+    VrControllerRenderPose,
+    kVrControllerCount>
+    g_vrControllerRenderPoses = {};
+
+struct VrControllerProxyVertex
+{
+    float position[4];
+    float color[4];
+};
+
+constexpr std::uint32_t
+    kVrMaximumControllerProxyVertices = 48u;
+
+ComPtr<ID3D11VertexShader>
+    g_vrControllerProxyVertexShader;
+
+ComPtr<ID3D11PixelShader>
+    g_vrControllerProxyPixelShader;
+
+ComPtr<ID3D11InputLayout>
+    g_vrControllerProxyInputLayout;
+
+ComPtr<ID3D11Buffer>
+    g_vrControllerProxyVertexBuffer;
+
+bool g_vrControllerProxyResourcesReady = false;
+bool g_vrLoggedFirstControllerProxyDraw = false;
+
 XrSessionState g_vrSessionState = XR_SESSION_STATE_UNKNOWN;
 XrEnvironmentBlendMode g_vrBlendMode =
     XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
@@ -1727,6 +1770,751 @@ bool VR_SelectEnvironmentBlendMode()
 }
 
 
+
+XrQuaternionf VR_ControllerConjugateQuaternion(
+    const XrQuaternionf& quaternion)
+{
+    return {
+        -quaternion.x,
+        -quaternion.y,
+        -quaternion.z,
+        quaternion.w,
+    };
+}
+
+XrVector3f VR_ControllerSubtract(
+    const XrVector3f& left,
+    const XrVector3f& right)
+{
+    return {
+        left.x - right.x,
+        left.y - right.y,
+        left.z - right.z,
+    };
+}
+
+XrVector3f VR_ControllerAddScaled(
+    const XrVector3f& origin,
+    const VrHeadVector& direction,
+    const float scale)
+{
+    return {
+        origin.x + direction.x * scale,
+        origin.y + direction.y * scale,
+        origin.z + direction.z * scale,
+    };
+}
+
+bool VR_ProjectAppSpacePointToEye(
+    const XrVector3f& point,
+    const XrView& eyeView,
+    float* ndcX,
+    float* ndcY)
+{
+    if (ndcX == nullptr ||
+        ndcY == nullptr)
+    {
+        return false;
+    }
+
+    const XrVector3f relativePosition =
+        VR_ControllerSubtract(
+            point,
+            eyeView.pose.position);
+
+    const VrHeadVector relativeVector = {
+        relativePosition.x,
+        relativePosition.y,
+        relativePosition.z,
+    };
+
+    const VrHeadVector eyeLocal =
+        VR_RotateHeadVector(
+            VR_ControllerConjugateQuaternion(
+                eyeView.pose.orientation),
+            relativeVector);
+
+    const float forwardDepth =
+        -eyeLocal.z;
+
+    if (forwardDepth <= 0.03f)
+    {
+        return false;
+    }
+
+    const float tanLeft =
+        std::tan(eyeView.fov.angleLeft);
+
+    const float tanRight =
+        std::tan(eyeView.fov.angleRight);
+
+    const float tanDown =
+        std::tan(eyeView.fov.angleDown);
+
+    const float tanUp =
+        std::tan(eyeView.fov.angleUp);
+
+    const float horizontalRange =
+        tanRight - tanLeft;
+
+    const float verticalRange =
+        tanUp - tanDown;
+
+    if (horizontalRange <= 0.0f ||
+        verticalRange <= 0.0f)
+    {
+        return false;
+    }
+
+    const float projectedX =
+        eyeLocal.x / forwardDepth;
+
+    const float projectedY =
+        eyeLocal.y / forwardDepth;
+
+    *ndcX =
+        2.0f *
+            (projectedX - tanLeft) /
+            horizontalRange -
+        1.0f;
+
+    *ndcY =
+        2.0f *
+            (projectedY - tanDown) /
+            verticalRange -
+        1.0f;
+
+    return
+        *ndcX > -1.5f &&
+        *ndcX < 1.5f &&
+        *ndcY > -1.5f &&
+        *ndcY < 1.5f;
+}
+
+void VR_AppendControllerProxyVertex(
+    std::array<
+        VrControllerProxyVertex,
+        kVrMaximumControllerProxyVertices>& vertices,
+    std::uint32_t* vertexCount,
+    const float x,
+    const float y,
+    const float red,
+    const float green,
+    const float blue,
+    const float alpha)
+{
+    if (vertexCount == nullptr ||
+        *vertexCount >= vertices.size())
+    {
+        return;
+    }
+
+    VrControllerProxyVertex& vertex =
+        vertices[*vertexCount];
+
+    vertex.position[0] = x;
+    vertex.position[1] = y;
+    vertex.position[2] = 0.0f;
+    vertex.position[3] = 1.0f;
+
+    vertex.color[0] = red;
+    vertex.color[1] = green;
+    vertex.color[2] = blue;
+    vertex.color[3] = alpha;
+
+    ++(*vertexCount);
+}
+
+void VR_AppendControllerProxyTriangle(
+    std::array<
+        VrControllerProxyVertex,
+        kVrMaximumControllerProxyVertices>& vertices,
+    std::uint32_t* vertexCount,
+    const float x0,
+    const float y0,
+    const float x1,
+    const float y1,
+    const float x2,
+    const float y2,
+    const float red,
+    const float green,
+    const float blue)
+{
+    VR_AppendControllerProxyVertex(
+        vertices,
+        vertexCount,
+        x0,
+        y0,
+        red,
+        green,
+        blue,
+        1.0f);
+
+    VR_AppendControllerProxyVertex(
+        vertices,
+        vertexCount,
+        x1,
+        y1,
+        red,
+        green,
+        blue,
+        1.0f);
+
+    VR_AppendControllerProxyVertex(
+        vertices,
+        vertexCount,
+        x2,
+        y2,
+        red,
+        green,
+        blue,
+        1.0f);
+}
+
+void VR_AppendControllerProxyDiamond(
+    std::array<
+        VrControllerProxyVertex,
+        kVrMaximumControllerProxyVertices>& vertices,
+    std::uint32_t* vertexCount,
+    const float centerX,
+    const float centerY,
+    const float halfWidth,
+    const float halfHeight,
+    const float red,
+    const float green,
+    const float blue)
+{
+    VR_AppendControllerProxyTriangle(
+        vertices,
+        vertexCount,
+        centerX,
+        centerY + halfHeight,
+        centerX - halfWidth,
+        centerY,
+        centerX,
+        centerY - halfHeight,
+        red,
+        green,
+        blue);
+
+    VR_AppendControllerProxyTriangle(
+        vertices,
+        vertexCount,
+        centerX,
+        centerY + halfHeight,
+        centerX,
+        centerY - halfHeight,
+        centerX + halfWidth,
+        centerY,
+        red,
+        green,
+        blue);
+}
+
+void VR_AppendControllerProxyRay(
+    std::array<
+        VrControllerProxyVertex,
+        kVrMaximumControllerProxyVertices>& vertices,
+    std::uint32_t* vertexCount,
+    const float startX,
+    const float startY,
+    const float endX,
+    const float endY,
+    const float halfThickness,
+    const float red,
+    const float green,
+    const float blue)
+{
+    const float deltaX = endX - startX;
+    const float deltaY = endY - startY;
+
+    const float length =
+        std::sqrt(
+            deltaX * deltaX +
+            deltaY * deltaY);
+
+    if (length <= 0.0001f)
+    {
+        return;
+    }
+
+    const float normalX =
+        -deltaY / length *
+        halfThickness;
+
+    const float normalY =
+        deltaX / length *
+        halfThickness;
+
+    const float startLeftX = startX + normalX;
+    const float startLeftY = startY + normalY;
+    const float startRightX = startX - normalX;
+    const float startRightY = startY - normalY;
+    const float endLeftX = endX + normalX;
+    const float endLeftY = endY + normalY;
+    const float endRightX = endX - normalX;
+    const float endRightY = endY - normalY;
+
+    VR_AppendControllerProxyTriangle(
+        vertices,
+        vertexCount,
+        startLeftX,
+        startLeftY,
+        endLeftX,
+        endLeftY,
+        endRightX,
+        endRightY,
+        red,
+        green,
+        blue);
+
+    VR_AppendControllerProxyTriangle(
+        vertices,
+        vertexCount,
+        startLeftX,
+        startLeftY,
+        endRightX,
+        endRightY,
+        startRightX,
+        startRightY,
+        red,
+        green,
+        blue);
+}
+
+bool VR_CreateControllerProxyResources()
+{
+    if (g_vrD3dDevice == nullptr)
+    {
+        return false;
+    }
+
+    if (g_vrControllerProxyResourcesReady)
+    {
+        return true;
+    }
+
+    static const char* vertexShaderSource = R"(
+struct ControllerProxyVertex
+{
+    float4 position : POSITION;
+    float4 color : COLOR0;
+};
+
+struct ControllerProxyPixel
+{
+    float4 position : SV_POSITION;
+    float4 color : COLOR0;
+};
+
+ControllerProxyPixel VSMain(
+    ControllerProxyVertex input)
+{
+    ControllerProxyPixel output;
+    output.position = input.position;
+    output.color = input.color;
+    return output;
+}
+)";
+
+    static const char* pixelShaderSource = R"(
+struct ControllerProxyPixel
+{
+    float4 position : SV_POSITION;
+    float4 color : COLOR0;
+};
+
+float4 PSMain(
+    ControllerProxyPixel input) : SV_TARGET
+{
+    return input.color;
+}
+)";
+
+    ComPtr<ID3DBlob> vertexShaderBlob;
+    ComPtr<ID3DBlob> pixelShaderBlob;
+    ComPtr<ID3DBlob> errorBlob;
+
+    HRESULT hr =
+        D3DCompile(
+            vertexShaderSource,
+            std::strlen(vertexShaderSource),
+            "controller_proxy_vs",
+            nullptr,
+            nullptr,
+            "VSMain",
+            "vs_4_0",
+            D3DCOMPILE_ENABLE_STRICTNESS,
+            0,
+            vertexShaderBlob.GetAddressOf(),
+            errorBlob.GetAddressOf());
+
+    if (FAILED(hr))
+    {
+        VR_LogHrFailure(
+            "D3DCompile(controller proxy VS)",
+            hr);
+
+        return false;
+    }
+
+    errorBlob.Reset();
+
+    hr =
+        D3DCompile(
+            pixelShaderSource,
+            std::strlen(pixelShaderSource),
+            "controller_proxy_ps",
+            nullptr,
+            nullptr,
+            "PSMain",
+            "ps_4_0",
+            D3DCOMPILE_ENABLE_STRICTNESS,
+            0,
+            pixelShaderBlob.GetAddressOf(),
+            errorBlob.GetAddressOf());
+
+    if (FAILED(hr))
+    {
+        VR_LogHrFailure(
+            "D3DCompile(controller proxy PS)",
+            hr);
+
+        return false;
+    }
+
+    hr =
+        g_vrD3dDevice->CreateVertexShader(
+            vertexShaderBlob->GetBufferPointer(),
+            vertexShaderBlob->GetBufferSize(),
+            nullptr,
+            g_vrControllerProxyVertexShader
+                .GetAddressOf());
+
+    if (FAILED(hr))
+    {
+        VR_LogHrFailure(
+            "CreateVertexShader(controller proxy)",
+            hr);
+
+        return false;
+    }
+
+    hr =
+        g_vrD3dDevice->CreatePixelShader(
+            pixelShaderBlob->GetBufferPointer(),
+            pixelShaderBlob->GetBufferSize(),
+            nullptr,
+            g_vrControllerProxyPixelShader
+                .GetAddressOf());
+
+    if (FAILED(hr))
+    {
+        VR_LogHrFailure(
+            "CreatePixelShader(controller proxy)",
+            hr);
+
+        return false;
+    }
+
+    const D3D11_INPUT_ELEMENT_DESC inputElements[] = {
+        {
+            "POSITION",
+            0,
+            DXGI_FORMAT_R32G32B32A32_FLOAT,
+            0,
+            0,
+            D3D11_INPUT_PER_VERTEX_DATA,
+            0,
+        },
+        {
+            "COLOR",
+            0,
+            DXGI_FORMAT_R32G32B32A32_FLOAT,
+            0,
+            16,
+            D3D11_INPUT_PER_VERTEX_DATA,
+            0,
+        },
+    };
+
+    hr =
+        g_vrD3dDevice->CreateInputLayout(
+            inputElements,
+            static_cast<UINT>(
+                sizeof(inputElements) /
+                sizeof(inputElements[0])),
+            vertexShaderBlob->GetBufferPointer(),
+            vertexShaderBlob->GetBufferSize(),
+            g_vrControllerProxyInputLayout
+                .GetAddressOf());
+
+    if (FAILED(hr))
+    {
+        VR_LogHrFailure(
+            "CreateInputLayout(controller proxy)",
+            hr);
+
+        return false;
+    }
+
+    D3D11_BUFFER_DESC bufferDescription = {};
+    bufferDescription.ByteWidth =
+        sizeof(VrControllerProxyVertex) *
+        kVrMaximumControllerProxyVertices;
+    bufferDescription.Usage =
+        D3D11_USAGE_DYNAMIC;
+    bufferDescription.BindFlags =
+        D3D11_BIND_VERTEX_BUFFER;
+    bufferDescription.CPUAccessFlags =
+        D3D11_CPU_ACCESS_WRITE;
+
+    hr =
+        g_vrD3dDevice->CreateBuffer(
+            &bufferDescription,
+            nullptr,
+            g_vrControllerProxyVertexBuffer
+                .GetAddressOf());
+
+    if (FAILED(hr))
+    {
+        VR_LogHrFailure(
+            "CreateBuffer(controller proxy)",
+            hr);
+
+        return false;
+    }
+
+    g_vrControllerProxyResourcesReady = true;
+
+    Com_Printf(
+        0,
+        "[VR] Created visible OpenXR controller "
+        "proxy renderer.\n");
+
+    return true;
+}
+
+void VR_RenderControllerProxies(
+    const std::uint32_t eyeIndex,
+    const int32_t viewportWidth,
+    const int32_t viewportHeight)
+{
+    if (!g_vrControllerProxyResourcesReady ||
+        eyeIndex >= g_vrViews.size() ||
+        viewportWidth <= 0 ||
+        viewportHeight <= 0)
+    {
+        return;
+    }
+
+    std::array<
+        VrControllerProxyVertex,
+        kVrMaximumControllerProxyVertices>
+        vertices = {};
+
+    std::uint32_t vertexCount = 0u;
+
+    const float markerHalfWidth =
+        9.0f /
+        static_cast<float>(viewportWidth);
+
+    const float markerHalfHeight =
+        9.0f /
+        static_cast<float>(viewportHeight);
+
+    const float rayHalfThickness =
+        2.5f /
+        static_cast<float>(viewportHeight);
+
+    for (std::uint32_t handIndex = 0u;
+         handIndex < kVrControllerCount;
+         ++handIndex)
+    {
+        const VrControllerRenderPose& controller =
+            g_vrControllerRenderPoses[handIndex];
+
+        const float red =
+            handIndex == VR_CONTROLLER_LEFT
+                ? 0.1f
+                : 1.0f;
+
+        const float green =
+            handIndex == VR_CONTROLLER_LEFT
+                ? 0.85f
+                : 0.45f;
+
+        const float blue =
+            handIndex == VR_CONTROLLER_LEFT
+                ? 1.0f
+                : 0.05f;
+
+        if (controller.gripValid)
+        {
+            float gripX = 0.0f;
+            float gripY = 0.0f;
+
+            if (VR_ProjectAppSpacePointToEye(
+                    controller.gripPose.position,
+                    g_vrViews[eyeIndex],
+                    &gripX,
+                    &gripY))
+            {
+                VR_AppendControllerProxyDiamond(
+                    vertices,
+                    &vertexCount,
+                    gripX,
+                    gripY,
+                    markerHalfWidth,
+                    markerHalfHeight,
+                    red,
+                    green,
+                    blue);
+            }
+        }
+
+        if (controller.aimValid)
+        {
+            const VrHeadVector aimForward =
+                VR_RotateHeadVector(
+                    controller.aimPose.orientation,
+                    {0.0f, 0.0f, -1.0f});
+
+            const XrVector3f aimEnd =
+                VR_ControllerAddScaled(
+                    controller.aimPose.position,
+                    aimForward,
+                    0.75f);
+
+            float aimStartX = 0.0f;
+            float aimStartY = 0.0f;
+            float aimEndX = 0.0f;
+            float aimEndY = 0.0f;
+
+            const bool startVisible =
+                VR_ProjectAppSpacePointToEye(
+                    controller.aimPose.position,
+                    g_vrViews[eyeIndex],
+                    &aimStartX,
+                    &aimStartY);
+
+            const bool endVisible =
+                VR_ProjectAppSpacePointToEye(
+                    aimEnd,
+                    g_vrViews[eyeIndex],
+                    &aimEndX,
+                    &aimEndY);
+
+            if (startVisible && endVisible)
+            {
+                VR_AppendControllerProxyRay(
+                    vertices,
+                    &vertexCount,
+                    aimStartX,
+                    aimStartY,
+                    aimEndX,
+                    aimEndY,
+                    rayHalfThickness,
+                    red,
+                    green,
+                    blue);
+            }
+        }
+    }
+
+    if (vertexCount == 0u)
+    {
+        return;
+    }
+
+    D3D11_MAPPED_SUBRESOURCE mapped = {};
+
+    const HRESULT mapResult =
+        g_vrD3dContext->Map(
+            g_vrControllerProxyVertexBuffer.Get(),
+            0,
+            D3D11_MAP_WRITE_DISCARD,
+            0,
+            &mapped);
+
+    if (FAILED(mapResult) ||
+        mapped.pData == nullptr)
+    {
+        return;
+    }
+
+    std::memcpy(
+        mapped.pData,
+        vertices.data(),
+        sizeof(VrControllerProxyVertex) *
+            vertexCount);
+
+    g_vrD3dContext->Unmap(
+        g_vrControllerProxyVertexBuffer.Get(),
+        0);
+
+    const UINT stride =
+        sizeof(VrControllerProxyVertex);
+
+    const UINT offset = 0u;
+
+    ID3D11Buffer* vertexBuffer =
+        g_vrControllerProxyVertexBuffer.Get();
+
+    g_vrD3dContext->IASetInputLayout(
+        g_vrControllerProxyInputLayout.Get());
+
+    g_vrD3dContext->IASetVertexBuffers(
+        0,
+        1,
+        &vertexBuffer,
+        &stride,
+        &offset);
+
+    g_vrD3dContext->IASetIndexBuffer(
+        nullptr,
+        DXGI_FORMAT_UNKNOWN,
+        0);
+
+    g_vrD3dContext->IASetPrimitiveTopology(
+        D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+    g_vrD3dContext->VSSetShader(
+        g_vrControllerProxyVertexShader.Get(),
+        nullptr,
+        0);
+
+    g_vrD3dContext->PSSetShader(
+        g_vrControllerProxyPixelShader.Get(),
+        nullptr,
+        0);
+
+    g_vrD3dContext->RSSetState(nullptr);
+
+    g_vrD3dContext->OMSetDepthStencilState(
+        nullptr,
+        0);
+
+    g_vrD3dContext->OMSetBlendState(
+        nullptr,
+        nullptr,
+        0xFFFFFFFFu);
+
+    g_vrD3dContext->Draw(
+        vertexCount,
+        0);
+
+    if (!g_vrLoggedFirstControllerProxyDraw)
+    {
+        Com_Printf(
+            0,
+            "[VR] Rendered first visible OpenXR "
+            "controller proxies.\n");
+
+        g_vrLoggedFirstControllerProxyDraw = true;
+    }
+}
+
 const char* VR_ControllerHandName(
     const std::uint32_t handIndex)
 {
@@ -1830,6 +2618,7 @@ void VR_DestroyControllerInput()
     g_vrControllerTriggerPressed.fill(false);
     g_vrControllerSqueezePressed.fill(false);
     g_vrControllerDiagnosticFrame = 0u;
+    g_vrControllerRenderPoses = {};
 }
 
 bool VR_CreateControllerAction(
@@ -2540,6 +3329,24 @@ void VR_UpdateControllerActions(
                     handIndex],
                 displayTime,
                 &aimLocation);
+
+        VrControllerRenderPose& renderPose =
+            g_vrControllerRenderPoses[handIndex];
+
+        renderPose.gripValid = gripValid;
+        renderPose.aimValid = aimValid;
+
+        if (gripValid)
+        {
+            renderPose.gripPose =
+                gripLocation.pose;
+        }
+
+        if (aimValid)
+        {
+            renderPose.aimPose =
+                aimLocation.pose;
+        }
 
         if (gripValid &&
             !g_vrLoggedFirstGripPose[handIndex])
@@ -3606,6 +4413,11 @@ bool VR_RenderSolidColorFrame(
                 &nullView);
         }
 
+        VR_RenderControllerProxies(
+            eyeIndex,
+            eyeSwapchain.width,
+            eyeSwapchain.height);
+
         g_vrD3dContext->Flush();
 
         XrSwapchainImageReleaseInfo releaseInfo{
@@ -4177,6 +4989,15 @@ bool VR_Init()
         return false;
     }
 
+    if (!VR_CreateControllerProxyResources())
+    {
+        Com_PrintWarning(
+            0,
+            "[VR] Controller proxy renderer could "
+            "not be created. Controller tracking "
+            "will continue without visible markers.\n");
+    }
+
     VR_D3D9CaptureSetEnabled(true);
 
     g_vrInitialized = true;
@@ -4359,6 +5180,14 @@ void VR_Shutdown()
     g_vrCapturedStereoHeight = 0u;
     g_vrUploadedStereoSerial = 0u;
     g_vrLoggedFirstStereoUpload = false;
+
+    g_vrControllerProxyVertexBuffer.Reset();
+    g_vrControllerProxyInputLayout.Reset();
+    g_vrControllerProxyPixelShader.Reset();
+    g_vrControllerProxyVertexShader.Reset();
+    g_vrControllerProxyResourcesReady = false;
+    g_vrLoggedFirstControllerProxyDraw = false;
+    g_vrControllerRenderPoses = {};
 
     g_vrTestDepthStencilState.Reset();
     g_vrTestRasterizerState.Reset();
