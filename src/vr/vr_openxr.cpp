@@ -72,6 +72,16 @@ bool g_vrLoggedFirstUpload = false;
 
 std::mutex g_vrHeadOrientationMutex;
 
+constexpr float kVrGameUnitsPerMeter =
+    39.37007874015748f;
+
+XrVector3f g_vrHeadPositionOrigin = {};
+float g_vrHeadPositionLocal[3] = {};
+bool g_vrHeadPositionOriginValid = false;
+bool g_vrHeadPositionValid = false;
+bool g_vrLoggedFirstPositionApply = false;
+
+
 float g_vrHeadOrientationAxis[3][3] = {
     {1.0f, 0.0f, 0.0f},
     {0.0f, 1.0f, 0.0f},
@@ -1443,7 +1453,54 @@ void VR_PublishHeadOrientation(
     g_vrHeadOrientationAxis[2][2] =
         upCod.z;
 
-    g_vrHeadOrientationValid = true;
+    // Publish center-head translation in the same protected snapshot as
+        // the headset orientation. Averaging the two eye poses removes the
+        // per-eye IPD offset and yields the physical head center.
+        const XrVector3f centerHeadPosition = {
+            (g_vrViews[0].pose.position.x +
+             g_vrViews[1].pose.position.x) * 0.5f,
+            (g_vrViews[0].pose.position.y +
+             g_vrViews[1].pose.position.y) * 0.5f,
+            (g_vrViews[0].pose.position.z +
+             g_vrViews[1].pose.position.z) * 0.5f};
+
+        if (!g_vrHeadPositionOriginValid)
+        {
+            g_vrHeadPositionOrigin =
+                centerHeadPosition;
+
+            g_vrHeadPositionOriginValid = true;
+        }
+
+        const float openXrDeltaX =
+            centerHeadPosition.x -
+            g_vrHeadPositionOrigin.x;
+
+        const float openXrDeltaY =
+            centerHeadPosition.y -
+            g_vrHeadPositionOrigin.y;
+
+        const float openXrDeltaZ =
+            centerHeadPosition.z -
+            g_vrHeadPositionOrigin.z;
+
+        // OpenXR: +X right, +Y up, -Z forward.
+        // CoD camera-local basis: +X forward, +Y left, +Z up.
+        g_vrHeadPositionLocal[0] =
+            -openXrDeltaZ *
+            kVrGameUnitsPerMeter;
+
+        g_vrHeadPositionLocal[1] =
+            -openXrDeltaX *
+            kVrGameUnitsPerMeter;
+
+        g_vrHeadPositionLocal[2] =
+            openXrDeltaY *
+            kVrGameUnitsPerMeter;
+
+        g_vrHeadPositionValid = true;
+
+        g_vrHeadOrientationValid = true;
 
     if (!g_vrLoggedFirstHeadPose)
     {
@@ -2467,6 +2524,66 @@ void VR_ResetState()
     g_vrSessionRunning = false;
     g_vrExitRequested = false;
 }
+}
+
+
+bool VR_ApplyHeadPosition(
+    float viewOrigin[3],
+    const float viewAxis[3][3])
+{
+    if (viewOrigin == nullptr ||
+        viewAxis == nullptr)
+    {
+        return false;
+    }
+
+    float localPosition[3] = {};
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrHeadOrientationMutex);
+
+        if (!g_vrHeadPositionValid)
+        {
+            return false;
+        }
+
+        localPosition[0] =
+            g_vrHeadPositionLocal[0];
+
+        localPosition[1] =
+            g_vrHeadPositionLocal[1];
+
+        localPosition[2] =
+            g_vrHeadPositionLocal[2];
+    }
+
+    // Use the normal player-camera basis. The MP callsite invokes this
+    // before applying the headset's rotational offset.
+    for (int worldComponent = 0;
+         worldComponent < 3;
+         ++worldComponent)
+    {
+        viewOrigin[worldComponent] +=
+            localPosition[0] *
+                viewAxis[0][worldComponent] +
+            localPosition[1] *
+                viewAxis[1][worldComponent] +
+            localPosition[2] *
+                viewAxis[2][worldComponent];
+    }
+
+    if (!g_vrLoggedFirstPositionApply)
+    {
+        Com_Printf(
+            0,
+            "[VR] Applied OpenXR headset position "
+            "to the CoD4 camera.\n");
+
+        g_vrLoggedFirstPositionApply = true;
+    }
+
+    return true;
 }
 
 

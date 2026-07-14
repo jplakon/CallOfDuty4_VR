@@ -644,6 +644,10 @@ void __cdecl CG_CalcViewValues(int32_t localClientNum)
             CG_CalcFov(localClientNum);
         }
     }
+    VR_ApplyHeadPosition(
+        cgameGlob->refdef.vieworg,
+        cgameGlob->refdef.viewaxis);
+
     VR_ApplyHeadOrientation(
         cgameGlob->refdef.viewaxis);
 
