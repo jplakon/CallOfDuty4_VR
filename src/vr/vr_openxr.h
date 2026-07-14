@@ -55,3 +55,11 @@ bool VR_ApplyRightControllerToWeaponPlacement(
     const float cameraAxis[3][3],
     float weaponOrigin[3],
     float weaponAxis[3][3]);
+
+// Returns the final rendered right-hand weapon direction as CoD pitch/yaw
+// and the current right index-trigger state. The direction is taken from
+// the transformed viewmodel axis, keeping shots aligned with the visible gun.
+bool VR_GetRightControllerWeaponCommand(
+    float* gunPitch,
+    float* gunYaw,
+    bool* attackPressed);

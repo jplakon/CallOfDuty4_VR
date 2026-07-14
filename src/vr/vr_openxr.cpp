@@ -118,6 +118,18 @@ float g_vrRightControllerWeaponBaseAxis[3][3] = {};
 bool g_vrLoggedRightControllerWeaponCalibration = false;
 bool g_vrLoggedRightControllerWeaponApply = false;
 
+float g_vrRightControllerFinalWeaponForward[3] = {
+    1.0f,
+    0.0f,
+    0.0f,
+};
+
+bool g_vrRightControllerFinalWeaponAimValid = false;
+bool g_vrRightControllerAttackPressed = false;
+
+bool g_vrLoggedRightControllerUsercmdAim = false;
+bool g_vrLoggedRightControllerAttackInjection = false;
+
 struct VrControllerProxyVertex
 {
     float position[4];
@@ -2640,6 +2652,12 @@ void VR_DestroyControllerInput()
 
         g_vrRightControllerWeaponPoseValid = false;
         g_vrRightControllerWeaponBaseValid = false;
+        g_vrRightControllerFinalWeaponAimValid = false;
+        g_vrRightControllerAttackPressed = false;
+
+        g_vrRightControllerFinalWeaponForward[0] = 1.0f;
+        g_vrRightControllerFinalWeaponForward[1] = 0.0f;
+        g_vrRightControllerFinalWeaponForward[2] = 0.0f;
 
         memset(
             g_vrRightControllerWeaponPosition,
@@ -2664,6 +2682,8 @@ void VR_DestroyControllerInput()
 
     g_vrLoggedRightControllerWeaponCalibration = false;
     g_vrLoggedRightControllerWeaponApply = false;
+    g_vrLoggedRightControllerUsercmdAim = false;
+    g_vrLoggedRightControllerAttackInjection = false;
 }
 
 bool VR_CreateControllerAction(
@@ -3588,6 +3608,39 @@ void VR_UpdateControllerActions(
 
         g_vrControllerSqueezePressed[handIndex] =
             squeezePressed;
+
+        if (handIndex == VR_CONTROLLER_RIGHT)
+        {
+            const bool attackPressed =
+                triggerActive &&
+                triggerValue >= 0.55f;
+
+            bool logAttackInjection = false;
+
+            {
+                std::lock_guard<std::mutex> lock(
+                    g_vrWeaponControllerPoseMutex);
+
+                logAttackInjection =
+                    attackPressed &&
+                    !g_vrRightControllerAttackPressed;
+
+                g_vrRightControllerAttackPressed =
+                    attackPressed;
+            }
+
+            if (logAttackInjection &&
+                !g_vrLoggedRightControllerAttackInjection)
+            {
+                Com_Printf(
+                    0,
+                    "[VR] Right controller trigger "
+                    "is ready to inject BUTTON_ATTACK.\n");
+
+                g_vrLoggedRightControllerAttackInjection =
+                    true;
+            }
+        }
 
         if (logPeriodicSnapshot &&
             aimValid)
@@ -4867,6 +4920,29 @@ bool VR_ApplyRightControllerToWeaponPlacement(
         }
     }
 
+    const float forwardLength =
+        std::sqrt(
+            weaponAxis[0][0] * weaponAxis[0][0] +
+            weaponAxis[0][1] * weaponAxis[0][1] +
+            weaponAxis[0][2] * weaponAxis[0][2]);
+
+    if (forwardLength > 0.0001f)
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrWeaponControllerPoseMutex);
+
+        g_vrRightControllerFinalWeaponForward[0] =
+            weaponAxis[0][0] / forwardLength;
+
+        g_vrRightControllerFinalWeaponForward[1] =
+            weaponAxis[0][1] / forwardLength;
+
+        g_vrRightControllerFinalWeaponForward[2] =
+            weaponAxis[0][2] / forwardLength;
+
+        g_vrRightControllerFinalWeaponAimValid = true;
+    }
+
     if (!g_vrLoggedRightControllerWeaponApply)
     {
         Com_Printf(
@@ -4875,6 +4951,100 @@ bool VR_ApplyRightControllerToWeaponPlacement(
             "delta to the CoD4 viewmodel.\n");
 
         g_vrLoggedRightControllerWeaponApply = true;
+    }
+
+    return true;
+}
+
+
+bool VR_GetRightControllerWeaponCommand(
+    float* gunPitch,
+    float* gunYaw,
+    bool* attackPressed)
+{
+    if (gunPitch == nullptr ||
+        gunYaw == nullptr ||
+        attackPressed == nullptr)
+    {
+        return false;
+    }
+
+    float forward[3] = {};
+    bool aimValid = false;
+    bool currentAttackPressed = false;
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrWeaponControllerPoseMutex);
+
+        aimValid =
+            g_vrRightControllerFinalWeaponAimValid;
+
+        currentAttackPressed =
+            g_vrRightControllerAttackPressed;
+
+        forward[0] =
+            g_vrRightControllerFinalWeaponForward[0];
+
+        forward[1] =
+            g_vrRightControllerFinalWeaponForward[1];
+
+        forward[2] =
+            g_vrRightControllerFinalWeaponForward[2];
+    }
+
+    *attackPressed =
+        aimValid && currentAttackPressed;
+
+    if (!aimValid)
+    {
+        return false;
+    }
+
+    constexpr float radiansToDegrees =
+        57.29577951308232f;
+
+    const float horizontalLength =
+        std::sqrt(
+            forward[0] * forward[0] +
+            forward[1] * forward[1]);
+
+    float pitch =
+        std::atan2(
+            -forward[2],
+            horizontalLength) *
+        radiansToDegrees;
+
+    float yaw =
+        std::atan2(
+            forward[1],
+            forward[0]) *
+        radiansToDegrees;
+
+    pitch = std::fmod(pitch, 360.0f);
+    yaw = std::fmod(yaw, 360.0f);
+
+    if (pitch < 0.0f)
+    {
+        pitch += 360.0f;
+    }
+
+    if (yaw < 0.0f)
+    {
+        yaw += 360.0f;
+    }
+
+    *gunPitch = pitch;
+    *gunYaw = yaw;
+
+    if (!g_vrLoggedRightControllerUsercmdAim)
+    {
+        Com_Printf(
+            0,
+            "[VR] Supplied right-controller weapon "
+            "aim to the multiplayer usercmd.\n");
+
+        g_vrLoggedRightControllerUsercmdAim = true;
     }
 
     return true;

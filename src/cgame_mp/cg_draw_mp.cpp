@@ -3,6 +3,7 @@
 #endif
 
 #include "vr/vr_openxr.h"
+#include <qcommon/msg_mp.h>
 
 #include "cg_local_mp.h"
 #include "cg_public_mp.h"
@@ -1431,7 +1432,29 @@ void __cdecl CG_DrawActive(int32_t localClientNum)
     CL_SetUserCmdAimValues(localClientNum, angles);
     BG_AssertOffhandIndexOrNone(cgameGlob->equippedOffHand);
     CL_SetUserCmdWeapons(localClientNum, cgameGlob->weaponSelect, cgameGlob->equippedOffHand);
-    CL_SetExtraButtons(localClientNum, cgameGlob->extraButtons);
+
+    int commandExtraButtons =
+        cgameGlob->extraButtons;
+
+    float unusedVrGunPitch = 0.0f;
+    float unusedVrGunYaw = 0.0f;
+    bool vrAttackPressed = false;
+
+    if (VR_GetRightControllerWeaponCommand(
+            &unusedVrGunPitch,
+            &unusedVrGunYaw,
+            &vrAttackPressed) &&
+        vrAttackPressed)
+    {
+        commandExtraButtons |=
+            BUTTON_ATTACK;
+    }
+
+    // VR controller trigger is injected from the active MP CG_DrawActive path.
+    CL_SetExtraButtons(
+        localClientNum,
+        commandExtraButtons);
+
     cgameGlob->extraButtons = 0;
     if (!VR_IsInitialized() ||
         cgameGlob->refdef.width < 2)
