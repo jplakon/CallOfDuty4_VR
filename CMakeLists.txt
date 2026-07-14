@@ -22,6 +22,35 @@ set(BIN_DIR ${CMAKE_CURRENT_SOURCE_DIR}/bin)
 set(SCRIPTS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/scripts)
 set(PLATFORM_DIR ${SCRIPTS_DIR}/platform)
 
+
+# KISAK_OPENXR_SDK_BEGIN
+#
+# Build the vendored Khronos OpenXR loader as a static Win32 library.
+# Tests, API layers, and specification targets are unnecessary here.
+set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(BUILD_LOADER ON CACHE BOOL "" FORCE)
+set(DYNAMIC_LOADER OFF CACHE BOOL "" FORCE)
+set(BUILD_API_LAYERS OFF CACHE BOOL "" FORCE)
+set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(BUILD_CONFORMANCE_TESTS OFF CACHE BOOL "" FORCE)
+set(BUILD_SDK_TESTS OFF CACHE BOOL "" FORCE)
+set(BUILD_SPECIFICATION OFF CACHE BOOL "" FORCE)
+
+add_subdirectory(
+    ${DEPS_DIR}/openxr-sdk
+    ${CMAKE_BINARY_DIR}/openxr-sdk
+    EXCLUDE_FROM_ALL
+)
+
+# KisakCOD uses the static MSVC runtime. Build the static OpenXR
+# loader with the matching runtime to avoid RuntimeLibrary conflicts.
+set_property(
+    TARGET openxr_loader
+    PROPERTY MSVC_RUNTIME_LIBRARY
+    "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+)
+# KISAK_OPENXR_SDK_END
+
 # Set the output directories
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${BIN_DIR})
 

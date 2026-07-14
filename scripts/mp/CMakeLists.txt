@@ -56,6 +56,27 @@ add_executable(${PROJECT_NAME}
     ${STEAM_HEADERS}
 )
 
+
+# KISAK_OPENXR_MP_BEGIN
+target_sources(
+    ${PROJECT_NAME}
+    PRIVATE
+        ${SRC_DIR}/vr/vr_openxr.cpp
+        ${SRC_DIR}/vr/vr_openxr.h
+)
+
+target_link_libraries(
+    ${PROJECT_NAME}
+    PRIVATE
+        OpenXR::openxr_loader
+)
+target_compile_definitions(
+    ${PROJECT_NAME}
+    PRIVATE
+        KISAK_OPENXR_ENABLED=1
+)
+# KISAK_OPENXR_MP_END
+
 # Add multiplayer flag
 target_compile_definitions(${PROJECT_NAME} PUBLIC KISAK_MP CINEMA USE_SEPARATE_BLIT_TEXTURE)
 

@@ -1,3 +1,5 @@
+#include "vr/vr_openxr.h"
+
 //#include "../qcommon/exe_headers.h"
 
 //#include "../client/client.h
@@ -809,6 +811,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 			Steam_Init();
 			// LWSS END
 			Com_Init(sys_cmdline);
+
+#if defined(KISAK_OPENXR_ENABLED)
+  Com_Printf(
+      0,
+      "[VR] Calling OpenXR runtime probe from WinMain...\n");
+
+  VR_OpenXR_RuntimeProbe();
+#endif
 
 #ifdef KISAK_MP
 			if (!com_dedicated->current.integer)
