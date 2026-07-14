@@ -259,6 +259,7 @@ void VR_D3D9CaptureFrame(IDirect3DDevice9* device)
 
         g_loggedFirstCapture = true;
     }
+
 }
 
 bool VR_D3D9CopyLatestFrame(

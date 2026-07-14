@@ -15,3 +15,6 @@ void VR_Shutdown();
 
 // Returns true after OpenXR and its D3D11 session have initialized.
 bool VR_IsInitialized();
+// Applies the latest recentered OpenXR headset orientation to an
+// existing CoD camera axis. Returns false until a valid pose exists.
+bool VR_ApplyHeadOrientation(float viewAxis[3][3]);

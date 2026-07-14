@@ -19,6 +19,7 @@
 #include <cstring>
 #include <vector>
 
+#include <mutex>
 namespace
 {
 using Microsoft::WRL::ComPtr;
@@ -68,6 +69,27 @@ std::uint32_t g_vrCapturedFrameWidth = 0;
 std::uint32_t g_vrCapturedFrameHeight = 0;
 std::uint64_t g_vrUploadedCaptureSerial = 0;
 bool g_vrLoggedFirstUpload = false;
+
+std::mutex g_vrHeadOrientationMutex;
+
+float g_vrHeadOrientationAxis[3][3] = {
+    {1.0f, 0.0f, 0.0f},
+    {0.0f, 1.0f, 0.0f},
+    {0.0f, 0.0f, 1.0f},
+};
+
+XrQuaternionf g_vrHeadBaseOrientation = {
+    0.0f,
+    0.0f,
+    0.0f,
+    1.0f,
+};
+
+bool g_vrHeadBaseOrientationValid = false;
+bool g_vrHeadOrientationValid = false;
+bool g_vrLoggedFirstHeadPose = false;
+bool g_vrLoggedFirstCameraApply = false;
+
 
 std::vector<XrViewConfigurationView> g_vrViewConfigs;
 std::vector<XrView> g_vrViews;
@@ -1170,6 +1192,270 @@ float4 PSMain(PixelInput input) : SV_TARGET
     return true;
 }
 
+
+struct VrHeadVector
+{
+    float x;
+    float y;
+    float z;
+};
+
+XrQuaternionf VR_NormalizeQuaternion(
+    const XrQuaternionf& quaternion)
+{
+    const float lengthSquared =
+        quaternion.x * quaternion.x +
+        quaternion.y * quaternion.y +
+        quaternion.z * quaternion.z +
+        quaternion.w * quaternion.w;
+
+    if (lengthSquared <= 0.000001f)
+    {
+        return {
+            0.0f,
+            0.0f,
+            0.0f,
+            1.0f,
+        };
+    }
+
+    const float inverseLength =
+        1.0f / std::sqrt(lengthSquared);
+
+    return {
+        quaternion.x * inverseLength,
+        quaternion.y * inverseLength,
+        quaternion.z * inverseLength,
+        quaternion.w * inverseLength,
+    };
+}
+
+XrQuaternionf VR_ConjugateQuaternion(
+    const XrQuaternionf& quaternion)
+{
+    return {
+        -quaternion.x,
+        -quaternion.y,
+        -quaternion.z,
+        quaternion.w,
+    };
+}
+
+XrQuaternionf VR_MultiplyQuaternion(
+    const XrQuaternionf& left,
+    const XrQuaternionf& right)
+{
+    XrQuaternionf result = {};
+
+    result.x =
+        left.w * right.x +
+        left.x * right.w +
+        left.y * right.z -
+        left.z * right.y;
+
+    result.y =
+        left.w * right.y -
+        left.x * right.z +
+        left.y * right.w +
+        left.z * right.x;
+
+    result.z =
+        left.w * right.z +
+        left.x * right.y -
+        left.y * right.x +
+        left.z * right.w;
+
+    result.w =
+        left.w * right.w -
+        left.x * right.x -
+        left.y * right.y -
+        left.z * right.z;
+
+    return VR_NormalizeQuaternion(result);
+}
+
+VrHeadVector VR_CrossHeadVector(
+    const VrHeadVector& left,
+    const VrHeadVector& right)
+{
+    return {
+        left.y * right.z -
+            left.z * right.y,
+
+        left.z * right.x -
+            left.x * right.z,
+
+        left.x * right.y -
+            left.y * right.x,
+    };
+}
+
+VrHeadVector VR_RotateHeadVector(
+    const XrQuaternionf& orientation,
+    const VrHeadVector& vector)
+{
+    const VrHeadVector quaternionVector = {
+        orientation.x,
+        orientation.y,
+        orientation.z,
+    };
+
+    VrHeadVector twiceCross =
+        VR_CrossHeadVector(
+            quaternionVector,
+            vector);
+
+    twiceCross.x *= 2.0f;
+    twiceCross.y *= 2.0f;
+    twiceCross.z *= 2.0f;
+
+    const VrHeadVector secondCross =
+        VR_CrossHeadVector(
+            quaternionVector,
+            twiceCross);
+
+    return {
+        vector.x +
+            orientation.w * twiceCross.x +
+            secondCross.x,
+
+        vector.y +
+            orientation.w * twiceCross.y +
+            secondCross.y,
+
+        vector.z +
+            orientation.w * twiceCross.z +
+            secondCross.z,
+    };
+}
+
+VrHeadVector VR_OpenXrVectorToCod(
+    const VrHeadVector& vector)
+{
+    // OpenXR: +X right, +Y up, -Z forward.
+    // CoD camera-local basis: +X forward, +Y left, +Z up.
+    return {
+        -vector.z,
+        -vector.x,
+        vector.y,
+    };
+}
+
+void VR_ResetHeadOrientation()
+{
+    std::lock_guard<std::mutex> lock(
+        g_vrHeadOrientationMutex);
+
+    g_vrHeadOrientationAxis[0][0] = 1.0f;
+    g_vrHeadOrientationAxis[0][1] = 0.0f;
+    g_vrHeadOrientationAxis[0][2] = 0.0f;
+
+    g_vrHeadOrientationAxis[1][0] = 0.0f;
+    g_vrHeadOrientationAxis[1][1] = 1.0f;
+    g_vrHeadOrientationAxis[1][2] = 0.0f;
+
+    g_vrHeadOrientationAxis[2][0] = 0.0f;
+    g_vrHeadOrientationAxis[2][1] = 0.0f;
+    g_vrHeadOrientationAxis[2][2] = 1.0f;
+
+    g_vrHeadBaseOrientation = {
+        0.0f,
+        0.0f,
+        0.0f,
+        1.0f,
+    };
+
+    g_vrHeadBaseOrientationValid = false;
+    g_vrHeadOrientationValid = false;
+    g_vrLoggedFirstHeadPose = false;
+    g_vrLoggedFirstCameraApply = false;
+}
+
+void VR_PublishHeadOrientation(
+    const XrQuaternionf& currentOrientation)
+{
+    const XrQuaternionf normalizedCurrent =
+        VR_NormalizeQuaternion(
+            currentOrientation);
+
+    std::lock_guard<std::mutex> lock(
+        g_vrHeadOrientationMutex);
+
+    if (!g_vrHeadBaseOrientationValid)
+    {
+        g_vrHeadBaseOrientation =
+            normalizedCurrent;
+
+        g_vrHeadBaseOrientationValid = true;
+    }
+
+    const XrQuaternionf relativeOrientation =
+        VR_MultiplyQuaternion(
+            VR_ConjugateQuaternion(
+                g_vrHeadBaseOrientation),
+            normalizedCurrent);
+
+    const VrHeadVector forwardOpenXr =
+        VR_RotateHeadVector(
+            relativeOrientation,
+            {0.0f, 0.0f, -1.0f});
+
+    const VrHeadVector leftOpenXr =
+        VR_RotateHeadVector(
+            relativeOrientation,
+            {-1.0f, 0.0f, 0.0f});
+
+    const VrHeadVector upOpenXr =
+        VR_RotateHeadVector(
+            relativeOrientation,
+            {0.0f, 1.0f, 0.0f});
+
+    const VrHeadVector forwardCod =
+        VR_OpenXrVectorToCod(
+            forwardOpenXr);
+
+    const VrHeadVector leftCod =
+        VR_OpenXrVectorToCod(
+            leftOpenXr);
+
+    const VrHeadVector upCod =
+        VR_OpenXrVectorToCod(
+            upOpenXr);
+
+    g_vrHeadOrientationAxis[0][0] =
+        forwardCod.x;
+    g_vrHeadOrientationAxis[0][1] =
+        forwardCod.y;
+    g_vrHeadOrientationAxis[0][2] =
+        forwardCod.z;
+
+    g_vrHeadOrientationAxis[1][0] =
+        leftCod.x;
+    g_vrHeadOrientationAxis[1][1] =
+        leftCod.y;
+    g_vrHeadOrientationAxis[1][2] =
+        leftCod.z;
+
+    g_vrHeadOrientationAxis[2][0] =
+        upCod.x;
+    g_vrHeadOrientationAxis[2][1] =
+        upCod.y;
+    g_vrHeadOrientationAxis[2][2] =
+        upCod.z;
+
+    g_vrHeadOrientationValid = true;
+
+    if (!g_vrLoggedFirstHeadPose)
+    {
+        Com_Printf(
+            0,
+            "[VR] Recentered and published first "
+            "OpenXR headset orientation.\n");
+
+        g_vrLoggedFirstHeadPose = true;
+    }
+}
+
 bool VR_SelectEnvironmentBlendMode()
 {
     uint32_t blendModeCount = 0;
@@ -1477,13 +1763,25 @@ bool VR_CreateSwapchains()
         VrEyeSwapchain& eyeSwapchain =
             g_vrEyeSwapchains[eyeIndex];
 
+        // Low-memory diagnostic for the 32-bit CoD4 process.
+        // The Quest runtime recommends roughly 2496 pixels per eye, but
+        // allocating six full-size color images plus six matching depth
+        // images consumes hundreds of megabytes before a map is loaded.
+        constexpr uint32_t diagnosticEyeSize = 768u;
+
         eyeSwapchain.width =
             static_cast<int32_t>(
-                viewConfig.recommendedImageRectWidth);
+                viewConfig.recommendedImageRectWidth >
+                        diagnosticEyeSize
+                    ? diagnosticEyeSize
+                    : viewConfig.recommendedImageRectWidth);
 
         eyeSwapchain.height =
             static_cast<int32_t>(
-                viewConfig.recommendedImageRectHeight);
+                viewConfig.recommendedImageRectHeight >
+                        diagnosticEyeSize
+                    ? diagnosticEyeSize
+                    : viewConfig.recommendedImageRectHeight);
 
         XrSwapchainCreateInfo swapchainCreateInfo{
             XR_TYPE_SWAPCHAIN_CREATE_INFO
@@ -1497,9 +1795,12 @@ bool VR_CreateSwapchains()
         swapchainCreateInfo.sampleCount =
             viewConfig.recommendedSwapchainSampleCount;
         swapchainCreateInfo.width =
-            viewConfig.recommendedImageRectWidth;
+            static_cast<uint32_t>(
+                eyeSwapchain.width);
+
         swapchainCreateInfo.height =
-            viewConfig.recommendedImageRectHeight;
+            static_cast<uint32_t>(
+                eyeSwapchain.height);
         swapchainCreateInfo.faceCount = 1;
         swapchainCreateInfo.arraySize = 1;
         swapchainCreateInfo.mipCount = 1;
@@ -1715,7 +2016,8 @@ bool VR_CreateSwapchains()
 
         Com_Printf(
             0,
-            "[VR] Eye %u swapchain: %d x %d, %u images.\n",
+            "[VR] OpenXR low-memory swapchain diagnostic: "
+            "eye %u uses %d x %d with %u images.\n",
             eyeIndex,
             eyeSwapchain.width,
             eyeSwapchain.height,
@@ -1900,6 +2202,12 @@ bool VR_RenderSolidColorFrame(
     }
 
     projectionViews.resize(locatedViewCount);
+
+    if (locatedViewCount > 0)
+    {
+        VR_PublishHeadOrientation(
+            g_vrViews[0].pose.orientation);
+    }
 
     VR_UpdateCapturedFrameTexture();
 
@@ -2161,8 +2469,35 @@ void VR_ResetState()
 }
 }
 
+
+bool VR_ApplyHeadOrientation(
+    float viewAxis[3][3])
+{
+    if (viewAxis == nullptr)
+    {
+        return false;
+    }
+
+    // Diagnostic bisection: prove that the cross-module camera hook and
+    // calling convention are safe before restoring any matrix or mutex work.
+    static bool loggedEntry = false;
+
+    if (!loggedEntry)
+    {
+        Com_Printf(
+            0,
+            "[VR] Entered OpenXR camera hook "
+            "(no-op diagnostic).\n");
+
+        loggedEntry = true;
+    }
+
+    return true;
+}
+
 bool VR_Init()
 {
+    VR_ResetHeadOrientation();
     if (g_vrInitialized)
     {
         return true;
@@ -2170,7 +2505,7 @@ bool VR_Init()
 
     Com_Printf(
         0,
-        "[VR] Initializing OpenXR D3D9 frame-bridge diagnostic...\n");
+        "[VR] Initializing OpenXR low-memory swapchain diagnostic...\n");
 
     if (!VR_HasInstanceExtension(
             XR_KHR_D3D11_ENABLE_EXTENSION_NAME))
@@ -2423,6 +2758,7 @@ void VR_Frame()
 
 void VR_Shutdown()
 {
+    VR_ResetHeadOrientation();
     if (g_vrInstance == XR_NULL_HANDLE &&
         g_vrSession == XR_NULL_HANDLE)
     {

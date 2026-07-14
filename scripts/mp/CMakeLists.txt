@@ -115,3 +115,13 @@ target_sources(
         ../../src/vr/vr_d3d9_capture.cpp
 )
 # KISAK_OPENXR_D3D9_CAPTURE_END
+
+# KISAK_LARGE_ADDRESS_AWARE_BEGIN
+if(MSVC AND CMAKE_SIZEOF_VOID_P EQUAL 4)
+    target_link_options(
+        ${PROJECT_NAME}
+        PRIVATE
+            /LARGEADDRESSAWARE
+    )
+endif()
+# KISAK_LARGE_ADDRESS_AWARE_END

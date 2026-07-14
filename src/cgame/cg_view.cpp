@@ -21,6 +21,7 @@
 #include <client/cl_input.h>
 #include <game/g_local.h>
 #include "cg_snapshot.h"
+#include "vr/vr_openxr.h"
 #include <client/cl_scrn.h>
 #include <universal/profile.h>
 
@@ -1506,10 +1507,19 @@ void __cdecl CG_CalcViewValues(int localClientNum)
         CG_ShakeCamera(localClientNum);
     }
 
-    AnglesToAxis(cgameGlob->refdefViewAngles, cgameGlob->refdef.viewaxis);
+    AnglesToAxis(
+        cgameGlob->refdefViewAngles,
+        cgameGlob->refdef.viewaxis);
+
+    // Keep CoD4's weapon/viewmodel camera animation and perturbation on the
+    // original game camera. Apply the headset only after those systems have
+    // finished constructing the final render camera.
     CG_ApplyViewAnimation(localClientNum);
     CG_PerturbCamera(cgArray);
     CG_CalcFov(localClientNum);
+
+    VR_ApplyHeadOrientation(
+        cgameGlob->refdef.viewaxis);
 
     if (cgameGlob->predictedPlayerState.pm_type == 4)
         CG_ModelPreviewerUpdateView(
