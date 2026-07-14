@@ -62,13 +62,25 @@ ComPtr<ID3D11PixelShader> g_vrBlitPixelShader;
 ComPtr<ID3D11InputLayout> g_vrBlitInputLayout;
 ComPtr<ID3D11Buffer> g_vrBlitVertexBuffer;
 ComPtr<ID3D11SamplerState> g_vrBlitSampler;
-ComPtr<ID3D11Texture2D> g_vrCapturedFrameTexture;
-ComPtr<ID3D11ShaderResourceView> g_vrCapturedFrameView;
+constexpr std::uint32_t kVrStereoEyeCount = 2u;
 
-std::uint32_t g_vrCapturedFrameWidth = 0;
-std::uint32_t g_vrCapturedFrameHeight = 0;
-std::uint64_t g_vrUploadedCaptureSerial = 0;
-bool g_vrLoggedFirstUpload = false;
+std::array<ComPtr<ID3D11Texture2D>, kVrStereoEyeCount>
+    g_vrCapturedFrameTextures;
+
+std::array<ComPtr<ID3D11ShaderResourceView>, kVrStereoEyeCount>
+    g_vrCapturedFrameViews;
+
+std::array<std::uint32_t, kVrStereoEyeCount>
+    g_vrCapturedFrameWidths = {};
+
+std::array<std::uint32_t, kVrStereoEyeCount>
+    g_vrCapturedFrameHeights = {};
+
+std::array<std::uint64_t, kVrStereoEyeCount>
+    g_vrUploadedCaptureSerials = {};
+
+std::array<bool, kVrStereoEyeCount>
+    g_vrLoggedFirstUploads = {};
 
 std::mutex g_vrHeadOrientationMutex;
 
@@ -80,6 +92,15 @@ float g_vrHeadPositionLocal[3] = {};
 bool g_vrHeadPositionOriginValid = false;
 bool g_vrHeadPositionValid = false;
 bool g_vrLoggedFirstPositionApply = false;
+
+constexpr float kVrDefaultHalfIpdGameUnits =
+    0.032f * kVrGameUnitsPerMeter;
+
+float g_vrHalfIpdGameUnits =
+    kVrDefaultHalfIpdGameUnits;
+
+bool g_vrLoggedFirstStereoEyeOffset = false;
+
 
 
 float g_vrHeadOrientationAxis[3][3] = {
@@ -781,29 +802,38 @@ float4 PSMain(PixelInput input) : SV_TARGET
     return true;
 }
 
-bool VR_UpdateCapturedFrameTexture()
+bool VR_UpdateCapturedEyeTexture(
+    const std::uint32_t eyeIndex)
 {
+    if (eyeIndex >= kVrStereoEyeCount)
+    {
+        return false;
+    }
+
     std::vector<std::uint8_t> pixels;
     std::uint32_t width = 0;
     std::uint32_t height = 0;
     std::uint64_t serial = 0;
 
-    if (!VR_D3D9CopyLatestFrame(
-            g_vrUploadedCaptureSerial,
+    if (!VR_D3D9CopyLatestEyeFrame(
+            eyeIndex,
+            g_vrUploadedCaptureSerials[eyeIndex],
             pixels,
             width,
             height,
             serial))
     {
-        return g_vrCapturedFrameView != nullptr;
+        return
+            g_vrCapturedFrameViews[eyeIndex] !=
+            nullptr;
     }
 
-    if (!g_vrCapturedFrameTexture ||
-        width != g_vrCapturedFrameWidth ||
-        height != g_vrCapturedFrameHeight)
+    if (!g_vrCapturedFrameTextures[eyeIndex] ||
+        width != g_vrCapturedFrameWidths[eyeIndex] ||
+        height != g_vrCapturedFrameHeights[eyeIndex])
     {
-        g_vrCapturedFrameView.Reset();
-        g_vrCapturedFrameTexture.Reset();
+        g_vrCapturedFrameViews[eyeIndex].Reset();
+        g_vrCapturedFrameTextures[eyeIndex].Reset();
 
         D3D11_TEXTURE2D_DESC textureDescription = {};
         textureDescription.Width = width;
@@ -822,12 +852,13 @@ bool VR_UpdateCapturedFrameTexture()
             g_vrD3dDevice->CreateTexture2D(
                 &textureDescription,
                 nullptr,
-                g_vrCapturedFrameTexture.GetAddressOf());
+                g_vrCapturedFrameTextures[eyeIndex]
+                    .GetAddressOf());
 
         if (FAILED(hr))
         {
             VR_LogHrFailure(
-                "CreateTexture2D(captured frame)",
+                "CreateTexture2D(captured eye frame)",
                 hr);
 
             return false;
@@ -835,44 +866,51 @@ bool VR_UpdateCapturedFrameTexture()
 
         hr =
             g_vrD3dDevice->CreateShaderResourceView(
-                g_vrCapturedFrameTexture.Get(),
+                g_vrCapturedFrameTextures[eyeIndex]
+                    .Get(),
                 nullptr,
-                g_vrCapturedFrameView.GetAddressOf());
+                g_vrCapturedFrameViews[eyeIndex]
+                    .GetAddressOf());
 
         if (FAILED(hr))
         {
             VR_LogHrFailure(
-                "CreateShaderResourceView(captured frame)",
+                "CreateShaderResourceView("
+                "captured eye frame)",
                 hr);
 
-            g_vrCapturedFrameTexture.Reset();
+            g_vrCapturedFrameTextures[eyeIndex]
+                .Reset();
+
             return false;
         }
 
-        g_vrCapturedFrameWidth = width;
-        g_vrCapturedFrameHeight = height;
+        g_vrCapturedFrameWidths[eyeIndex] = width;
+        g_vrCapturedFrameHeights[eyeIndex] = height;
     }
 
     g_vrD3dContext->UpdateSubresource(
-        g_vrCapturedFrameTexture.Get(),
+        g_vrCapturedFrameTextures[eyeIndex].Get(),
         0,
         nullptr,
         pixels.data(),
         width * 4u,
         0);
 
-    g_vrUploadedCaptureSerial = serial;
+    g_vrUploadedCaptureSerials[eyeIndex] =
+        serial;
 
-    if (!g_vrLoggedFirstUpload)
+    if (!g_vrLoggedFirstUploads[eyeIndex])
     {
         Com_Printf(
             0,
-            "[VR] Uploaded first D3D9 frame to D3D11: "
-            "%u x %u.\n",
+            "[VR] Uploaded first %s-eye D3D9 frame "
+            "to D3D11: %u x %u.\n",
+            eyeIndex == 0u ? "left" : "right",
             width,
             height);
 
-        g_vrLoggedFirstUpload = true;
+        g_vrLoggedFirstUploads[eyeIndex] = true;
     }
 
     return true;
@@ -1499,6 +1537,36 @@ void VR_PublishHeadOrientation(
             kVrGameUnitsPerMeter;
 
         g_vrHeadPositionValid = true;
+
+        if (g_vrViews.size() >= kVrStereoEyeCount)
+        {
+            const float eyeDeltaX =
+                g_vrViews[0].pose.position.x -
+                g_vrViews[1].pose.position.x;
+
+            const float eyeDeltaY =
+                g_vrViews[0].pose.position.y -
+                g_vrViews[1].pose.position.y;
+
+            const float eyeDeltaZ =
+                g_vrViews[0].pose.position.z -
+                g_vrViews[1].pose.position.z;
+
+            const float detectedHalfIpdGameUnits =
+                0.5f *
+                std::sqrt(
+                    eyeDeltaX * eyeDeltaX +
+                    eyeDeltaY * eyeDeltaY +
+                    eyeDeltaZ * eyeDeltaZ) *
+                kVrGameUnitsPerMeter;
+
+            if (detectedHalfIpdGameUnits > 0.1f &&
+                detectedHalfIpdGameUnits < 3.0f)
+            {
+                g_vrHalfIpdGameUnits =
+                    detectedHalfIpdGameUnits;
+            }
+        }
 
         g_vrHeadOrientationValid = true;
 
@@ -2266,7 +2334,12 @@ bool VR_RenderSolidColorFrame(
             g_vrViews[0].pose.orientation);
     }
 
-    VR_UpdateCapturedFrameTexture();
+    for (std::uint32_t eyeIndex = 0;
+         eyeIndex < kVrStereoEyeCount;
+         ++eyeIndex)
+    {
+        VR_UpdateCapturedEyeTexture(eyeIndex);
+    }
 
     constexpr float clearColor[4] = {
         0.03f,
@@ -2373,7 +2446,12 @@ bool VR_RenderSolidColorFrame(
             g_vrTestDepthStencilState.Get(),
             0);
 
-        if (g_vrCapturedFrameView)
+        ID3D11ShaderResourceView* capturedView =
+            eyeIndex < kVrStereoEyeCount
+                ? g_vrCapturedFrameViews[eyeIndex].Get()
+                : nullptr;
+
+        if (capturedView != nullptr)
         {
             g_vrD3dContext->OMSetRenderTargets(
                 1,
@@ -2419,9 +2497,6 @@ bool VR_RenderSolidColorFrame(
                 g_vrBlitPixelShader.Get(),
                 nullptr,
                 0);
-
-            ID3D11ShaderResourceView* capturedView =
-                g_vrCapturedFrameView.Get();
 
             g_vrD3dContext->PSSetShaderResources(
                 0,
@@ -2581,6 +2656,66 @@ bool VR_ApplyHeadPosition(
             "to the CoD4 camera.\n");
 
         g_vrLoggedFirstPositionApply = true;
+    }
+
+    return true;
+}
+
+
+bool VR_ApplyStereoEyeOffset(
+    float viewOrigin[3],
+    const float viewAxis[3][3])
+{
+    if (viewOrigin == nullptr ||
+        viewAxis == nullptr)
+    {
+        return false;
+    }
+
+    float halfIpdGameUnits =
+        kVrDefaultHalfIpdGameUnits;
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrHeadOrientationMutex);
+
+        if (!g_vrHeadOrientationValid)
+        {
+            return false;
+        }
+
+        halfIpdGameUnits =
+            g_vrHalfIpdGameUnits;
+    }
+
+    const std::uint32_t eyeIndex =
+        VR_D3D9GetRenderEye();
+
+    // CoD's camera basis uses row 1 as left. Left eye therefore moves in
+    // +left, while right eye moves in -left.
+    const float signedEyeOffset =
+        eyeIndex == 0u
+            ? halfIpdGameUnits
+            : -halfIpdGameUnits;
+
+    for (int worldComponent = 0;
+         worldComponent < 3;
+         ++worldComponent)
+    {
+        viewOrigin[worldComponent] +=
+            signedEyeOffset *
+            viewAxis[1][worldComponent];
+    }
+
+    if (!g_vrLoggedFirstStereoEyeOffset)
+    {
+        Com_Printf(
+            0,
+            "[VR] Applied alternating stereo eye "
+            "offset; half IPD is %.3f CoD units.\n",
+            halfIpdGameUnits);
+
+        g_vrLoggedFirstStereoEyeOffset = true;
     }
 
     return true;
@@ -2979,18 +3114,23 @@ void VR_Shutdown()
         g_vrD3dContext->Flush();
     }
 
-    g_vrCapturedFrameView.Reset();
-    g_vrCapturedFrameTexture.Reset();
+    for (std::uint32_t eyeIndex = 0;
+         eyeIndex < kVrStereoEyeCount;
+         ++eyeIndex)
+    {
+        g_vrCapturedFrameViews[eyeIndex].Reset();
+        g_vrCapturedFrameTextures[eyeIndex].Reset();
+    }
     g_vrBlitSampler.Reset();
     g_vrBlitVertexBuffer.Reset();
     g_vrBlitInputLayout.Reset();
     g_vrBlitPixelShader.Reset();
     g_vrBlitVertexShader.Reset();
 
-    g_vrCapturedFrameWidth = 0;
-    g_vrCapturedFrameHeight = 0;
-    g_vrUploadedCaptureSerial = 0;
-    g_vrLoggedFirstUpload = false;
+    g_vrCapturedFrameWidths.fill(0u);
+    g_vrCapturedFrameHeights.fill(0u);
+    g_vrUploadedCaptureSerials.fill(0u);
+    g_vrLoggedFirstUploads.fill(false);
 
     g_vrTestDepthStencilState.Reset();
     g_vrTestRasterizerState.Reset();

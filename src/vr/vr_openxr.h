@@ -21,3 +21,6 @@ bool VR_ApplyHeadPosition(
     float viewOrigin[3],
     const float viewAxis[3][3]);
 bool VR_ApplyHeadOrientation(float viewAxis[3][3]);
+bool VR_ApplyStereoEyeOffset(
+    float viewOrigin[3],
+    const float viewAxis[3][3]);

@@ -4,6 +4,7 @@
 
 #include <d3d9.h>
 
+#include <array>
 #include <atomic>
 #include <cstring>
 #include <mutex>
@@ -11,17 +12,42 @@
 
 namespace
 {
+constexpr std::uint32_t kStereoEyeCount = 2u;
+
+// An odd divider is essential: with alternating render eyes, an even divider
+// would repeatedly capture only one eye. A divider of three captures each eye
+// once every six presented desktop frames.
+constexpr unsigned int kCaptureDivider = 3u;
+
 std::atomic<bool> g_captureEnabled{false};
+std::atomic<std::uint32_t> g_renderEye{0u};
+
+unsigned int g_captureCounter = 0u;
 
 std::mutex g_captureMutex;
-std::vector<std::uint8_t> g_latestPixels;
 
-std::uint32_t g_latestWidth = 0;
-std::uint32_t g_latestHeight = 0;
-std::uint64_t g_latestSerial = 0;
+std::array<std::vector<std::uint8_t>, kStereoEyeCount>
+    g_latestPixels;
 
-bool g_loggedFirstCapture = false;
+std::array<std::uint32_t, kStereoEyeCount>
+    g_latestWidth = {};
+
+std::array<std::uint32_t, kStereoEyeCount>
+    g_latestHeight = {};
+
+std::array<std::uint64_t, kStereoEyeCount>
+    g_latestSerial = {};
+
+std::array<bool, kStereoEyeCount>
+    g_loggedFirstCapture = {};
+
 bool g_loggedFirstFailure = false;
+bool g_loggedStereoDiagnostic = false;
+
+const char* VR_EyeName(const std::uint32_t eyeIndex)
+{
+    return eyeIndex == 0u ? "left" : "right";
+}
 
 void VR_ReleaseSurface(IDirect3DSurface9*& surface)
 {
@@ -39,15 +65,48 @@ void VR_D3D9CaptureSetEnabled(const bool enabled)
         enabled,
         std::memory_order_release);
 
-    if (!enabled)
-    {
-        std::lock_guard<std::mutex> lock(g_captureMutex);
+    g_renderEye.store(
+        0u,
+        std::memory_order_release);
 
-        g_latestPixels.clear();
-        g_latestWidth = 0;
-        g_latestHeight = 0;
-        g_latestSerial = 0;
+    g_captureCounter = 0u;
+
+    if (enabled)
+    {
+        if (!g_loggedStereoDiagnostic)
+        {
+            Com_Printf(
+                0,
+                "[VR] Alternating-eye stereo diagnostic enabled.\n");
+
+            g_loggedStereoDiagnostic = true;
+        }
+
+        return;
     }
+
+    std::lock_guard<std::mutex> lock(g_captureMutex);
+
+    for (std::uint32_t eyeIndex = 0;
+         eyeIndex < kStereoEyeCount;
+         ++eyeIndex)
+    {
+        g_latestPixels[eyeIndex].clear();
+        g_latestWidth[eyeIndex] = 0u;
+        g_latestHeight[eyeIndex] = 0u;
+        g_latestSerial[eyeIndex] = 0u;
+        g_loggedFirstCapture[eyeIndex] = false;
+    }
+
+    g_loggedFirstFailure = false;
+}
+
+std::uint32_t VR_D3D9GetRenderEye()
+{
+    return
+        g_renderEye.load(
+            std::memory_order_acquire) %
+        kStereoEyeCount;
 }
 
 void VR_D3D9CaptureFrame(IDirect3DDevice9* device)
@@ -59,13 +118,18 @@ void VR_D3D9CaptureFrame(IDirect3DDevice9* device)
         return;
     }
 
-    // This diagnostic intentionally uses a slow CPU readback. Restrict it to
-    // roughly one out of every six presented frames to keep the game usable.
-    static unsigned int captureDivider = 0;
+    // The camera used this eye for the frame that has just completed.
+    const std::uint32_t capturedEye =
+        VR_D3D9GetRenderEye();
 
-    ++captureDivider;
+    // Select the opposite eye before the next game frame builds its camera.
+    g_renderEye.store(
+        capturedEye ^ 1u,
+        std::memory_order_release);
 
-    if ((captureDivider % 6u) != 0u)
+    ++g_captureCounter;
+
+    if ((g_captureCounter % kCaptureDivider) != 0u)
     {
         return;
     }
@@ -243,45 +307,58 @@ void VR_D3D9CaptureFrame(IDirect3DDevice9* device)
     {
         std::lock_guard<std::mutex> lock(g_captureMutex);
 
-        g_latestPixels.swap(capturedPixels);
-        g_latestWidth = description.Width;
-        g_latestHeight = description.Height;
-        ++g_latestSerial;
+        g_latestPixels[capturedEye].swap(
+            capturedPixels);
+
+        g_latestWidth[capturedEye] =
+            description.Width;
+
+        g_latestHeight[capturedEye] =
+            description.Height;
+
+        ++g_latestSerial[capturedEye];
     }
 
-    if (!g_loggedFirstCapture)
+    if (!g_loggedFirstCapture[capturedEye])
     {
         Com_Printf(
             0,
-            "[VR] Captured first D3D9 backbuffer: %u x %u.\n",
+            "[VR] Captured first D3D9 %s-eye frame: "
+            "%u x %u.\n",
+            VR_EyeName(capturedEye),
             description.Width,
             description.Height);
 
-        g_loggedFirstCapture = true;
+        g_loggedFirstCapture[capturedEye] = true;
     }
-
 }
 
-bool VR_D3D9CopyLatestFrame(
+bool VR_D3D9CopyLatestEyeFrame(
+    const std::uint32_t eyeIndex,
     const std::uint64_t lastSerial,
     std::vector<std::uint8_t>& pixels,
     std::uint32_t& width,
     std::uint32_t& height,
     std::uint64_t& serial)
 {
-    std::lock_guard<std::mutex> lock(g_captureMutex);
-
-    if (g_latestSerial == 0 ||
-        g_latestSerial == lastSerial ||
-        g_latestPixels.empty())
+    if (eyeIndex >= kStereoEyeCount)
     {
         return false;
     }
 
-    pixels = g_latestPixels;
-    width = g_latestWidth;
-    height = g_latestHeight;
-    serial = g_latestSerial;
+    std::lock_guard<std::mutex> lock(g_captureMutex);
+
+    if (g_latestSerial[eyeIndex] == 0u ||
+        g_latestSerial[eyeIndex] == lastSerial ||
+        g_latestPixels[eyeIndex].empty())
+    {
+        return false;
+    }
+
+    pixels = g_latestPixels[eyeIndex];
+    width = g_latestWidth[eyeIndex];
+    height = g_latestHeight[eyeIndex];
+    serial = g_latestSerial[eyeIndex];
 
     return true;
 }

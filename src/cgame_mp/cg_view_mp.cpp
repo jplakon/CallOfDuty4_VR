@@ -651,6 +651,10 @@ void __cdecl CG_CalcViewValues(int32_t localClientNum)
     VR_ApplyHeadOrientation(
         cgameGlob->refdef.viewaxis);
 
+    VR_ApplyStereoEyeOffset(
+        cgameGlob->refdef.vieworg,
+        cgameGlob->refdef.viewaxis);
+
 }
 
 void __cdecl CG_OffsetThirdPersonView(cg_s *cgameGlob)
