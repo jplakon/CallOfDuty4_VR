@@ -5,20 +5,19 @@
 
 struct IDirect3DDevice9;
 
-// Enables or disables the same-frame side-by-side stereo diagnostic.
+// Enables or disables the reset-safe, full-rate stereo readback.
 void VR_D3D9CaptureSetEnabled(bool enabled);
 
-// Used by the renderer frontend/backend to gate the diagnostic path.
+// Used by the renderer frontend/backend to gate same-frame stereo.
 bool VR_D3D9IsSameFrameStereoEnabled();
 
-// Called on the renderer thread immediately before Present(). One completed
-// side-by-side D3D9 backbuffer is read back and split into left/right images.
+// Called immediately before Present(). Captures one complete side-by-side
+// D3D9 backbuffer while remaining safe across lost-device transitions.
 void VR_D3D9CaptureFrame(IDirect3DDevice9* device);
 
-// Copies a newly captured frame for one eye when its serial differs from
-// lastSerial.
-bool VR_D3D9CopyLatestEyeFrame(
-    std::uint32_t eyeIndex,
+// Copies a newly captured complete side-by-side frame when its serial differs
+// from lastSerial.
+bool VR_D3D9CopyLatestStereoFrame(
     std::uint64_t lastSerial,
     std::vector<std::uint8_t>& pixels,
     std::uint32_t& width,

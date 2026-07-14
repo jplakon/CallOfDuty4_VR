@@ -4,7 +4,6 @@
 
 #include <d3d9.h>
 
-#include <array>
 #include <atomic>
 #include <cstring>
 #include <mutex>
@@ -12,11 +11,6 @@
 
 namespace
 {
-constexpr std::uint32_t kStereoEyeCount = 2u;
-
-// This remains a synchronous CPU readback diagnostic. The system-memory
-// readback surface and CPU buffers are reusable, but D3DPOOL_DEFAULT resolve
-// targets are transient so they cannot block a lost-device Reset.
 constexpr unsigned int kCaptureDivider = 1u;
 
 std::atomic<bool> g_captureEnabled{false};
@@ -26,25 +20,19 @@ unsigned int g_captureCounter = 0u;
 std::mutex g_captureMutex;
 std::mutex g_captureResourceMutex;
 
-std::array<std::vector<std::uint8_t>, kStereoEyeCount>
-    g_latestPixels;
+std::vector<std::uint8_t> g_latestPixels;
+std::vector<std::uint8_t> g_captureScratchPixels;
 
-std::array<std::vector<std::uint8_t>, kStereoEyeCount>
-    g_captureScratchPixels;
+std::uint32_t g_latestWidth = 0u;
+std::uint32_t g_latestHeight = 0u;
+std::uint64_t g_latestSerial = 0u;
 
-std::array<std::uint32_t, kStereoEyeCount>
-    g_latestWidth = {};
-
-std::array<std::uint32_t, kStereoEyeCount>
-    g_latestHeight = {};
-
-std::array<std::uint64_t, kStereoEyeCount>
-    g_latestSerial = {};
-
+// This is D3DPOOL_SYSTEMMEM and therefore does not block Reset().
 IDirect3DSurface9* g_readbackSurface = nullptr;
 
-D3DSURFACE_DESC g_captureDescription = {};
-bool g_captureDescriptionValid = false;
+std::uint32_t g_readbackWidth = 0u;
+std::uint32_t g_readbackHeight = 0u;
+D3DFORMAT g_readbackFormat = D3DFMT_UNKNOWN;
 
 bool g_loggedFirstCapture = false;
 bool g_loggedFirstFailure = false;
@@ -61,28 +49,58 @@ void VR_ReleaseSurface(IDirect3DSurface9*& surface)
     }
 }
 
-void VR_ReleaseCaptureResources()
+void VR_ReleaseReadbackSurface()
 {
     VR_ReleaseSurface(g_readbackSurface);
 
-    g_captureDescription = {};
-    g_captureDescriptionValid = false;
+    g_readbackWidth = 0u;
+    g_readbackHeight = 0u;
+    g_readbackFormat = D3DFMT_UNKNOWN;
 }
 
-bool VR_CaptureDescriptionMatches(
-    const D3DSURFACE_DESC& description)
+bool VR_IsLostDeviceResult(const HRESULT hr)
 {
     return
-        g_captureDescriptionValid &&
-        g_captureDescription.Width ==
-            description.Width &&
-        g_captureDescription.Height ==
-            description.Height &&
-        g_captureDescription.Format ==
-            description.Format;
+        hr == D3DERR_DEVICELOST ||
+        hr == D3DERR_DEVICENOTRESET;
 }
 
-bool VR_EnsureCaptureResources(
+void VR_LogCaptureFailure(
+    const char* operation,
+    const HRESULT hr)
+{
+    if (VR_IsLostDeviceResult(hr))
+    {
+        VR_ReleaseReadbackSurface();
+
+        if (!g_loggedDeviceLostPause)
+        {
+            Com_PrintWarning(
+                0,
+                "[VR] D3D9 capture paused for device "
+                "reset after %s: 0x%08lX.\n",
+                operation,
+                static_cast<unsigned long>(hr));
+
+            g_loggedDeviceLostPause = true;
+        }
+
+        return;
+    }
+
+    if (!g_loggedFirstFailure)
+    {
+        Com_PrintWarning(
+            0,
+            "[VR] %s failed: 0x%08lX.\n",
+            operation,
+            static_cast<unsigned long>(hr));
+
+        g_loggedFirstFailure = true;
+    }
+}
+
+bool VR_EnsureReadbackSurface(
     IDirect3DDevice9* device,
     const D3DSURFACE_DESC& description)
 {
@@ -91,15 +109,17 @@ bool VR_EnsureCaptureResources(
         return false;
     }
 
-    if (VR_CaptureDescriptionMatches(description) &&
-        g_readbackSurface != nullptr)
+    if (g_readbackSurface != nullptr &&
+        g_readbackWidth == description.Width &&
+        g_readbackHeight == description.Height &&
+        g_readbackFormat == description.Format)
     {
         return true;
     }
 
-    VR_ReleaseCaptureResources();
+    VR_ReleaseReadbackSurface();
 
-    HRESULT hr =
+    const HRESULT hr =
         device->CreateOffscreenPlainSurface(
             description.Width,
             description.Height,
@@ -110,30 +130,23 @@ bool VR_EnsureCaptureResources(
 
     if (FAILED(hr))
     {
-        if (!g_loggedFirstFailure)
-        {
-            Com_PrintWarning(
-                0,
-                "[VR] CreateOffscreenPlainSurface failed: "
-                "0x%08lX.\n",
-                static_cast<unsigned long>(hr));
+        VR_LogCaptureFailure(
+            "CreateOffscreenPlainSurface",
+            hr);
 
-            g_loggedFirstFailure = true;
-        }
-
-        VR_ReleaseCaptureResources();
         return false;
     }
 
-    g_captureDescription = description;
-    g_captureDescriptionValid = true;
+    g_readbackWidth = description.Width;
+    g_readbackHeight = description.Height;
+    g_readbackFormat = description.Format;
 
     if (!g_loggedResourceCreation)
     {
         Com_Printf(
             0,
-            "[VR] Created reusable reset-safe D3D9 readback "
-            "surfaces: %u x %u.\n",
+            "[VR] Created reusable reset-safe D3D9 "
+            "readback surface: %u x %u.\n",
             description.Width,
             description.Height);
 
@@ -158,8 +171,8 @@ void VR_D3D9CaptureSetEnabled(const bool enabled)
         {
             Com_Printf(
                 0,
-                "[VR] Reset-safe full-rate D3D9 stereo "
-                "capture enabled.\n");
+                "[VR] Single-buffer reset-safe full-rate "
+                "D3D9 stereo capture enabled.\n");
 
             g_loggedStereoDiagnostic = true;
         }
@@ -171,23 +184,18 @@ void VR_D3D9CaptureSetEnabled(const bool enabled)
         std::lock_guard<std::mutex> resourceLock(
             g_captureResourceMutex);
 
-        VR_ReleaseCaptureResources();
+        VR_ReleaseReadbackSurface();
     }
 
     {
         std::lock_guard<std::mutex> captureLock(
             g_captureMutex);
 
-        for (std::uint32_t eyeIndex = 0;
-             eyeIndex < kStereoEyeCount;
-             ++eyeIndex)
-        {
-            g_latestPixels[eyeIndex].clear();
-            g_captureScratchPixels[eyeIndex].clear();
-            g_latestWidth[eyeIndex] = 0u;
-            g_latestHeight[eyeIndex] = 0u;
-            g_latestSerial[eyeIndex] = 0u;
-        }
+        g_latestPixels.clear();
+        g_captureScratchPixels.clear();
+        g_latestWidth = 0u;
+        g_latestHeight = 0u;
+        g_latestSerial = 0u;
     }
 
     g_loggedFirstCapture = false;
@@ -227,19 +235,9 @@ void VR_D3D9CaptureFrame(IDirect3DDevice9* device)
             std::lock_guard<std::mutex> resourceLock(
                 g_captureResourceMutex);
 
-            VR_ReleaseCaptureResources();
-        }
-
-        if (!g_loggedDeviceLostPause)
-        {
-            Com_PrintWarning(
-                0,
-                "[VR] D3D9 capture paused for device "
-                "reset: 0x%08lX.\n",
-                static_cast<unsigned long>(
-                    cooperativeLevel));
-
-            g_loggedDeviceLostPause = true;
+            VR_LogCaptureFailure(
+                "TestCooperativeLevel",
+                cooperativeLevel);
         }
 
         return;
@@ -248,7 +246,8 @@ void VR_D3D9CaptureFrame(IDirect3DDevice9* device)
     g_loggedDeviceLostPause = false;
 
     IDirect3DSurface9* backBuffer = nullptr;
-    IDirect3DSurface9* transientResolveSurface = nullptr;
+    IDirect3DSurface9* transientResolveSurface =
+        nullptr;
 
     HRESULT hr =
         device->GetBackBuffer(
@@ -259,15 +258,12 @@ void VR_D3D9CaptureFrame(IDirect3DDevice9* device)
 
     if (FAILED(hr))
     {
-        if (!g_loggedFirstFailure)
-        {
-            Com_PrintWarning(
-                0,
-                "[VR] D3D9 GetBackBuffer failed: 0x%08lX.\n",
-                static_cast<unsigned long>(hr));
+        std::lock_guard<std::mutex> resourceLock(
+            g_captureResourceMutex);
 
-            g_loggedFirstFailure = true;
-        }
+        VR_LogCaptureFailure(
+            "GetBackBuffer",
+            hr);
 
         return;
     }
@@ -276,36 +272,30 @@ void VR_D3D9CaptureFrame(IDirect3DDevice9* device)
 
     hr = backBuffer->GetDesc(&description);
 
-    if (FAILED(hr) || description.Width < 2u)
+    if (FAILED(hr) ||
+        description.Width < 2u ||
+        description.Height == 0u)
     {
         VR_ReleaseSurface(backBuffer);
         return;
     }
 
-    const std::uint32_t eyeWidth =
-        description.Width / 2u;
+    const std::size_t rowBytes =
+        static_cast<std::size_t>(
+            description.Width) * 4u;
 
-    const std::size_t eyeRowBytes =
-        static_cast<std::size_t>(eyeWidth) * 4u;
-
-    const std::size_t eyeImageBytes =
-        eyeRowBytes *
+    const std::size_t imageBytes =
+        rowBytes *
         static_cast<std::size_t>(
             description.Height);
 
-    for (std::uint32_t eyeIndex = 0;
-         eyeIndex < kStereoEyeCount;
-         ++eyeIndex)
-    {
-        g_captureScratchPixels[eyeIndex].resize(
-            eyeImageBytes);
-    }
+    g_captureScratchPixels.resize(imageBytes);
 
     {
         std::lock_guard<std::mutex> resourceLock(
             g_captureResourceMutex);
 
-        if (!VR_EnsureCaptureResources(
+        if (!VR_EnsureReadbackSurface(
                 device,
                 description))
         {
@@ -343,16 +333,9 @@ void VR_D3D9CaptureFrame(IDirect3DDevice9* device)
 
             if (FAILED(hr))
             {
-                if (!g_loggedFirstFailure)
-                {
-                    Com_PrintWarning(
-                        0,
-                        "[VR] Transient D3D9 multisample "
-                        "resolve failed: 0x%08lX.\n",
-                        static_cast<unsigned long>(hr));
-
-                    g_loggedFirstFailure = true;
-                }
+                VR_LogCaptureFailure(
+                    "multisample resolve",
+                    hr);
 
                 VR_ReleaseSurface(
                     transientResolveSurface);
@@ -370,39 +353,14 @@ void VR_D3D9CaptureFrame(IDirect3DDevice9* device)
                 captureSource,
                 g_readbackSurface);
 
-        // A D3DPOOL_DEFAULT resolve target must not survive this frame.
         VR_ReleaseSurface(
             transientResolveSurface);
 
         if (FAILED(hr))
         {
-            if (hr == D3DERR_DEVICELOST ||
-                hr == D3DERR_DEVICENOTRESET)
-            {
-                VR_ReleaseCaptureResources();
-
-                if (!g_loggedDeviceLostPause)
-                {
-                    Com_PrintWarning(
-                        0,
-                        "[VR] D3D9 capture paused for device "
-                        "reset after GetRenderTargetData: "
-                        "0x%08lX.\n",
-                        static_cast<unsigned long>(hr));
-
-                    g_loggedDeviceLostPause = true;
-                }
-            }
-            else if (!g_loggedFirstFailure)
-            {
-                Com_PrintWarning(
-                    0,
-                    "[VR] D3D9 GetRenderTargetData failed: "
-                    "0x%08lX.\n",
-                    static_cast<unsigned long>(hr));
-
-                g_loggedFirstFailure = true;
-            }
+            VR_LogCaptureFailure(
+                "GetRenderTargetData",
+                hr);
 
             VR_ReleaseSurface(backBuffer);
             return;
@@ -419,6 +377,10 @@ void VR_D3D9CaptureFrame(IDirect3DDevice9* device)
 
         if (FAILED(hr))
         {
+            VR_LogCaptureFailure(
+                "LockRect",
+                hr);
+
             VR_ReleaseSurface(backBuffer);
             return;
         }
@@ -427,29 +389,20 @@ void VR_D3D9CaptureFrame(IDirect3DDevice9* device)
             static_cast<const std::uint8_t*>(
                 lockedRect.pBits);
 
-        auto* leftDestination =
-            g_captureScratchPixels[0].data();
-
-        auto* rightDestination =
-            g_captureScratchPixels[1].data();
+        auto* destinationRow =
+            g_captureScratchPixels.data();
 
         for (UINT row = 0;
              row < description.Height;
              ++row)
         {
             std::memcpy(
-                leftDestination,
+                destinationRow,
                 sourceRow,
-                eyeRowBytes);
-
-            std::memcpy(
-                rightDestination,
-                sourceRow + eyeRowBytes,
-                eyeRowBytes);
+                rowBytes);
 
             sourceRow += lockedRect.Pitch;
-            leftDestination += eyeRowBytes;
-            rightDestination += eyeRowBytes;
+            destinationRow += rowBytes;
         }
 
         g_readbackSurface->UnlockRect();
@@ -461,61 +414,52 @@ void VR_D3D9CaptureFrame(IDirect3DDevice9* device)
         std::lock_guard<std::mutex> captureLock(
             g_captureMutex);
 
-        for (std::uint32_t eyeIndex = 0;
-             eyeIndex < kStereoEyeCount;
-             ++eyeIndex)
-        {
-            g_latestPixels[eyeIndex].swap(
-                g_captureScratchPixels[eyeIndex]);
+        g_latestPixels.swap(
+            g_captureScratchPixels);
 
-            g_latestWidth[eyeIndex] = eyeWidth;
-            g_latestHeight[eyeIndex] =
-                description.Height;
+        g_latestWidth =
+            description.Width;
 
-            ++g_latestSerial[eyeIndex];
-        }
+        g_latestHeight =
+            description.Height;
+
+        ++g_latestSerial;
     }
 
     if (!g_loggedFirstCapture)
     {
         Com_Printf(
             0,
-            "[VR] Captured first same-frame stereo pair: "
-            "%u x %u per eye.\n",
-            eyeWidth,
+            "[VR] Captured first complete side-by-side "
+            "stereo frame: %u x %u.\n",
+            description.Width,
             description.Height);
 
         g_loggedFirstCapture = true;
     }
 }
 
-bool VR_D3D9CopyLatestEyeFrame(
-    const std::uint32_t eyeIndex,
+bool VR_D3D9CopyLatestStereoFrame(
     const std::uint64_t lastSerial,
     std::vector<std::uint8_t>& pixels,
     std::uint32_t& width,
     std::uint32_t& height,
     std::uint64_t& serial)
 {
-    if (eyeIndex >= kStereoEyeCount)
-    {
-        return false;
-    }
-
     std::lock_guard<std::mutex> captureLock(
         g_captureMutex);
 
-    if (g_latestSerial[eyeIndex] == 0u ||
-        g_latestSerial[eyeIndex] == lastSerial ||
-        g_latestPixels[eyeIndex].empty())
+    if (g_latestSerial == 0u ||
+        g_latestSerial == lastSerial ||
+        g_latestPixels.empty())
     {
         return false;
     }
 
-    pixels = g_latestPixels[eyeIndex];
-    width = g_latestWidth[eyeIndex];
-    height = g_latestHeight[eyeIndex];
-    serial = g_latestSerial[eyeIndex];
+    pixels = g_latestPixels;
+    width = g_latestWidth;
+    height = g_latestHeight;
+    serial = g_latestSerial;
 
     return true;
 }

@@ -60,27 +60,21 @@ bool g_vrLoggedFirstTestFrame = false;
 ComPtr<ID3D11VertexShader> g_vrBlitVertexShader;
 ComPtr<ID3D11PixelShader> g_vrBlitPixelShader;
 ComPtr<ID3D11InputLayout> g_vrBlitInputLayout;
-ComPtr<ID3D11Buffer> g_vrBlitVertexBuffer;
+std::array<ComPtr<ID3D11Buffer>, 2>
+    g_vrBlitVertexBuffers;
 ComPtr<ID3D11SamplerState> g_vrBlitSampler;
 constexpr std::uint32_t kVrStereoEyeCount = 2u;
 
-std::array<ComPtr<ID3D11Texture2D>, kVrStereoEyeCount>
-    g_vrCapturedFrameTextures;
+ComPtr<ID3D11Texture2D>
+    g_vrCapturedStereoTexture;
 
-std::array<ComPtr<ID3D11ShaderResourceView>, kVrStereoEyeCount>
-    g_vrCapturedFrameViews;
+ComPtr<ID3D11ShaderResourceView>
+    g_vrCapturedStereoView;
 
-std::array<std::uint32_t, kVrStereoEyeCount>
-    g_vrCapturedFrameWidths = {};
-
-std::array<std::uint32_t, kVrStereoEyeCount>
-    g_vrCapturedFrameHeights = {};
-
-std::array<std::uint64_t, kVrStereoEyeCount>
-    g_vrUploadedCaptureSerials = {};
-
-std::array<bool, kVrStereoEyeCount>
-    g_vrLoggedFirstUploads = {};
+std::uint32_t g_vrCapturedStereoWidth = 0u;
+std::uint32_t g_vrCapturedStereoHeight = 0u;
+std::uint64_t g_vrUploadedStereoSerial = 0u;
+bool g_vrLoggedFirstStereoUpload = false;
 
 std::mutex g_vrHeadOrientationMutex;
 
@@ -736,37 +730,53 @@ float4 PSMain(PixelInput input) : SV_TARGET
         return false;
     }
 
-    static const VrBlitVertex vertices[] = {
-        {{-1.0f,  1.0f}, {0.0f, 0.0f}},
-        {{ 1.0f,  1.0f}, {1.0f, 0.0f}},
-        {{-1.0f, -1.0f}, {0.0f, 1.0f}},
-        {{ 1.0f, -1.0f}, {1.0f, 1.0f}},
+    static const VrBlitVertex eyeVertices[2][4] = {
+        {
+            {{-1.0f,  1.0f}, {0.0f, 0.0f}},
+            {{ 1.0f,  1.0f}, {0.5f, 0.0f}},
+            {{-1.0f, -1.0f}, {0.0f, 1.0f}},
+            {{ 1.0f, -1.0f}, {0.5f, 1.0f}},
+        },
+        {
+            {{-1.0f,  1.0f}, {0.5f, 0.0f}},
+            {{ 1.0f,  1.0f}, {1.0f, 0.0f}},
+            {{-1.0f, -1.0f}, {0.5f, 1.0f}},
+            {{ 1.0f, -1.0f}, {1.0f, 1.0f}},
+        },
     };
 
     D3D11_BUFFER_DESC vertexDescription = {};
     vertexDescription.ByteWidth =
-        static_cast<UINT>(sizeof(vertices));
+        static_cast<UINT>(
+            sizeof(eyeVertices[0]));
     vertexDescription.Usage =
         D3D11_USAGE_IMMUTABLE;
     vertexDescription.BindFlags =
         D3D11_BIND_VERTEX_BUFFER;
 
-    D3D11_SUBRESOURCE_DATA vertexData = {};
-    vertexData.pSysMem = vertices;
-
-    hr =
-        g_vrD3dDevice->CreateBuffer(
-            &vertexDescription,
-            &vertexData,
-            g_vrBlitVertexBuffer.GetAddressOf());
-
-    if (FAILED(hr))
+    for (std::uint32_t eyeIndex = 0;
+         eyeIndex < 2u;
+         ++eyeIndex)
     {
-        VR_LogHrFailure(
-            "CreateBuffer(capture blit)",
-            hr);
+        D3D11_SUBRESOURCE_DATA vertexData = {};
+        vertexData.pSysMem =
+            eyeVertices[eyeIndex];
 
-        return false;
+        hr =
+            g_vrD3dDevice->CreateBuffer(
+                &vertexDescription,
+                &vertexData,
+                g_vrBlitVertexBuffers[eyeIndex]
+                    .GetAddressOf());
+
+        if (FAILED(hr))
+        {
+            VR_LogHrFailure(
+                "CreateBuffer(stereo capture blit)",
+                hr);
+
+            return false;
+        }
     }
 
     D3D11_SAMPLER_DESC samplerDescription = {};
@@ -802,38 +812,31 @@ float4 PSMain(PixelInput input) : SV_TARGET
     return true;
 }
 
-bool VR_UpdateCapturedEyeTexture(
-    const std::uint32_t eyeIndex)
+bool VR_UpdateCapturedStereoTexture()
 {
-    if (eyeIndex >= kVrStereoEyeCount)
-    {
-        return false;
-    }
-
     std::vector<std::uint8_t> pixels;
-    std::uint32_t width = 0;
-    std::uint32_t height = 0;
-    std::uint64_t serial = 0;
+    std::uint32_t width = 0u;
+    std::uint32_t height = 0u;
+    std::uint64_t serial = 0u;
 
-    if (!VR_D3D9CopyLatestEyeFrame(
-            eyeIndex,
-            g_vrUploadedCaptureSerials[eyeIndex],
+    if (!VR_D3D9CopyLatestStereoFrame(
+            g_vrUploadedStereoSerial,
             pixels,
             width,
             height,
             serial))
     {
         return
-            g_vrCapturedFrameViews[eyeIndex] !=
+            g_vrCapturedStereoView !=
             nullptr;
     }
 
-    if (!g_vrCapturedFrameTextures[eyeIndex] ||
-        width != g_vrCapturedFrameWidths[eyeIndex] ||
-        height != g_vrCapturedFrameHeights[eyeIndex])
+    if (!g_vrCapturedStereoTexture ||
+        width != g_vrCapturedStereoWidth ||
+        height != g_vrCapturedStereoHeight)
     {
-        g_vrCapturedFrameViews[eyeIndex].Reset();
-        g_vrCapturedFrameTextures[eyeIndex].Reset();
+        g_vrCapturedStereoView.Reset();
+        g_vrCapturedStereoTexture.Reset();
 
         D3D11_TEXTURE2D_DESC textureDescription = {};
         textureDescription.Width = width;
@@ -852,13 +855,13 @@ bool VR_UpdateCapturedEyeTexture(
             g_vrD3dDevice->CreateTexture2D(
                 &textureDescription,
                 nullptr,
-                g_vrCapturedFrameTextures[eyeIndex]
+                g_vrCapturedStereoTexture
                     .GetAddressOf());
 
         if (FAILED(hr))
         {
             VR_LogHrFailure(
-                "CreateTexture2D(captured eye frame)",
+                "CreateTexture2D(stereo capture)",
                 hr);
 
             return false;
@@ -866,51 +869,47 @@ bool VR_UpdateCapturedEyeTexture(
 
         hr =
             g_vrD3dDevice->CreateShaderResourceView(
-                g_vrCapturedFrameTextures[eyeIndex]
-                    .Get(),
+                g_vrCapturedStereoTexture.Get(),
                 nullptr,
-                g_vrCapturedFrameViews[eyeIndex]
+                g_vrCapturedStereoView
                     .GetAddressOf());
 
         if (FAILED(hr))
         {
             VR_LogHrFailure(
                 "CreateShaderResourceView("
-                "captured eye frame)",
+                "stereo capture)",
                 hr);
 
-            g_vrCapturedFrameTextures[eyeIndex]
-                .Reset();
-
+            g_vrCapturedStereoTexture.Reset();
             return false;
         }
 
-        g_vrCapturedFrameWidths[eyeIndex] = width;
-        g_vrCapturedFrameHeights[eyeIndex] = height;
+        g_vrCapturedStereoWidth = width;
+        g_vrCapturedStereoHeight = height;
     }
 
     g_vrD3dContext->UpdateSubresource(
-        g_vrCapturedFrameTextures[eyeIndex].Get(),
+        g_vrCapturedStereoTexture.Get(),
         0,
         nullptr,
         pixels.data(),
         width * 4u,
         0);
 
-    g_vrUploadedCaptureSerials[eyeIndex] =
-        serial;
+    g_vrUploadedStereoSerial = serial;
 
-    if (!g_vrLoggedFirstUploads[eyeIndex])
+    if (!g_vrLoggedFirstStereoUpload)
     {
         Com_Printf(
             0,
-            "[VR] Uploaded first %s-eye D3D9 frame "
-            "to D3D11: %u x %u.\n",
-            eyeIndex == 0u ? "left" : "right",
+            "[VR] Uploaded first complete side-by-side "
+            "D3D9 frame to one D3D11 texture: "
+            "%u x %u.\n",
             width,
             height);
 
-        g_vrLoggedFirstUploads[eyeIndex] = true;
+        g_vrLoggedFirstStereoUpload = true;
     }
 
     return true;
@@ -2334,12 +2333,7 @@ bool VR_RenderSolidColorFrame(
             g_vrViews[0].pose.orientation);
     }
 
-    for (std::uint32_t eyeIndex = 0;
-         eyeIndex < kVrStereoEyeCount;
-         ++eyeIndex)
-    {
-        VR_UpdateCapturedEyeTexture(eyeIndex);
-    }
+    VR_UpdateCapturedStereoTexture();
 
     constexpr float clearColor[4] = {
         0.03f,
@@ -2447,9 +2441,7 @@ bool VR_RenderSolidColorFrame(
             0);
 
         ID3D11ShaderResourceView* capturedView =
-            eyeIndex < kVrStereoEyeCount
-                ? g_vrCapturedFrameViews[eyeIndex].Get()
-                : nullptr;
+            g_vrCapturedStereoView.Get();
 
         if (capturedView != nullptr)
         {
@@ -2471,7 +2463,11 @@ bool VR_RenderSolidColorFrame(
             const UINT offset = 0;
 
             ID3D11Buffer* vertexBuffer =
-                g_vrBlitVertexBuffer.Get();
+                eyeIndex <
+                    g_vrBlitVertexBuffers.size()
+                    ? g_vrBlitVertexBuffers[eyeIndex]
+                        .Get()
+                    : nullptr;
 
             g_vrD3dContext->IASetVertexBuffers(
                 0,
@@ -3113,23 +3109,25 @@ void VR_Shutdown()
         g_vrD3dContext->Flush();
     }
 
-    for (std::uint32_t eyeIndex = 0;
-         eyeIndex < kVrStereoEyeCount;
-         ++eyeIndex)
-    {
-        g_vrCapturedFrameViews[eyeIndex].Reset();
-        g_vrCapturedFrameTextures[eyeIndex].Reset();
-    }
+    g_vrCapturedStereoView.Reset();
+    g_vrCapturedStereoTexture.Reset();
+
     g_vrBlitSampler.Reset();
-    g_vrBlitVertexBuffer.Reset();
+
+    for (auto& vertexBuffer :
+         g_vrBlitVertexBuffers)
+    {
+        vertexBuffer.Reset();
+    }
+
     g_vrBlitInputLayout.Reset();
     g_vrBlitPixelShader.Reset();
     g_vrBlitVertexShader.Reset();
 
-    g_vrCapturedFrameWidths.fill(0u);
-    g_vrCapturedFrameHeights.fill(0u);
-    g_vrUploadedCaptureSerials.fill(0u);
-    g_vrLoggedFirstUploads.fill(false);
+    g_vrCapturedStereoWidth = 0u;
+    g_vrCapturedStereoHeight = 0u;
+    g_vrUploadedStereoSerial = 0u;
+    g_vrLoggedFirstStereoUpload = false;
 
     g_vrTestDepthStencilState.Reset();
     g_vrTestRasterizerState.Reset();
