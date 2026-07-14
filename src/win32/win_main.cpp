@@ -397,6 +397,10 @@ void Sys_SpawnQuitProcess()
 void __cdecl  Sys_Quit()
 {
 	Sys_EnterCriticalSection(CRITSECT_COM_ERROR);
+
+#if defined(KISAK_OPENXR_ENABLED)
+    VR_Shutdown();
+#endif
 	timeEndPeriod(1);
 	Sys_SpawnQuitProcess();
 	IN_Shutdown();
@@ -815,9 +819,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 #if defined(KISAK_OPENXR_ENABLED)
   Com_Printf(
       0,
-      "[VR] Calling OpenXR runtime probe from WinMain...\n");
+      "[VR] Starting OpenXR from WinMain...\n");
 
-  VR_OpenXR_RuntimeProbe();
+  VR_Init();
 #endif
 
 #ifdef KISAK_MP
@@ -854,6 +858,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
 				// run the game
 				Com_Frame();
+
+#if defined(KISAK_OPENXR_ENABLED)
+                            VR_Frame();
+#endif
 
 				// LWSS: Punkbuster stuff
 				//if (!com_dedicated || !com_dedicated->integer) {
