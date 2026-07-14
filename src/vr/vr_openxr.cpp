@@ -1,5 +1,7 @@
 #include "vr/vr_openxr.h"
 #include "vr/vr_d3d9_capture.h"
+#include "vr/vr_d3d9ex_interop_probe.h"
+#include "gfx_d3d/r_init.h"
 
 #include "qcommon/qcommon.h"
 
@@ -351,6 +353,18 @@ bool VR_CreateD3D11Device(
     {
         VR_LogHrFailure("D3D11CreateDevice", hr);
         return false;
+    }
+
+    if (!VR_ProbeD3D9ExD3D11Interop(
+            dx.device,
+            g_vrD3dDevice.Get(),
+            requirements.adapterLuid))
+    {
+        Com_PrintWarning(
+            0,
+            "[VR] D3D9Ex/D3D11 shared-texture "
+            "interop probe did not pass. "
+            "The current CPU bridge remains active.\n");
     }
 
     Com_Printf(

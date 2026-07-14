@@ -62,6 +62,8 @@ target_sources(
     ${PROJECT_NAME}
     PRIVATE
         ${SRC_DIR}/vr/vr_openxr.cpp
+        ${SRC_DIR}/vr/vr_d3d9ex_interop_probe.cpp
+        ${SRC_DIR}/vr/vr_d3d9ex_interop_probe.h
         ${SRC_DIR}/vr/vr_openxr.h
 )
 
