@@ -4,6 +4,7 @@
 
 #include <Windows.h>
 #include <d3d11.h>
+#include <d3dcompiler.h>
 #include <dxgi.h>
 #include <wrl/client.h>
 
@@ -12,6 +13,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -38,6 +40,13 @@ bool g_vrExitRequested = false;
 
 ComPtr<ID3D11Device> g_vrD3dDevice;
 ComPtr<ID3D11DeviceContext> g_vrD3dContext;
+
+ComPtr<ID3D11VertexShader> g_vrTestVertexShader;
+ComPtr<ID3D11PixelShader> g_vrTestPixelShader;
+ComPtr<ID3D11InputLayout> g_vrTestInputLayout;
+ComPtr<ID3D11Buffer> g_vrTestVertexBuffer;
+ComPtr<ID3D11Buffer> g_vrTestConstantBuffer;
+bool g_vrLoggedFirstTestFrame = false;
 
 std::vector<XrViewConfigurationView> g_vrViewConfigs;
 std::vector<XrView> g_vrViews;
@@ -278,6 +287,422 @@ bool VR_CreateD3D11Device(
         0,
         "[VR] Created OpenXR D3D11 device at feature level 0x%X.\n",
         static_cast<unsigned int>(createdFeatureLevel));
+
+    return true;
+}
+
+
+struct VrTestMatrix
+{
+    float m[4][4];
+};
+
+struct VrTestVertex
+{
+    float position[3];
+    float color[3];
+};
+
+struct VrTestConstants
+{
+    VrTestMatrix modelViewProjection;
+};
+
+VrTestMatrix VR_TestIdentity()
+{
+    VrTestMatrix result = {};
+    result.m[0][0] = 1.0f;
+    result.m[1][1] = 1.0f;
+    result.m[2][2] = 1.0f;
+    result.m[3][3] = 1.0f;
+    return result;
+}
+
+VrTestMatrix VR_TestMultiply(
+    const VrTestMatrix& left,
+    const VrTestMatrix& right)
+{
+    VrTestMatrix result = {};
+
+    for (int row = 0; row < 4; ++row)
+    {
+        for (int column = 0; column < 4; ++column)
+        {
+            for (int element = 0; element < 4; ++element)
+            {
+                result.m[row][column] +=
+                    left.m[row][element] *
+                    right.m[element][column];
+            }
+        }
+    }
+
+    return result;
+}
+
+VrTestMatrix VR_TestTranslation(
+    const float x,
+    const float y,
+    const float z)
+{
+    VrTestMatrix result = VR_TestIdentity();
+    result.m[3][0] = x;
+    result.m[3][1] = y;
+    result.m[3][2] = z;
+    return result;
+}
+
+VrTestMatrix VR_TestRotation(
+    const XrQuaternionf& q)
+{
+    const float xx = q.x * q.x;
+    const float yy = q.y * q.y;
+    const float zz = q.z * q.z;
+    const float xy = q.x * q.y;
+    const float xz = q.x * q.z;
+    const float yz = q.y * q.z;
+    const float xw = q.x * q.w;
+    const float yw = q.y * q.w;
+    const float zw = q.z * q.w;
+
+    VrTestMatrix result = VR_TestIdentity();
+
+    result.m[0][0] = 1.0f - 2.0f * (yy + zz);
+    result.m[0][1] = 2.0f * (xy + zw);
+    result.m[0][2] = 2.0f * (xz - yw);
+
+    result.m[1][0] = 2.0f * (xy - zw);
+    result.m[1][1] = 1.0f - 2.0f * (xx + zz);
+    result.m[1][2] = 2.0f * (yz + xw);
+
+    result.m[2][0] = 2.0f * (xz + yw);
+    result.m[2][1] = 2.0f * (yz - xw);
+    result.m[2][2] = 1.0f - 2.0f * (xx + yy);
+
+    return result;
+}
+
+VrTestMatrix VR_TestView(const XrPosef& pose)
+{
+    const XrQuaternionf inverseOrientation = {
+        -pose.orientation.x,
+        -pose.orientation.y,
+        -pose.orientation.z,
+        pose.orientation.w,
+    };
+
+    return VR_TestMultiply(
+        VR_TestTranslation(
+            -pose.position.x,
+            -pose.position.y,
+            -pose.position.z),
+        VR_TestRotation(inverseOrientation));
+}
+
+VrTestMatrix VR_TestProjection(
+    const XrFovf& fov,
+    const float nearDistance,
+    const float farDistance)
+{
+    const float left = std::tan(fov.angleLeft);
+    const float right = std::tan(fov.angleRight);
+    const float down = std::tan(fov.angleDown);
+    const float up = std::tan(fov.angleUp);
+
+    const float width = right - left;
+    const float height = up - down;
+
+    VrTestMatrix result = {};
+
+    result.m[0][0] = 2.0f / width;
+    result.m[1][1] = 2.0f / height;
+    result.m[2][0] = (right + left) / width;
+    result.m[2][1] = (up + down) / height;
+    result.m[2][2] =
+        -farDistance / (farDistance - nearDistance);
+    result.m[2][3] = -1.0f;
+    result.m[3][2] =
+        -(farDistance * nearDistance) /
+        (farDistance - nearDistance);
+
+    return result;
+}
+
+using VrD3DCompileFunction = HRESULT (WINAPI*)(
+    LPCVOID,
+    SIZE_T,
+    LPCSTR,
+    const D3D_SHADER_MACRO*,
+    ID3DInclude*,
+    LPCSTR,
+    LPCSTR,
+    UINT,
+    UINT,
+    ID3DBlob**,
+    ID3DBlob**);
+
+bool VR_TestCompileShader(
+    const char* source,
+    const char* entryPoint,
+    const char* target,
+    ComPtr<ID3DBlob>& output)
+{
+    const char* compilerDlls[] = {
+        "d3dcompiler_47.dll",
+        "d3dcompiler_46.dll",
+        "d3dcompiler_43.dll",
+    };
+
+    HMODULE module = nullptr;
+
+    for (const char* dllName : compilerDlls)
+    {
+        module = LoadLibraryA(dllName);
+
+        if (module != nullptr)
+        {
+            break;
+        }
+    }
+
+    if (module == nullptr)
+    {
+        Com_PrintWarning(
+            0,
+            "[VR] No D3DCompiler DLL could be loaded.\n");
+        return false;
+    }
+
+    const auto compile =
+        reinterpret_cast<VrD3DCompileFunction>(
+            GetProcAddress(module, "D3DCompile"));
+
+    if (compile == nullptr)
+    {
+        // Keep the D3DCompiler module loaded for the process lifetime.
+// ID3DBlob instances returned by D3DCompile are implemented by this
+// DLL and may still be alive after this function returns.
+        Com_PrintWarning(
+            0,
+            "[VR] D3DCompile export was not found.\n");
+        return false;
+    }
+
+    ComPtr<ID3DBlob> errors;
+
+    const HRESULT hr =
+        compile(
+            source,
+            std::strlen(source),
+            "KisakCOD VR test shader",
+            nullptr,
+            nullptr,
+            entryPoint,
+            target,
+            D3DCOMPILE_ENABLE_STRICTNESS,
+            0,
+            output.GetAddressOf(),
+            errors.GetAddressOf());
+
+    if (FAILED(hr))
+    {
+        if (errors)
+        {
+            Com_PrintWarning(
+                0,
+                "[VR] Shader compiler output: %s\n",
+                static_cast<const char*>(
+                    errors->GetBufferPointer()));
+        }
+
+        VR_LogHrFailure("D3DCompile", hr);
+        // Keep the D3DCompiler module loaded for the process lifetime.
+// ID3DBlob instances returned by D3DCompile are implemented by this
+// DLL and may still be alive after this function returns.
+        return false;
+    }
+
+    // Keep the D3DCompiler module loaded for the process lifetime.
+// ID3DBlob instances returned by D3DCompile are implemented by this
+// DLL and may still be alive after this function returns.
+    return true;
+}
+
+bool VR_CreateHeadTrackedTriangle()
+{
+    static const char* shaderSource = R"(
+cbuffer TestConstants : register(b0)
+{
+    row_major float4x4 modelViewProjection;
+};
+
+struct VertexInput
+{
+    float3 position : POSITION;
+    float3 color : COLOR;
+};
+
+struct PixelInput
+{
+    float4 position : SV_POSITION;
+    float3 color : COLOR;
+};
+
+PixelInput VSMain(VertexInput input)
+{
+    PixelInput output;
+    // Apply the per-eye OpenXR view and projection matrices.
+    output.position =
+        mul(float4(input.position, 1.0f),
+            modelViewProjection);
+    output.color = input.color;
+    return output;
+}
+
+float4 PSMain(PixelInput input) : SV_TARGET
+{
+    return float4(input.color, 1.0f);
+}
+)";
+
+    ComPtr<ID3DBlob> vertexCode;
+    ComPtr<ID3DBlob> pixelCode;
+
+    if (!VR_TestCompileShader(
+            shaderSource,
+            "VSMain",
+            "vs_4_0",
+            vertexCode))
+    {
+        return false;
+    }
+
+    if (!VR_TestCompileShader(
+            shaderSource,
+            "PSMain",
+            "ps_4_0",
+            pixelCode))
+    {
+        return false;
+    }
+
+    HRESULT hr =
+        g_vrD3dDevice->CreateVertexShader(
+            vertexCode->GetBufferPointer(),
+            vertexCode->GetBufferSize(),
+            nullptr,
+            g_vrTestVertexShader.GetAddressOf());
+
+    if (FAILED(hr))
+    {
+        VR_LogHrFailure("CreateVertexShader", hr);
+        return false;
+    }
+
+    hr =
+        g_vrD3dDevice->CreatePixelShader(
+            pixelCode->GetBufferPointer(),
+            pixelCode->GetBufferSize(),
+            nullptr,
+            g_vrTestPixelShader.GetAddressOf());
+
+    if (FAILED(hr))
+    {
+        VR_LogHrFailure("CreatePixelShader", hr);
+        return false;
+    }
+
+    const D3D11_INPUT_ELEMENT_DESC layout[] = {
+        {
+            "POSITION",
+            0,
+            DXGI_FORMAT_R32G32B32_FLOAT,
+            0,
+            0,
+            D3D11_INPUT_PER_VERTEX_DATA,
+            0,
+        },
+        {
+            "COLOR",
+            0,
+            DXGI_FORMAT_R32G32B32_FLOAT,
+            0,
+            12,
+            D3D11_INPUT_PER_VERTEX_DATA,
+            0,
+        },
+    };
+
+    hr =
+        g_vrD3dDevice->CreateInputLayout(
+            layout,
+            2,
+            vertexCode->GetBufferPointer(),
+            vertexCode->GetBufferSize(),
+            g_vrTestInputLayout.GetAddressOf());
+
+    if (FAILED(hr))
+    {
+        VR_LogHrFailure("CreateInputLayout", hr);
+        return false;
+    }
+
+    static const VrTestVertex vertices[] = {
+        // Draw the triangle twice with opposite winding so that back-face
+        // culling cannot hide it during this diagnostic.
+        {{ 0.0f,  0.75f, 0.0f}, {1.0f, 1.0f, 1.0f}},
+        {{-0.75f, -0.70f, 0.0f}, {1.0f, 0.0f, 1.0f}},
+        {{ 0.75f, -0.70f, 0.0f}, {0.0f, 1.0f, 1.0f}},
+
+        {{ 0.0f,  0.75f, 0.0f}, {1.0f, 1.0f, 1.0f}},
+        {{ 0.75f, -0.70f, 0.0f}, {0.0f, 1.0f, 1.0f}},
+        {{-0.75f, -0.70f, 0.0f}, {1.0f, 0.0f, 1.0f}},
+    };
+
+    D3D11_BUFFER_DESC vertexDescription = {};
+    vertexDescription.ByteWidth =
+        static_cast<UINT>(sizeof(vertices));
+    vertexDescription.Usage = D3D11_USAGE_IMMUTABLE;
+    vertexDescription.BindFlags =
+        D3D11_BIND_VERTEX_BUFFER;
+
+    D3D11_SUBRESOURCE_DATA vertexData = {};
+    vertexData.pSysMem = vertices;
+
+    hr =
+        g_vrD3dDevice->CreateBuffer(
+            &vertexDescription,
+            &vertexData,
+            g_vrTestVertexBuffer.GetAddressOf());
+
+    if (FAILED(hr))
+    {
+        VR_LogHrFailure("CreateBuffer(vertex)", hr);
+        return false;
+    }
+
+    D3D11_BUFFER_DESC constantDescription = {};
+    constantDescription.ByteWidth =
+        sizeof(VrTestConstants);
+    constantDescription.Usage = D3D11_USAGE_DEFAULT;
+    constantDescription.BindFlags =
+        D3D11_BIND_CONSTANT_BUFFER;
+
+    hr =
+        g_vrD3dDevice->CreateBuffer(
+            &constantDescription,
+            nullptr,
+            g_vrTestConstantBuffer.GetAddressOf());
+
+    if (FAILED(hr))
+    {
+        VR_LogHrFailure("CreateBuffer(constants)", hr);
+        return false;
+    }
+
+    Com_Printf(
+        0,
+        "[VR] Head-tracked triangle resources created.\n");
 
     return true;
 }
@@ -1036,6 +1461,79 @@ bool VR_RenderSolidColorFrame(
             renderTarget,
             clearColor);
 
+        D3D11_VIEWPORT viewport = {};
+        viewport.Width =
+            static_cast<float>(eyeSwapchain.width);
+        viewport.Height =
+            static_cast<float>(eyeSwapchain.height);
+        viewport.MinDepth = 0.0f;
+        viewport.MaxDepth = 1.0f;
+
+        g_vrD3dContext->RSSetViewports(1, &viewport);
+
+        const UINT stride = sizeof(VrTestVertex);
+        const UINT offset = 0;
+        ID3D11Buffer* vertexBuffer =
+            g_vrTestVertexBuffer.Get();
+
+        g_vrD3dContext->IASetInputLayout(
+            g_vrTestInputLayout.Get());
+
+        g_vrD3dContext->IASetVertexBuffers(
+            0,
+            1,
+            &vertexBuffer,
+            &stride,
+            &offset);
+
+        g_vrD3dContext->IASetPrimitiveTopology(
+            D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+        g_vrD3dContext->VSSetShader(
+            g_vrTestVertexShader.Get(),
+            nullptr,
+            0);
+
+        ID3D11Buffer* constantBuffer =
+            g_vrTestConstantBuffer.Get();
+
+        g_vrD3dContext->VSSetConstantBuffers(
+            0,
+            1,
+            &constantBuffer);
+
+        g_vrD3dContext->PSSetShader(
+            g_vrTestPixelShader.Get(),
+            nullptr,
+            0);
+
+        const VrTestMatrix model =
+            VR_TestTranslation(0.0f, 0.0f, -2.0f);
+
+        const VrTestMatrix view =
+            VR_TestView(g_vrViews[eyeIndex].pose);
+
+        const VrTestMatrix projection =
+            VR_TestProjection(
+                g_vrViews[eyeIndex].fov,
+                0.05f,
+                100.0f);
+
+        VrTestConstants constants = {};
+        constants.modelViewProjection =
+            VR_TestMultiply(
+                VR_TestMultiply(model, view),
+                projection);
+
+        g_vrD3dContext->UpdateSubresource(
+            g_vrTestConstantBuffer.Get(),
+            0,
+            nullptr,
+            &constants,
+            0,
+            0);
+
+        g_vrD3dContext->Draw(6, 0);
         g_vrD3dContext->Flush();
 
         XrSwapchainImageReleaseInfo releaseInfo{
@@ -1090,6 +1588,15 @@ bool VR_RenderSolidColorFrame(
         static_cast<uint32_t>(projectionViews.size());
     projectionLayer.views = projectionViews.data();
 
+    if (!g_vrLoggedFirstTestFrame)
+    {
+        Com_Printf(
+            0,
+            "[VR] Submitted first double-sided head-tracked triangle frame.\n");
+
+        g_vrLoggedFirstTestFrame = true;
+    }
+
     return true;
 }
 
@@ -1116,7 +1623,7 @@ bool VR_Init()
 
     Com_Printf(
         0,
-        "[VR] Initializing OpenXR D3D11 solid-frame test...\n");
+        "[VR] Initializing OpenXR double-sided head-tracked triangle test...\n");
 
     if (!VR_HasInstanceExtension(
             XR_KHR_D3D11_ENABLE_EXTENSION_NAME))
@@ -1244,6 +1751,12 @@ bool VR_Init()
     }
 
     if (!VR_CreateSwapchains())
+    {
+        VR_Shutdown();
+        return false;
+    }
+
+    if (!VR_CreateHeadTrackedTriangle())
     {
         VR_Shutdown();
         return false;
@@ -1402,6 +1915,13 @@ void VR_Shutdown()
         g_vrD3dContext->ClearState();
         g_vrD3dContext->Flush();
     }
+
+    g_vrTestConstantBuffer.Reset();
+    g_vrTestVertexBuffer.Reset();
+    g_vrTestInputLayout.Reset();
+    g_vrTestPixelShader.Reset();
+    g_vrTestVertexShader.Reset();
+    g_vrLoggedFirstTestFrame = false;
 
     g_vrD3dContext.Reset();
     g_vrD3dDevice.Reset();

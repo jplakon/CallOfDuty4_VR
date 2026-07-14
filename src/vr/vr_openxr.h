@@ -6,8 +6,8 @@
 // The normal Call of Duty Direct3D 9 renderer remains untouched.
 bool VR_Init();
 
-// Polls OpenXR events and, while the session is running, submits a solid-color
-// stereo frame to the headset. Call once per game frame.
+// Polls OpenXR events and, while the session is running, renders a stereo, head-tracked triangle
+// to the headset. Call once per game frame.
 void VR_Frame();
 
 // Releases swapchains, session, D3D11 resources, and the OpenXR instance.
