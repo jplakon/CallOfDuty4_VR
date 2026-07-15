@@ -125,6 +125,10 @@ float g_vrRightControllerFinalWeaponForward[3] = {
 };
 
 bool g_vrRightControllerFinalWeaponAimValid = false;
+
+float g_vrRightControllerFinalWeaponMuzzleWorld[3] = {};
+bool g_vrRightControllerFinalWeaponMuzzleValid = false;
+
 bool g_vrRightControllerAttackPressed = false;
 
 bool g_vrLoggedRightControllerUsercmdAim = false;
@@ -2653,6 +2657,7 @@ void VR_DestroyControllerInput()
         g_vrRightControllerWeaponPoseValid = false;
         g_vrRightControllerWeaponBaseValid = false;
         g_vrRightControllerFinalWeaponAimValid = false;
+        g_vrRightControllerFinalWeaponMuzzleValid = false;
         g_vrRightControllerAttackPressed = false;
 
         g_vrRightControllerFinalWeaponForward[0] = 1.0f;
@@ -2668,6 +2673,11 @@ void VR_DestroyControllerInput()
             g_vrRightControllerWeaponAxis,
             0,
             sizeof(g_vrRightControllerWeaponAxis));
+
+        memset(
+            g_vrRightControllerFinalWeaponMuzzleWorld,
+            0,
+            sizeof(g_vrRightControllerFinalWeaponMuzzleWorld));
 
         memset(
             g_vrRightControllerWeaponBasePosition,
@@ -4952,6 +4962,58 @@ bool VR_ApplyRightControllerToWeaponPlacement(
 
         g_vrLoggedRightControllerWeaponApply = true;
     }
+
+    return true;
+}
+
+
+void VR_PublishRightControllerWeaponMuzzleWorld(
+    const float muzzleOrigin[3])
+{
+    if (muzzleOrigin == nullptr)
+    {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(
+        g_vrWeaponControllerPoseMutex);
+
+    g_vrRightControllerFinalWeaponMuzzleWorld[0] =
+        muzzleOrigin[0];
+
+    g_vrRightControllerFinalWeaponMuzzleWorld[1] =
+        muzzleOrigin[1];
+
+    g_vrRightControllerFinalWeaponMuzzleWorld[2] =
+        muzzleOrigin[2];
+
+    g_vrRightControllerFinalWeaponMuzzleValid = true;
+}
+
+bool VR_GetRightControllerWeaponMuzzleWorld(
+    float muzzleOrigin[3])
+{
+    if (muzzleOrigin == nullptr)
+    {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(
+        g_vrWeaponControllerPoseMutex);
+
+    if (!g_vrRightControllerFinalWeaponMuzzleValid)
+    {
+        return false;
+    }
+
+    muzzleOrigin[0] =
+        g_vrRightControllerFinalWeaponMuzzleWorld[0];
+
+    muzzleOrigin[1] =
+        g_vrRightControllerFinalWeaponMuzzleWorld[1];
+
+    muzzleOrigin[2] =
+        g_vrRightControllerFinalWeaponMuzzleWorld[2];
 
     return true;
 }

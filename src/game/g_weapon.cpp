@@ -561,6 +561,10 @@ bool VR_GetRightControllerWeaponCommand(
     float* gunYaw,
     bool* attackPressed);
 
+
+bool VR_GetRightControllerWeaponMuzzleWorld(
+    float muzzleOrigin[3]);
+
 void __cdecl CalcMuzzlePoints(const gentity_s *ent, weaponParms *wp)
 {
     float viewang[3]; // [esp+4h] [ebp-Ch] BYREF
@@ -649,6 +653,62 @@ void __cdecl CalcMuzzlePoints(const gentity_s *ent, weaponParms *wp)
 #endif
 
     G_GetPlayerViewOrigin(&ent->client->ps, wp->muzzleTrace);
+
+#if defined(KISAK_MP) && !defined(DEDICATED)
+    float vrMuzzleWorld[3] = {};
+
+    if (VR_GetRightControllerWeaponMuzzleWorld(
+            vrMuzzleWorld))
+    {
+        trace_t vrMuzzleObstruction = {};
+
+        G_LocationalTraceAllowChildren(
+            &vrMuzzleObstruction,
+            wp->muzzleTrace,
+            vrMuzzleWorld,
+            ent->s.number,
+            0x2806831,
+            bulletPriorityMap);
+
+        const bool vrMuzzlePathClear =
+            !vrMuzzleObstruction.startsolid &&
+            vrMuzzleObstruction.fraction >= 1.0f;
+
+        if (vrMuzzlePathClear)
+        {
+            wp->muzzleTrace[0] = vrMuzzleWorld[0];
+            wp->muzzleTrace[1] = vrMuzzleWorld[1];
+            wp->muzzleTrace[2] = vrMuzzleWorld[2];
+
+            static bool loggedServerVrPhysicalMuzzle = false;
+
+            if (!loggedServerVrPhysicalMuzzle)
+            {
+                Com_Printf(
+                    0,
+                    "[VR] Server bullets now originate "
+                    "at tracked tag_flash.\n");
+
+                loggedServerVrPhysicalMuzzle = true;
+            }
+        }
+        else
+        {
+            static bool loggedServerVrMuzzleBlocked = false;
+
+            if (!loggedServerVrMuzzleBlocked)
+            {
+                Com_Printf(
+                    0,
+                    "[VR] Server physical muzzle was blocked; "
+                    "using player-view origin.\n");
+
+                loggedServerVrMuzzleBlocked = true;
+            }
+        }
+    }
+#endif
+
 #ifdef KISAK_SP
     wp->muzzleTrace[0] = ent->client->fGunXOfs + wp->muzzleTrace[0];
     wp->muzzleTrace[1] = ent->client->fGunYOfs + wp->muzzleTrace[1];

@@ -590,6 +590,45 @@ void __cdecl CG_AddPlayerWeapon(
             cgameGlob->viewModelAxis[3][1] = placement->base.origin[1];
             cgameGlob->viewModelAxis[3][2] = placement->base.origin[2];
             CG_UpdateViewModelPose(weapInfo->viewModelDObj, localClientNum);
+
+#ifdef KISAK_MP
+            if (bDrawGun && !cgameGlob->renderingThirdPerson)
+            {
+                const int32_t vrWeaponDobjNumber =
+                    CG_WeaponDObjHandle(weaponNum);
+
+                uint8_t vrMuzzleBoneIndex = 0;
+                orientation_t vrMuzzleOrientation = {};
+
+                if (CG_GetBoneIndex(
+                        localClientNum,
+                        vrWeaponDobjNumber,
+                        scr_const.tag_flash,
+                        &vrMuzzleBoneIndex) &&
+                    FX_GetBoneOrientation(
+                        localClientNum,
+                        vrWeaponDobjNumber,
+                        vrMuzzleBoneIndex,
+                        &vrMuzzleOrientation))
+                {
+                    VR_PublishRightControllerWeaponMuzzleWorld(
+                        vrMuzzleOrientation.origin);
+
+                    static bool loggedVrMuzzlePublication = false;
+
+                    if (!loggedVrMuzzlePublication)
+                    {
+                        Com_Printf(
+                            0,
+                            "[VR] Published transformed tag_flash "
+                            "for physical bullet origins.\n");
+
+                        loggedVrMuzzlePublication = true;
+                    }
+                }
+            }
+#endif
+
             if (bDrawGun)
             {
                 lightingOrigin[0] = ps->origin[0];
@@ -2670,6 +2709,8 @@ void __cdecl DrawBulletImpacts(
         {
             if (!FX_GetBoneOrientation(localClientNum, dobjNumber, boneIndex, &gunOrient))
                 return;
+            // Preserve the original tracer start until a valid VR aim
+            // snapshot confirms this is the local tracked weapon path.
             tracerStart[0] = gunOrient.origin[0];
             tracerStart[1] = gunOrient.origin[1];
             tracerStart[2] = gunOrient.origin[2];
@@ -2686,6 +2727,56 @@ void __cdecl DrawBulletImpacts(
                 viewang[0] = vrGunPitch;
                 viewang[1] = vrGunYaw;
                 viewang[2] = 0.0f;
+
+                trace_t vrMuzzleObstruction = {};
+
+                CG_LocationalTrace(
+                    &vrMuzzleObstruction,
+                    origin,
+                    gunOrient.origin,
+                    ent->nextState.number,
+                    0x2806831);
+
+                const bool vrMuzzlePathClear =
+                    !vrMuzzleObstruction.startsolid &&
+                    vrMuzzleObstruction.fraction >= 1.0f;
+
+                if (vrMuzzlePathClear)
+                {
+                    origin[0] = gunOrient.origin[0];
+                    origin[1] = gunOrient.origin[1];
+                    origin[2] = gunOrient.origin[2];
+
+                    static bool loggedClientVrPhysicalMuzzle = false;
+
+                    if (!loggedClientVrPhysicalMuzzle)
+                    {
+                        Com_Printf(
+                            0,
+                            "[VR] Client bullets now originate "
+                            "at tracked tag_flash.\n");
+
+                        loggedClientVrPhysicalMuzzle = true;
+                    }
+                }
+                else
+                {
+                    static bool loggedClientVrMuzzleBlocked = false;
+
+                    if (!loggedClientVrMuzzleBlocked)
+                    {
+                        Com_Printf(
+                            0,
+                            "[VR] Client physical muzzle was blocked; "
+                            "using player-view origin.\n");
+
+                        loggedClientVrMuzzleBlocked = true;
+                    }
+                }
+
+                tracerStart[0] = origin[0];
+                tracerStart[1] = origin[1];
+                tracerStart[2] = origin[2];
 
                 static bool loggedClientVrBulletAim = false;
 

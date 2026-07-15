@@ -63,3 +63,13 @@ bool VR_GetRightControllerWeaponCommand(
     float* gunPitch,
     float* gunYaw,
     bool* attackPressed);
+
+
+// Publishes and retrieves the latest transformed viewmodel tag_flash world
+// position. The client render path publishes it every frame; the local
+// listen-server weapon path consumes it for authoritative bullet origins.
+void VR_PublishRightControllerWeaponMuzzleWorld(
+    const float muzzleOrigin[3]);
+
+bool VR_GetRightControllerWeaponMuzzleWorld(
+    float muzzleOrigin[3]);
