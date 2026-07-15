@@ -128,6 +128,7 @@ bool g_vrRightControllerFinalWeaponAimValid = false;
 
 float g_vrRightControllerFinalWeaponMuzzleWorld[3] = {};
 bool g_vrRightControllerFinalWeaponMuzzleValid = false;
+bool g_vrRightControllerFinalWeaponMuzzleBlocked = false;
 
 bool g_vrRightControllerAttackPressed = false;
 
@@ -2658,6 +2659,7 @@ void VR_DestroyControllerInput()
         g_vrRightControllerWeaponBaseValid = false;
         g_vrRightControllerFinalWeaponAimValid = false;
         g_vrRightControllerFinalWeaponMuzzleValid = false;
+        g_vrRightControllerFinalWeaponMuzzleBlocked = false;
         g_vrRightControllerAttackPressed = false;
 
         g_vrRightControllerFinalWeaponForward[0] = 1.0f;
@@ -4989,6 +4991,28 @@ void VR_PublishRightControllerWeaponMuzzleWorld(
 
     g_vrRightControllerFinalWeaponMuzzleValid = true;
 }
+
+void VR_SetRightControllerWeaponMuzzleBlocked(
+    const bool blocked)
+{
+    std::lock_guard<std::mutex> lock(
+        g_vrWeaponControllerPoseMutex);
+
+    g_vrRightControllerFinalWeaponMuzzleBlocked =
+        blocked;
+}
+
+bool VR_ShouldSuppressRightControllerBlockedMuzzleShot()
+{
+    std::lock_guard<std::mutex> lock(
+        g_vrWeaponControllerPoseMutex);
+
+    return
+        g_vrRightControllerFinalWeaponAimValid &&
+        g_vrRightControllerAttackPressed &&
+        g_vrRightControllerFinalWeaponMuzzleBlocked;
+}
+
 
 bool VR_GetRightControllerWeaponMuzzleWorld(
     float muzzleOrigin[3])

@@ -484,6 +484,9 @@ bool __cdecl LogAccuracyHit(gentity_s *target, gentity_s *attacker)
     return 0;
 }
 
+// OpenXR blocked-muzzle state used by FireWeapon.
+bool VR_ShouldSuppressRightControllerBlockedMuzzleShot();
+
 void __cdecl FireWeapon(gentity_s *ent, int gametime)
 {
     float offset[3]; // [esp+18h] [ebp-60h] BYREF
@@ -549,6 +552,25 @@ void __cdecl FireWeapon(gentity_s *ent, int gametime)
         }
         else
         {
+#if defined(KISAK_MP) && !defined(DEDICATED)
+            if (VR_ShouldSuppressRightControllerBlockedMuzzleShot())
+            {
+                static bool loggedSuppressedVrBlockedMuzzleShot = false;
+
+                if (!loggedSuppressedVrBlockedMuzzleShot)
+                {
+                    Com_Printf(
+                        0,
+                        "[VR] Suppressed authoritative bullet because "
+                        "the physical muzzle is blocked.\n");
+
+                    loggedSuppressedVrBlockedMuzzleShot = true;
+                }
+
+                return;
+            }
+#endif
+
             Bullet_Fire(ent, fAimSpreadAmount, &wp, ent, gametime);
         }
     }
@@ -564,6 +586,11 @@ bool VR_GetRightControllerWeaponCommand(
 
 bool VR_GetRightControllerWeaponMuzzleWorld(
     float muzzleOrigin[3]);
+
+
+void VR_SetRightControllerWeaponMuzzleBlocked(
+    bool blocked);
+
 
 void __cdecl CalcMuzzlePoints(const gentity_s *ent, weaponParms *wp)
 {
@@ -657,6 +684,11 @@ void __cdecl CalcMuzzlePoints(const gentity_s *ent, weaponParms *wp)
 #if defined(KISAK_MP) && !defined(DEDICATED)
     float vrMuzzleWorld[3] = {};
 
+    // Default to clear on every CalcMuzzlePoints call so stale state cannot
+    // suppress a later shot after the gun has moved away from geometry.
+    VR_SetRightControllerWeaponMuzzleBlocked(
+        false);
+
     if (VR_GetRightControllerWeaponMuzzleWorld(
             vrMuzzleWorld))
     {
@@ -676,6 +708,9 @@ void __cdecl CalcMuzzlePoints(const gentity_s *ent, weaponParms *wp)
 
         if (vrMuzzlePathClear)
         {
+            VR_SetRightControllerWeaponMuzzleBlocked(
+                false);
+
             wp->muzzleTrace[0] = vrMuzzleWorld[0];
             wp->muzzleTrace[1] = vrMuzzleWorld[1];
             wp->muzzleTrace[2] = vrMuzzleWorld[2];
@@ -694,6 +729,9 @@ void __cdecl CalcMuzzlePoints(const gentity_s *ent, weaponParms *wp)
         }
         else
         {
+            VR_SetRightControllerWeaponMuzzleBlocked(
+                true);
+
             static bool loggedServerVrMuzzleBlocked = false;
 
             if (!loggedServerVrMuzzleBlocked)
@@ -701,7 +739,7 @@ void __cdecl CalcMuzzlePoints(const gentity_s *ent, weaponParms *wp)
                 Com_Printf(
                     0,
                     "[VR] Server physical muzzle was blocked; "
-                    "using player-view origin.\n");
+                    "marking the shot for suppression.\n");
 
                 loggedServerVrMuzzleBlocked = true;
             }

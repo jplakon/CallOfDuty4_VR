@@ -73,3 +73,12 @@ void VR_PublishRightControllerWeaponMuzzleWorld(
 
 bool VR_GetRightControllerWeaponMuzzleWorld(
     float muzzleOrigin[3]);
+
+
+// Records whether geometry lies between the player's view origin and the
+// tracked physical muzzle. The local listen-server bullet path uses this to
+// hard-suppress the shot instead of allowing normal wall penetration.
+void VR_SetRightControllerWeaponMuzzleBlocked(
+    bool blocked);
+
+bool VR_ShouldSuppressRightControllerBlockedMuzzleShot();

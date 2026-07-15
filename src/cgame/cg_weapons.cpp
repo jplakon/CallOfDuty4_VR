@@ -2768,10 +2768,15 @@ void __cdecl DrawBulletImpacts(
                         Com_Printf(
                             0,
                             "[VR] Client physical muzzle was blocked; "
-                            "using player-view origin.\n");
+                            "suppressing the local bullet trace.\n");
 
                         loggedClientVrMuzzleBlocked = true;
                     }
+
+                    // Do not draw a tracer, impact, or local bullet path from
+                    // the player's eyes. That fallback could still penetrate
+                    // a thin wall through CoD4's normal penetration system.
+                    return;
                 }
 
                 tracerStart[0] = origin[0];
