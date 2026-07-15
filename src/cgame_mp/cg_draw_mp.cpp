@@ -1446,8 +1446,55 @@ void __cdecl CG_DrawActive(int32_t localClientNum)
             &vrAttackPressed) &&
         vrAttackPressed)
     {
-        commandExtraButtons |=
-            BUTTON_ATTACK;
+        bool vrMuzzleBlocked = false;
+        float vrMuzzleWorld[3] = {};
+
+        if (VR_GetRightControllerWeaponMuzzleWorld(
+                vrMuzzleWorld))
+        {
+            float vrViewOrigin[3] = {};
+
+            CG_GetPlayerViewOrigin(
+                localClientNum,
+                &cgameGlob->predictedPlayerState,
+                vrViewOrigin);
+
+            trace_t vrMuzzleObstruction = {};
+
+            CG_LocationalTrace(
+                &vrMuzzleObstruction,
+                vrViewOrigin,
+                vrMuzzleWorld,
+                cgameGlob->predictedPlayerState.clientNum,
+                0x2806831);
+
+            vrMuzzleBlocked =
+                vrMuzzleObstruction.startsolid ||
+                vrMuzzleObstruction.fraction < 1.0f;
+
+            VR_SetRightControllerWeaponMuzzleBlocked(
+                vrMuzzleBlocked);
+        }
+
+        if (!vrMuzzleBlocked)
+        {
+            commandExtraButtons |=
+                BUTTON_ATTACK;
+        }
+        else
+        {
+            static bool loggedEarlyVrMuzzleSuppression = false;
+
+            if (!loggedEarlyVrMuzzleSuppression)
+            {
+                Com_Printf(
+                    0,
+                    "[VR] Suppressed BUTTON_ATTACK before weapon simulation "
+                    "because the physical muzzle is blocked.\n");
+
+                loggedEarlyVrMuzzleSuppression = true;
+            }
+        }
     }
 
     // VR controller trigger is injected from the active MP CG_DrawActive path.
