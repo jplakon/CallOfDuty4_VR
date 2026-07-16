@@ -552,7 +552,7 @@ void __cdecl FireWeapon(gentity_s *ent, int gametime)
         }
         else
         {
-#if defined(KISAK_MP) && !defined(DEDICATED)
+#if (defined(KISAK_MP) || defined(KISAK_SP)) && !defined(DEDICATED)
             if (VR_ShouldSuppressRightControllerBlockedMuzzleShot())
             {
                 static bool loggedSuppressedVrBlockedMuzzleShot = false;
@@ -609,7 +609,7 @@ void __cdecl CalcMuzzlePoints(const gentity_s *ent, weaponParms *wp)
         viewang[1] = ent->client->fGunYaw;
     }
 
-#if defined(KISAK_MP) && !defined(DEDICATED)
+#if (defined(KISAK_MP) || defined(KISAK_SP)) && !defined(DEDICATED)
     float vrGunPitch = 0.0f;
     float vrGunYaw = 0.0f;
     bool vrAttackPressed = false;
@@ -630,6 +630,13 @@ void __cdecl CalcMuzzlePoints(const gentity_s *ent, weaponParms *wp)
                 0,
                 "[VR] Applied right-controller aim at "
                 "CalcMuzzlePoints.\n");
+
+#if defined(KISAK_SP)
+            Com_Printf(
+                0,
+                "[VR] Applied tracked weapon direction "
+                "in SP authoritative fire.\n");
+#endif
 
             loggedVrMuzzleAim = true;
         }
@@ -652,7 +659,7 @@ void __cdecl CalcMuzzlePoints(const gentity_s *ent, weaponParms *wp)
 
     AngleVectors(viewang, wp->forward, wp->right, wp->up);
 
-#if defined(KISAK_MP) && !defined(DEDICATED)
+#if (defined(KISAK_MP) || defined(KISAK_SP)) && !defined(DEDICATED)
     if (vrAttackPressed)
     {
         static int vrMuzzleDiagnosticCount = 0;
@@ -681,7 +688,9 @@ void __cdecl CalcMuzzlePoints(const gentity_s *ent, weaponParms *wp)
 
     G_GetPlayerViewOrigin(&ent->client->ps, wp->muzzleTrace);
 
-#if defined(KISAK_MP) && !defined(DEDICATED)
+    bool vrUsingPhysicalMuzzle = false;
+
+#if (defined(KISAK_MP) || defined(KISAK_SP)) && !defined(DEDICATED)
     float vrMuzzleWorld[3] = {};
 
     // Default to clear on every CalcMuzzlePoints call so stale state cannot
@@ -714,6 +723,8 @@ void __cdecl CalcMuzzlePoints(const gentity_s *ent, weaponParms *wp)
             wp->muzzleTrace[0] = vrMuzzleWorld[0];
             wp->muzzleTrace[1] = vrMuzzleWorld[1];
             wp->muzzleTrace[2] = vrMuzzleWorld[2];
+
+            vrUsingPhysicalMuzzle = true;
 
             static bool loggedServerVrPhysicalMuzzle = false;
 
@@ -748,9 +759,17 @@ void __cdecl CalcMuzzlePoints(const gentity_s *ent, weaponParms *wp)
 #endif
 
 #ifdef KISAK_SP
-    wp->muzzleTrace[0] = ent->client->fGunXOfs + wp->muzzleTrace[0];
-    wp->muzzleTrace[1] = ent->client->fGunYOfs + wp->muzzleTrace[1];
-    wp->muzzleTrace[2] = ent->client->fGunZOfs + wp->muzzleTrace[2];
+    if (!vrUsingPhysicalMuzzle)
+    {
+        wp->muzzleTrace[0] =
+            ent->client->fGunXOfs + wp->muzzleTrace[0];
+
+        wp->muzzleTrace[1] =
+            ent->client->fGunYOfs + wp->muzzleTrace[1];
+
+        wp->muzzleTrace[2] =
+            ent->client->fGunZOfs + wp->muzzleTrace[2];
+    }
 #endif
 }
 
