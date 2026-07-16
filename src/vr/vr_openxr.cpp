@@ -4968,8 +4968,9 @@ bool VR_ApplyRightControllerToWeaponPlacement(
 
     float currentPosition[3] = {};
     float currentAxis[3][3] = {};
-    float basePosition[3] = {};
-    float baseAxis[3][3] = {};
+    float attachmentPosition[3] = {};
+    float attachmentAxis[3][3] = {};
+    bool attachmentValid = false;
 
     {
         std::lock_guard<std::mutex> lock(
@@ -4978,23 +4979,6 @@ bool VR_ApplyRightControllerToWeaponPlacement(
         if (!g_vrRightControllerWeaponPoseValid)
         {
             return false;
-        }
-
-        if (!g_vrRightControllerWeaponBaseValid)
-        {
-            memcpy(
-                g_vrRightControllerWeaponBasePosition,
-                g_vrRightControllerWeaponPosition,
-                sizeof(
-                    g_vrRightControllerWeaponBasePosition));
-
-            memcpy(
-                g_vrRightControllerWeaponBaseAxis,
-                g_vrRightControllerWeaponAxis,
-                sizeof(
-                    g_vrRightControllerWeaponBaseAxis));
-
-            g_vrRightControllerWeaponBaseValid = true;
         }
 
         memcpy(
@@ -5007,94 +4991,164 @@ bool VR_ApplyRightControllerToWeaponPlacement(
             g_vrRightControllerWeaponAxis,
             sizeof(currentAxis));
 
-        memcpy(
-            basePosition,
-            g_vrRightControllerWeaponBasePosition,
-            sizeof(basePosition));
+        attachmentValid =
+            g_vrRightControllerWeaponBaseValid;
 
-        memcpy(
-            baseAxis,
-            g_vrRightControllerWeaponBaseAxis,
-            sizeof(baseAxis));
-    }
-
-    if (!g_vrLoggedRightControllerWeaponCalibration)
-    {
-        Com_Printf(
-            0,
-            "[VR] Calibrated right-controller "
-            "weapon pose at first viewmodel render.\n");
-
-        g_vrLoggedRightControllerWeaponCalibration = true;
-    }
-
-    float originalOriginLocal[3] = {};
-    float originDeltaWorld[3] = {
-        weaponOrigin[0] - cameraOrigin[0],
-        weaponOrigin[1] - cameraOrigin[1],
-        weaponOrigin[2] - cameraOrigin[2],
-    };
-
-    for (int localComponent = 0;
-         localComponent < 3;
-         ++localComponent)
-    {
-        originalOriginLocal[localComponent] =
-            originDeltaWorld[0] *
-                cameraAxis[localComponent][0] +
-            originDeltaWorld[1] *
-                cameraAxis[localComponent][1] +
-            originDeltaWorld[2] *
-                cameraAxis[localComponent][2];
-    }
-
-    auto transformBaseLocalToCurrent =
-        [&baseAxis, &currentAxis](
-            const float input[3],
-            float output[3])
+        if (attachmentValid)
         {
-            float controllerLocal[3] = {};
+            memcpy(
+                attachmentPosition,
+                g_vrRightControllerWeaponBasePosition,
+                sizeof(attachmentPosition));
 
+            memcpy(
+                attachmentAxis,
+                g_vrRightControllerWeaponBaseAxis,
+                sizeof(attachmentAxis));
+        }
+    }
+
+    if (!attachmentValid)
+    {
+        float weaponOriginCameraLocal[3] = {};
+        float weaponAxisCameraLocal[3][3] = {};
+
+        const float originDeltaWorld[3] = {
+            weaponOrigin[0] - cameraOrigin[0],
+            weaponOrigin[1] - cameraOrigin[1],
+            weaponOrigin[2] - cameraOrigin[2],
+        };
+
+        for (int cameraComponent = 0;
+             cameraComponent < 3;
+             ++cameraComponent)
+        {
+            weaponOriginCameraLocal[cameraComponent] =
+                originDeltaWorld[0] *
+                    cameraAxis[cameraComponent][0] +
+                originDeltaWorld[1] *
+                    cameraAxis[cameraComponent][1] +
+                originDeltaWorld[2] *
+                    cameraAxis[cameraComponent][2];
+        }
+
+        for (int weaponAxisRow = 0;
+             weaponAxisRow < 3;
+             ++weaponAxisRow)
+        {
+            for (int cameraComponent = 0;
+                 cameraComponent < 3;
+                 ++cameraComponent)
+            {
+                weaponAxisCameraLocal[
+                    weaponAxisRow][cameraComponent] =
+                    weaponAxis[weaponAxisRow][0] *
+                        cameraAxis[cameraComponent][0] +
+                    weaponAxis[weaponAxisRow][1] *
+                        cameraAxis[cameraComponent][1] +
+                    weaponAxis[weaponAxisRow][2] *
+                        cameraAxis[cameraComponent][2];
+            }
+        }
+
+        const float controllerToWeaponCameraLocal[3] = {
+            weaponOriginCameraLocal[0] -
+                currentPosition[0],
+            weaponOriginCameraLocal[1] -
+                currentPosition[1],
+            weaponOriginCameraLocal[2] -
+                currentPosition[2],
+        };
+
+        for (int controllerComponent = 0;
+             controllerComponent < 3;
+             ++controllerComponent)
+        {
+            attachmentPosition[controllerComponent] =
+                controllerToWeaponCameraLocal[0] *
+                    currentAxis[controllerComponent][0] +
+                controllerToWeaponCameraLocal[1] *
+                    currentAxis[controllerComponent][1] +
+                controllerToWeaponCameraLocal[2] *
+                    currentAxis[controllerComponent][2];
+        }
+
+        for (int weaponAxisRow = 0;
+             weaponAxisRow < 3;
+             ++weaponAxisRow)
+        {
             for (int controllerComponent = 0;
                  controllerComponent < 3;
                  ++controllerComponent)
             {
-                controllerLocal[controllerComponent] =
-                    input[0] *
-                        baseAxis[controllerComponent][0] +
-                    input[1] *
-                        baseAxis[controllerComponent][1] +
-                    input[2] *
-                        baseAxis[controllerComponent][2];
+                attachmentAxis[
+                    weaponAxisRow][controllerComponent] =
+                    weaponAxisCameraLocal[weaponAxisRow][0] *
+                        currentAxis[controllerComponent][0] +
+                    weaponAxisCameraLocal[weaponAxisRow][1] *
+                        currentAxis[controllerComponent][1] +
+                    weaponAxisCameraLocal[weaponAxisRow][2] *
+                        currentAxis[controllerComponent][2];
             }
+        }
 
-            for (int outputComponent = 0;
-                 outputComponent < 3;
-                 ++outputComponent)
+        {
+            std::lock_guard<std::mutex> lock(
+                g_vrWeaponControllerPoseMutex);
+
+            if (!g_vrRightControllerWeaponBaseValid)
             {
-                output[outputComponent] =
-                    controllerLocal[0] *
-                        currentAxis[0][outputComponent] +
-                    controllerLocal[1] *
-                        currentAxis[1][outputComponent] +
-                    controllerLocal[2] *
-                        currentAxis[2][outputComponent];
+                memcpy(
+                    g_vrRightControllerWeaponBasePosition,
+                    attachmentPosition,
+                    sizeof(attachmentPosition));
+
+                memcpy(
+                    g_vrRightControllerWeaponBaseAxis,
+                    attachmentAxis,
+                    sizeof(attachmentAxis));
+
+                g_vrRightControllerWeaponBaseValid = true;
             }
-        };
+            else
+            {
+                memcpy(
+                    attachmentPosition,
+                    g_vrRightControllerWeaponBasePosition,
+                    sizeof(attachmentPosition));
 
-    float transformedOriginLocal[3] = {};
+                memcpy(
+                    attachmentAxis,
+                    g_vrRightControllerWeaponBaseAxis,
+                    sizeof(attachmentAxis));
+            }
+        }
 
-    transformBaseLocalToCurrent(
-        originalOriginLocal,
-        transformedOriginLocal);
+        if (!g_vrLoggedRightControllerWeaponCalibration)
+        {
+            Com_Printf(
+                0,
+                "[VR] Calibrated fixed controller-to-viewmodel "
+                "position and orientation offsets.\n");
 
-    for (int component = 0;
-         component < 3;
-         ++component)
+            g_vrLoggedRightControllerWeaponCalibration = true;
+        }
+    }
+
+    float weaponOriginCameraLocal[3] = {};
+
+    for (int cameraComponent = 0;
+         cameraComponent < 3;
+         ++cameraComponent)
     {
-        transformedOriginLocal[component] +=
-            currentPosition[component] -
-            basePosition[component];
+        weaponOriginCameraLocal[cameraComponent] =
+            currentPosition[cameraComponent] +
+            attachmentPosition[0] *
+                currentAxis[0][cameraComponent] +
+            attachmentPosition[1] *
+                currentAxis[1][cameraComponent] +
+            attachmentPosition[2] *
+                currentAxis[2][cameraComponent];
     }
 
     for (int worldComponent = 0;
@@ -5103,20 +5157,13 @@ bool VR_ApplyRightControllerToWeaponPlacement(
     {
         weaponOrigin[worldComponent] =
             cameraOrigin[worldComponent] +
-            transformedOriginLocal[0] *
+            weaponOriginCameraLocal[0] *
                 cameraAxis[0][worldComponent] +
-            transformedOriginLocal[1] *
+            weaponOriginCameraLocal[1] *
                 cameraAxis[1][worldComponent] +
-            transformedOriginLocal[2] *
+            weaponOriginCameraLocal[2] *
                 cameraAxis[2][worldComponent];
     }
-
-    float originalWeaponAxis[3][3] = {};
-
-    memcpy(
-        originalWeaponAxis,
-        weaponAxis,
-        sizeof(originalWeaponAxis));
 
     for (int weaponAxisRow = 0;
          weaponAxisRow < 3;
@@ -5129,30 +5176,24 @@ bool VR_ApplyRightControllerToWeaponPlacement(
              ++cameraComponent)
         {
             weaponRowCameraLocal[cameraComponent] =
-                originalWeaponAxis[weaponAxisRow][0] *
-                    cameraAxis[cameraComponent][0] +
-                originalWeaponAxis[weaponAxisRow][1] *
-                    cameraAxis[cameraComponent][1] +
-                originalWeaponAxis[weaponAxisRow][2] *
-                    cameraAxis[cameraComponent][2];
+                attachmentAxis[weaponAxisRow][0] *
+                    currentAxis[0][cameraComponent] +
+                attachmentAxis[weaponAxisRow][1] *
+                    currentAxis[1][cameraComponent] +
+                attachmentAxis[weaponAxisRow][2] *
+                    currentAxis[2][cameraComponent];
         }
-
-        float transformedWeaponRowLocal[3] = {};
-
-        transformBaseLocalToCurrent(
-            weaponRowCameraLocal,
-            transformedWeaponRowLocal);
 
         for (int worldComponent = 0;
              worldComponent < 3;
              ++worldComponent)
         {
             weaponAxis[weaponAxisRow][worldComponent] =
-                transformedWeaponRowLocal[0] *
+                weaponRowCameraLocal[0] *
                     cameraAxis[0][worldComponent] +
-                transformedWeaponRowLocal[1] *
+                weaponRowCameraLocal[1] *
                     cameraAxis[1][worldComponent] +
-                transformedWeaponRowLocal[2] *
+                weaponRowCameraLocal[2] *
                     cameraAxis[2][worldComponent];
         }
     }
@@ -5184,8 +5225,8 @@ bool VR_ApplyRightControllerToWeaponPlacement(
     {
         Com_Printf(
             0,
-            "[VR] Applied right-controller motion "
-            "delta to the CoD4 viewmodel.\n");
+            "[VR] Applied absolute rigid right-controller "
+            "weapon transform.\n");
 
         g_vrLoggedRightControllerWeaponApply = true;
     }

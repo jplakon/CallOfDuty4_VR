@@ -604,41 +604,76 @@ void __cdecl CG_AddPlayerWeapon(
                 !cgameGlob->renderingThirdPerson)
             {
                 float vrTrackedGripWorld[3] = {};
-                float vrViewmodelRightHandWorld[3] = {};
+                float vrViewmodelGripTagWorld[3] = {};
 
-                const char* vrRightHandTagName =
+                const char* configuredTagName =
                     "tag_weapon_right";
 
                 if (cg_weaponrightbone != nullptr &&
                     cg_weaponrightbone->current.string != nullptr &&
                     cg_weaponrightbone->current.string[0] != '\0')
                 {
-                    vrRightHandTagName =
+                    configuredTagName =
                         cg_weaponrightbone->current.string;
                 }
 
-                const uint32_t vrRightHandTag =
-                    SL_FindString(
-                        vrRightHandTagName);
+                const char* candidateTagNames[] = {
+                    configuredTagName,
+                    "tag_weapon",
+                    "tag_inhand",
+                    "tag_origin",
+                };
 
-                if (vrRightHandTag != 0 &&
-                    VR_GetRightControllerWeaponGripWorld(
+                const char* selectedTagName = nullptr;
+                bool foundGripTag = false;
+
+                if (VR_GetRightControllerWeaponGripWorld(
                         cgameGlob->refdef.vieworg,
                         cgameGlob->refdef.viewaxis,
-                        vrTrackedGripWorld) &&
-                    CG_DObjGetWorldTagPos(
-                        &cgameGlob->viewModelPose,
-                        weapInfo->viewModelDObj,
-                        vrRightHandTag,
-                        vrViewmodelRightHandWorld))
+                        vrTrackedGripWorld))
+                {
+                    for (const char* candidateTagName :
+                         candidateTagNames)
+                    {
+                        if (candidateTagName == nullptr ||
+                            candidateTagName[0] == '\0')
+                        {
+                            continue;
+                        }
+
+                        const uint32_t candidateTag =
+                            SL_FindString(
+                                candidateTagName);
+
+                        if (candidateTag == 0)
+                        {
+                            continue;
+                        }
+
+                        if (CG_DObjGetWorldTagPos(
+                                &cgameGlob->viewModelPose,
+                                weapInfo->viewModelDObj,
+                                candidateTag,
+                                vrViewmodelGripTagWorld))
+                        {
+                            selectedTagName =
+                                candidateTagName;
+
+                            foundGripTag = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (foundGripTag)
                 {
                     const float vrGripCorrection[3] = {
                         vrTrackedGripWorld[0] -
-                            vrViewmodelRightHandWorld[0],
+                            vrViewmodelGripTagWorld[0],
                         vrTrackedGripWorld[1] -
-                            vrViewmodelRightHandWorld[1],
+                            vrViewmodelGripTagWorld[1],
                         vrTrackedGripWorld[2] -
-                            vrViewmodelRightHandWorld[2],
+                            vrViewmodelGripTagWorld[2],
                     };
 
                     cgameGlob->viewModelAxis[3][0] +=
@@ -650,38 +685,36 @@ void __cdecl CG_AddPlayerWeapon(
                     cgameGlob->viewModelAxis[3][2] +=
                         vrGripCorrection[2];
 
-                    // Rebuild and clear the DObj skeleton after moving the
-                    // root. Later tag_flash queries now see the corrected
-                    // rifle position as well.
                     CG_UpdateViewModelPose(
                         weapInfo->viewModelDObj,
                         localClientNum);
 
-                    static bool loggedVrRightHandTagAlignment = false;
+                    static bool loggedVrGripTagAlignment = false;
 
-                    if (!loggedVrRightHandTagAlignment)
+                    if (!loggedVrGripTagAlignment)
                     {
                         Com_Printf(
                             0,
-                            "[VR] Aligned viewmodel tag_weapon_right "
-                            "to the tracked grip pose.\n");
+                            "[VR] Aligned viewmodel grip tag '%s' "
+                            "to the tracked right grip pose.\n",
+                            selectedTagName);
 
-                        loggedVrRightHandTagAlignment = true;
+                        loggedVrGripTagAlignment = true;
                     }
                 }
                 else
                 {
-                    static bool loggedVrRightHandTagAlignmentFailure =
-                        false;
+                    static bool loggedVrGripTagAlignmentFailure = false;
 
-                    if (!loggedVrRightHandTagAlignmentFailure)
+                    if (!loggedVrGripTagAlignmentFailure)
                     {
                         Com_PrintWarning(
                             0,
-                            "[VR] Could not align tag_weapon_right "
-                            "to the tracked grip pose.\n");
+                            "[VR] No usable viewmodel grip tag found; "
+                            "tried configured, tag_weapon, "
+                            "tag_inhand, and tag_origin.\n");
 
-                        loggedVrRightHandTagAlignmentFailure = true;
+                        loggedVrGripTagAlignmentFailure = true;
                     }
                 }
             }
