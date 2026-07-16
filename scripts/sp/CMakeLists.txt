@@ -54,6 +54,45 @@ add_executable(${PROJECT_NAME}
     ${STEAM_HEADERS}
 )
 
+
+# KISAK_OPENXR_SP_BEGIN
+target_sources(
+    ${PROJECT_NAME}
+    PRIVATE
+        ${SRC_DIR}/vr/vr_openxr.cpp
+        ${SRC_DIR}/vr/vr_d3d9_capture.cpp
+        ${SRC_DIR}/vr/vr_d3d9ex_interop_probe.cpp
+        ${SRC_DIR}/vr/vr_d3d9ex_interop_probe.h
+        ${SRC_DIR}/vr/vr_openxr.h
+        ${SRC_DIR}/vr/vr_d3d9_capture.h
+)
+
+target_link_libraries(
+    ${PROJECT_NAME}
+    PRIVATE
+        OpenXR::openxr_loader
+        d3d11
+        dxgi
+        d3dcompiler
+)
+
+target_compile_definitions(
+    ${PROJECT_NAME}
+    PRIVATE
+        KISAK_OPENXR_ENABLED=1
+        XR_USE_PLATFORM_WIN32
+        XR_USE_GRAPHICS_API_D3D11
+)
+
+if(MSVC AND CMAKE_SIZEOF_VOID_P EQUAL 4)
+    target_link_options(
+        ${PROJECT_NAME}
+        PRIVATE
+            /LARGEADDRESSAWARE
+    )
+endif()
+# KISAK_OPENXR_SP_END
+
 target_compile_definitions(${PROJECT_NAME} PUBLIC KISAK_SP CINEMA USE_SEPARATE_BLIT_TEXTURE)
 
 # We need all of the pre/post-build commands
