@@ -75,6 +75,11 @@ bool VR_GetHmdOrientedMovement(
     float* forward,
     float* right);
 
+// Consumes one latched 45-degree right-stick snap turn.
+// Positive CoD yaw turns left, so right-stick right returns -45 degrees.
+bool VR_ConsumeSnapTurn(
+    float* yawDeltaDegrees);
+
 
 // Applies a short vibration pulse to the right-hand OpenXR controller.
 // Intended for confirmed local firearm events.

@@ -1520,6 +1520,38 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
         }
 
         CL_MouseMove(result);
+
+        float vrSnapYawDegrees = 0.0f;
+
+        if (!Key_IsCatcherActive(0, 8) &&
+            VR_ConsumeSnapTurn(
+                &vrSnapYawDegrees))
+        {
+            clients[0].viewangles[1] +=
+                vrSnapYawDegrees;
+
+            if (clients[0].viewangles[1] >= 360.0f)
+            {
+                clients[0].viewangles[1] -= 360.0f;
+            }
+            else if (clients[0].viewangles[1] < 0.0f)
+            {
+                clients[0].viewangles[1] += 360.0f;
+            }
+
+            static bool loggedVrSnapTurn = false;
+
+            if (!loggedVrSnapTurn)
+            {
+                Com_Printf(
+                    0,
+                    "[VR] Applied 45-degree right-thumbstick "
+                    "snap turning.\n");
+
+                loggedVrSnapTurn = true;
+            }
+        }
+
         // KISAKTODO
         //if (GPad_IsActive(CL_ControllerIndexFromClientNum(0)))
         //    CL_GamepadMove(result);

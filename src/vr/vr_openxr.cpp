@@ -49,6 +49,7 @@ XrAction g_vrAimPoseAction = XR_NULL_HANDLE;
 XrAction g_vrTriggerValueAction = XR_NULL_HANDLE;
 XrAction g_vrSqueezeValueAction = XR_NULL_HANDLE;
 XrAction g_vrMoveThumbstickAction = XR_NULL_HANDLE;
+XrAction g_vrTurnThumbstickAction = XR_NULL_HANDLE;
 XrAction g_vrHapticOutputAction = XR_NULL_HANDLE;
 
 std::array<XrPath, kVrControllerCount>
@@ -273,6 +274,10 @@ bool g_vrLoggedFirstCameraApply = false;
 
 float g_vrLeftThumbstick[2] = {};
 bool g_vrLeftThumbstickValid = false;
+
+float g_vrRightThumbstickX = 0.0f;
+bool g_vrRightThumbstickValid = false;
+bool g_vrSnapTurnArmed = true;
 
 
 std::vector<XrViewConfigurationView> g_vrViewConfigs;
@@ -2673,6 +2678,12 @@ void VR_DestroyControllerInput()
         g_vrHapticOutputAction = XR_NULL_HANDLE;
     }
 
+    if (g_vrTurnThumbstickAction != XR_NULL_HANDLE)
+    {
+        xrDestroyAction(g_vrTurnThumbstickAction);
+        g_vrTurnThumbstickAction = XR_NULL_HANDLE;
+    }
+
     if (g_vrMoveThumbstickAction != XR_NULL_HANDLE)
     {
         xrDestroyAction(g_vrMoveThumbstickAction);
@@ -2732,6 +2743,10 @@ void VR_DestroyControllerInput()
         g_vrLeftThumbstick[0] = 0.0f;
         g_vrLeftThumbstick[1] = 0.0f;
         g_vrLeftThumbstickValid = false;
+
+        g_vrRightThumbstickX = 0.0f;
+        g_vrRightThumbstickValid = false;
+        g_vrSnapTurnArmed = true;
     }
 
     {
@@ -2879,9 +2894,9 @@ bool VR_SuggestControllerBindings()
         return false;
     }
 
-    std::array<XrPath, 11> touchBindingPaths = {};
+    std::array<XrPath, 12> touchBindingPaths = {};
 
-    const std::array<const char*, 11>
+    const std::array<const char*, 12>
         touchBindingStrings = {
             "/user/hand/left/input/grip/pose",
             "/user/hand/right/input/grip/pose",
@@ -2894,6 +2909,7 @@ bool VR_SuggestControllerBindings()
             "/user/hand/left/output/haptic",
             "/user/hand/right/output/haptic",
             "/user/hand/left/input/thumbstick",
+            "/user/hand/right/input/thumbstick",
         };
 
     for (std::uint32_t bindingIndex = 0u;
@@ -2908,7 +2924,7 @@ bool VR_SuggestControllerBindings()
         }
     }
 
-    const std::array<XrActionSuggestedBinding, 11>
+    const std::array<XrActionSuggestedBinding, 12>
         touchBindings = {{
             {
                 g_vrGripPoseAction,
@@ -2953,6 +2969,10 @@ bool VR_SuggestControllerBindings()
             {
                 g_vrMoveThumbstickAction,
                 touchBindingPaths[10],
+            },
+            {
+                g_vrTurnThumbstickAction,
+                touchBindingPaths[11],
             },
         }};
 
@@ -3172,6 +3192,11 @@ bool VR_CreateControllerActions()
             "move_thumbstick",
             "Move Thumbstick",
             &g_vrMoveThumbstickAction) ||
+        !VR_CreateControllerAction(
+            XR_ACTION_TYPE_VECTOR2F_INPUT,
+            "turn_thumbstick",
+            "Turn Thumbstick",
+            &g_vrTurnThumbstickAction) ||
         !VR_CreateControllerAction(
             XR_ACTION_TYPE_VIBRATION_OUTPUT,
             "haptic_output",
@@ -3998,6 +4023,30 @@ void VR_UpdateControllerActions(
             g_vrLeftThumbstick[1] =
                 g_vrLeftThumbstickValid
                     ? thumbstickValue.y
+                    : 0.0f;
+        }
+        else if (handIndex == VR_CONTROLLER_RIGHT)
+        {
+            XrVector2f thumbstickValue = {};
+            bool thumbstickActive = false;
+
+            const bool thumbstickStateValid =
+                VR_GetControllerVector2State(
+                    g_vrTurnThumbstickAction,
+                    handPath,
+                    &thumbstickValue,
+                    &thumbstickActive);
+
+            std::lock_guard<std::mutex> lock(
+                g_vrHeadOrientationMutex);
+
+            g_vrRightThumbstickValid =
+                thumbstickStateValid &&
+                thumbstickActive;
+
+            g_vrRightThumbstickX =
+                g_vrRightThumbstickValid
+                    ? thumbstickValue.x
                     : 0.0f;
         }
 
@@ -6065,6 +6114,67 @@ bool VR_ApplyRightControllerWeaponHaptic(
     return true;
 }
 
+
+bool VR_ConsumeSnapTurn(
+    float* yawDeltaDegrees)
+{
+    if (yawDeltaDegrees == nullptr)
+    {
+        return false;
+    }
+
+    *yawDeltaDegrees = 0.0f;
+
+    std::lock_guard<std::mutex> lock(
+        g_vrHeadOrientationMutex);
+
+    if (!g_vrRightThumbstickValid)
+    {
+        g_vrSnapTurnArmed = true;
+        return false;
+    }
+
+    constexpr float engageThreshold = 0.75f;
+    constexpr float releaseThreshold = 0.35f;
+    constexpr float snapAngleDegrees = 45.0f;
+
+    if (g_vrRightThumbstickX >
+            -releaseThreshold &&
+        g_vrRightThumbstickX <
+            releaseThreshold)
+    {
+        g_vrSnapTurnArmed = true;
+        return false;
+    }
+
+    if (!g_vrSnapTurnArmed)
+    {
+        return false;
+    }
+
+    if (g_vrRightThumbstickX >=
+        engageThreshold)
+    {
+        // Positive CoD yaw turns left.
+        *yawDeltaDegrees =
+            -snapAngleDegrees;
+
+        g_vrSnapTurnArmed = false;
+        return true;
+    }
+
+    if (g_vrRightThumbstickX <=
+        -engageThreshold)
+    {
+        *yawDeltaDegrees =
+            snapAngleDegrees;
+
+        g_vrSnapTurnArmed = false;
+        return true;
+    }
+
+    return false;
+}
 
 bool VR_GetHmdOrientedMovement(
     float* forward,
