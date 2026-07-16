@@ -5285,37 +5285,27 @@ bool VR_ApplyRightControllerToWeaponPlacement(
                 currentPosition[2],
         };
 
-        for (int controllerComponent = 0;
-             controllerComponent < 3;
-             ++controllerComponent)
-        {
-            attachmentPosition[controllerComponent] =
-                controllerToWeaponCameraLocal[0] *
-                    currentAxis[controllerComponent][0] +
-                controllerToWeaponCameraLocal[1] *
-                    currentAxis[controllerComponent][1] +
-                controllerToWeaponCameraLocal[2] *
-                    currentAxis[controllerComponent][2];
-        }
+        // Calibrate against a canonical controller basis:
+        // forward = camera forward, left = camera left, up = camera up.
+        //
+        // The old code projected these offsets through the controller's
+        // orientation on the first rendered frame. That made the first
+        // controller pose become a permanent neutral pose. A controller
+        // pointed upward during startup therefore produced a lasting
+        // orientation offset.
+        //
+        // Keeping the default viewmodel placement directly in canonical
+        // controller-local coordinates makes later weapon orientation an
+        // absolute function of the current controller pose instead.
+        memcpy(
+            attachmentPosition,
+            controllerToWeaponCameraLocal,
+            sizeof(attachmentPosition));
 
-        for (int weaponAxisRow = 0;
-             weaponAxisRow < 3;
-             ++weaponAxisRow)
-        {
-            for (int controllerComponent = 0;
-                 controllerComponent < 3;
-                 ++controllerComponent)
-            {
-                attachmentAxis[
-                    weaponAxisRow][controllerComponent] =
-                    weaponAxisCameraLocal[weaponAxisRow][0] *
-                        currentAxis[controllerComponent][0] +
-                    weaponAxisCameraLocal[weaponAxisRow][1] *
-                        currentAxis[controllerComponent][1] +
-                    weaponAxisCameraLocal[weaponAxisRow][2] *
-                        currentAxis[controllerComponent][2];
-            }
-        }
+        memcpy(
+            attachmentAxis,
+            weaponAxisCameraLocal,
+            sizeof(attachmentAxis));
 
         {
             std::lock_guard<std::mutex> lock(
@@ -5353,8 +5343,8 @@ bool VR_ApplyRightControllerToWeaponPlacement(
         {
             Com_Printf(
                 0,
-                "[VR] Calibrated fixed controller-to-viewmodel "
-                "position and orientation offsets.\n");
+                "[VR] Calibrated controller-independent "
+                "viewmodel attachment offsets.\n");
 
             g_vrLoggedRightControllerWeaponCalibration = true;
         }

@@ -46,10 +46,10 @@ bool VR_GetCurrentRenderEyeProjection(
     float* tanDown,
     float* tanUp);
 
-// Applies the tracked right-controller motion delta to the already-built
-// first-person weapon placement. The first valid viewmodel render becomes
-// the neutral calibration pose, so installing this does not make the gun
-// jump when tracking first becomes available.
+// Applies the tracked right-controller pose to the already-built
+// first-person weapon placement. The viewmodel attachment is calibrated
+// against a canonical controller basis, so startup controller orientation
+// cannot become a permanent neutral-pose offset.
 bool VR_ApplyRightControllerToWeaponPlacement(
     const float cameraOrigin[3],
     const float cameraAxis[3][3],
