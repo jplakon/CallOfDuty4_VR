@@ -3,6 +3,7 @@
 #endif
 
 #include "cg_draw.h"
+#include "vr/vr_openxr.h"
 #include <stringed/stringed_hooks.h>
 #include "cg_main.h"
 #include "cg_servercmds.h"
@@ -1263,7 +1264,81 @@ void __cdecl CG_DrawActive(int localClientNum)
         cgArray[0].gunZOfs);
     CL_SetExtraButtons(localClientNum, cgArray[0].extraButtons);
     cgArray[0].extraButtons = 0;
-    CL_RenderScene(&cgArray[0].refdef);
+
+    if (!VR_IsInitialized() ||
+        cgArray[0].refdef.width < 2)
+    {
+        CL_RenderScene(&cgArray[0].refdef);
+        return;
+    }
+
+    refdef_s leftEyeRefdef =
+        cgArray[0].refdef;
+
+    refdef_s rightEyeRefdef =
+        cgArray[0].refdef;
+
+    const int stereoWidth =
+        cgArray[0].refdef.width;
+
+    const int leftEyeWidth =
+        stereoWidth / 2;
+
+    const int rightEyeWidth =
+        stereoWidth - leftEyeWidth;
+
+    leftEyeRefdef.width =
+        leftEyeWidth;
+
+    rightEyeRefdef.x =
+        cgArray[0].refdef.x +
+        leftEyeWidth;
+
+    rightEyeRefdef.width =
+        rightEyeWidth;
+
+    leftEyeRefdef.useScissorViewport = 0;
+    rightEyeRefdef.useScissorViewport = 0;
+
+    VR_ApplyStereoEyeOffsetForEye(
+        leftEyeRefdef.vieworg,
+        leftEyeRefdef.viewaxis,
+        0u);
+
+    VR_ApplyStereoEyeOffsetForEye(
+        rightEyeRefdef.vieworg,
+        rightEyeRefdef.viewaxis,
+        1u);
+
+    VR_GetStereoEyeFovBounds(
+        0u,
+        &leftEyeRefdef.tanHalfFovX,
+        &leftEyeRefdef.tanHalfFovY);
+
+    VR_GetStereoEyeFovBounds(
+        1u,
+        &rightEyeRefdef.tanHalfFovX,
+        &rightEyeRefdef.tanHalfFovY);
+
+    VR_BeginStereoEyeRender(0u);
+    CL_RenderScene(&leftEyeRefdef);
+    VR_EndStereoEyeRender();
+
+    VR_BeginStereoEyeRender(1u);
+    CL_RenderScene(&rightEyeRefdef);
+    VR_EndStereoEyeRender();
+
+    static bool loggedSpStereoViews = false;
+
+    if (!loggedSpStereoViews)
+    {
+        Com_Printf(
+            0,
+            "[VR] Rendered single-player same-frame "
+            "stereo views.\n");
+
+        loggedSpStereoViews = true;
+    }
 }
 
 // attributes: thunk

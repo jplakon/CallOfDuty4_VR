@@ -1518,6 +1518,31 @@ void __cdecl CG_CalcViewValues(int localClientNum)
     CG_PerturbCamera(cgArray);
     CG_CalcFov(localClientNum);
 
+    const bool vrHeadPositionApplied =
+        VR_ApplyHeadPosition(
+            cgameGlob->refdef.vieworg,
+            cgameGlob->refdef.viewaxis);
+
+    const bool vrHeadOrientationApplied =
+        VR_ApplyHeadOrientation(
+            cgameGlob->refdef.viewaxis);
+
+    if (vrHeadPositionApplied ||
+        vrHeadOrientationApplied)
+    {
+        static bool loggedSpHeadPose = false;
+
+        if (!loggedSpHeadPose)
+        {
+            Com_Printf(
+                0,
+                "[VR] Applied OpenXR headset pose to "
+                "the single-player camera.\n");
+
+            loggedSpHeadPose = true;
+        }
+    }
+
     if (cgameGlob->predictedPlayerState.pm_type == 4)
         CG_ModelPreviewerUpdateView(
             cgameGlob->refdef.vieworg,
