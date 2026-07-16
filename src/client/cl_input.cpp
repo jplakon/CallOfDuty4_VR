@@ -1485,6 +1485,46 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
         CL_CmdButtons(result);
         CL_KeyMove(result);
 
+        bool vrAdsHeld = false;
+        bool vrJumpHeld = false;
+        bool vrUseReloadHeld = false;
+
+        if (VR_GetBasicGameplayButtons(
+                &vrAdsHeld,
+                &vrJumpHeld,
+                &vrUseReloadHeld))
+        {
+            if (vrAdsHeld)
+            {
+                result->buttons |=
+                    BUTTON_ADS;
+            }
+
+            if (vrJumpHeld)
+            {
+                result->buttons |=
+                    BUTTON_JUMP;
+            }
+
+            if (vrUseReloadHeld)
+            {
+                result->buttons |=
+                    BUTTON_USE_RELOAD;
+            }
+
+            static bool loggedVrBasicButtons = false;
+
+            if (!loggedVrBasicButtons)
+            {
+                Com_Printf(
+                    0,
+                    "[VR] Injected Touch ADS, jump, and use/reload "
+                    "buttons into SP usercmd.\n");
+
+                loggedVrBasicButtons = true;
+            }
+        }
+
         float vrMoveForward = 0.0f;
         float vrMoveRight = 0.0f;
 

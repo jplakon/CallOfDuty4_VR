@@ -80,6 +80,13 @@ bool VR_GetHmdOrientedMovement(
 bool VR_ConsumeSnapTurn(
     float* yawDeltaDegrees);
 
+// Returns the first Touch gameplay-button set:
+// left trigger = ADS, right A = jump, left X = use/reload.
+bool VR_GetBasicGameplayButtons(
+    bool* adsHeld,
+    bool* jumpHeld,
+    bool* useReloadHeld);
+
 
 // Applies a short vibration pulse to the right-hand OpenXR controller.
 // Intended for confirmed local firearm events.
