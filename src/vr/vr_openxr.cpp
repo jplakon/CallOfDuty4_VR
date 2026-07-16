@@ -111,6 +111,14 @@ bool g_vrRightControllerWeaponPoseValid = false;
 bool g_vrRightControllerWeaponBaseValid = false;
 bool g_vrRightControllerWeaponFilterValid = false;
 
+bool g_vrLeftControllerForegripPoseValid = false;
+bool g_vrLeftControllerForegripPressed = false;
+
+float g_vrLeftControllerForegripPosition[3] = {};
+
+float g_vrTwoHandWeaponBlend = 0.0f;
+bool g_vrTwoHandWeaponTargetActive = false;
+
 XrVector3f g_vrRightControllerFilteredGripPosition = {
     0.0f,
     0.0f,
@@ -2731,6 +2739,22 @@ void VR_DestroyControllerInput()
     g_vrLoggedRightControllerWeaponApply = false;
     g_vrLoggedRightControllerUsercmdAim = false;
     g_vrLoggedRightControllerAttackInjection = false;
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrWeaponControllerPoseMutex);
+
+        g_vrLeftControllerForegripPoseValid = false;
+        g_vrLeftControllerForegripPressed = false;
+        g_vrTwoHandWeaponBlend = 0.0f;
+        g_vrTwoHandWeaponTargetActive = false;
+
+        memset(
+            g_vrLeftControllerForegripPosition,
+            0,
+            sizeof(
+                g_vrLeftControllerForegripPosition));
+    }
 }
 
 bool VR_CreateControllerAction(
@@ -3380,6 +3404,78 @@ void VR_LogControllerPoseSnapshot(
 }
 
 
+void VR_PublishLeftControllerForegripPose(
+    const XrPosef& controllerGripPose,
+    const bool gripValid,
+    const bool squeezePressed)
+{
+    if (!gripValid ||
+        g_vrViews.size() < kVrStereoEyeCount)
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrWeaponControllerPoseMutex);
+
+        g_vrLeftControllerForegripPoseValid = false;
+        g_vrLeftControllerForegripPressed = false;
+        return;
+    }
+
+    const XrQuaternionf headOrientation =
+        VR_NormalizeQuaternion(
+            g_vrViews[0].pose.orientation);
+
+    const XrQuaternionf inverseHeadOrientation =
+        VR_ConjugateQuaternion(
+            headOrientation);
+
+    const XrVector3f headCenter = {
+        (g_vrViews[0].pose.position.x +
+         g_vrViews[1].pose.position.x) * 0.5f,
+        (g_vrViews[0].pose.position.y +
+         g_vrViews[1].pose.position.y) * 0.5f,
+        (g_vrViews[0].pose.position.z +
+         g_vrViews[1].pose.position.z) * 0.5f,
+    };
+
+    const VrHeadVector controllerOffsetOpenXr = {
+        controllerGripPose.position.x -
+            headCenter.x,
+        controllerGripPose.position.y -
+            headCenter.y,
+        controllerGripPose.position.z -
+            headCenter.z,
+    };
+
+    const VrHeadVector controllerOffsetHeadLocal =
+        VR_RotateHeadVector(
+            inverseHeadOrientation,
+            controllerOffsetOpenXr);
+
+    const VrHeadVector controllerPositionCod =
+        VR_OpenXrVectorToCod(
+            controllerOffsetHeadLocal);
+
+    std::lock_guard<std::mutex> lock(
+        g_vrWeaponControllerPoseMutex);
+
+    g_vrLeftControllerForegripPosition[0] =
+        controllerPositionCod.x *
+        kVrGameUnitsPerMeter;
+
+    g_vrLeftControllerForegripPosition[1] =
+        controllerPositionCod.y *
+        kVrGameUnitsPerMeter;
+
+    g_vrLeftControllerForegripPosition[2] =
+        controllerPositionCod.z *
+        kVrGameUnitsPerMeter;
+
+    g_vrLeftControllerForegripPoseValid = true;
+    g_vrLeftControllerForegripPressed =
+        squeezePressed;
+}
+
+
 void VR_PublishRightControllerWeaponPose(
     const XrPosef& controllerGripPose,
     const XrPosef& controllerAimPose)
@@ -3795,6 +3891,14 @@ void VR_UpdateControllerActions(
         g_vrControllerSqueezePressed[handIndex] =
             squeezePressed;
 
+        if (handIndex == VR_CONTROLLER_LEFT)
+        {
+            VR_PublishLeftControllerForegripPose(
+                gripLocation.pose,
+                gripValid,
+                squeezePressed);
+        }
+
         if (handIndex == VR_CONTROLLER_RIGHT)
         {
             const bool attackPressed =
@@ -3837,6 +3941,116 @@ void VR_UpdateControllerActions(
                 triggerValue,
                 squeezeValue);
         }
+    }
+
+    bool logTwoHandEngaged = false;
+    bool logTwoHandReleased = false;
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrWeaponControllerPoseMutex);
+
+        bool targetActive = false;
+
+        if (g_vrLeftControllerForegripPoseValid &&
+            g_vrLeftControllerForegripPressed &&
+            g_vrRightControllerWeaponPoseValid)
+        {
+            const float handDelta[3] = {
+                g_vrLeftControllerForegripPosition[0] -
+                    g_vrRightControllerWeaponPosition[0],
+                g_vrLeftControllerForegripPosition[1] -
+                    g_vrRightControllerWeaponPosition[1],
+                g_vrLeftControllerForegripPosition[2] -
+                    g_vrRightControllerWeaponPosition[2],
+            };
+
+            const float handDistance =
+                std::sqrt(
+                    handDelta[0] * handDelta[0] +
+                    handDelta[1] * handDelta[1] +
+                    handDelta[2] * handDelta[2]);
+
+            const float forwardDistance =
+                handDelta[0] *
+                    g_vrRightControllerWeaponAxis[0][0] +
+                handDelta[1] *
+                    g_vrRightControllerWeaponAxis[0][1] +
+                handDelta[2] *
+                    g_vrRightControllerWeaponAxis[0][2];
+
+            const float minimumDistance =
+                g_vrTwoHandWeaponTargetActive
+                    ? 3.0f
+                    : 4.0f;
+
+            const float maximumDistance =
+                g_vrTwoHandWeaponTargetActive
+                    ? 36.0f
+                    : 32.0f;
+
+            const float minimumForwardDistance =
+                g_vrTwoHandWeaponTargetActive
+                    ? -1.0f
+                    : 1.0f;
+
+            targetActive =
+                handDistance >= minimumDistance &&
+                handDistance <= maximumDistance &&
+                forwardDistance >=
+                    minimumForwardDistance;
+        }
+
+        logTwoHandEngaged =
+            targetActive &&
+            !g_vrTwoHandWeaponTargetActive;
+
+        logTwoHandReleased =
+            !targetActive &&
+            g_vrTwoHandWeaponTargetActive;
+
+        g_vrTwoHandWeaponTargetActive =
+            targetActive;
+
+        const float targetBlend =
+            targetActive
+                ? 1.0f
+                : 0.0f;
+
+        const float blendRate =
+            targetActive
+                ? 0.22f
+                : 0.18f;
+
+        g_vrTwoHandWeaponBlend +=
+            (targetBlend -
+             g_vrTwoHandWeaponBlend) *
+            blendRate;
+
+        if (g_vrTwoHandWeaponBlend < 0.001f)
+        {
+            g_vrTwoHandWeaponBlend = 0.0f;
+        }
+        else if (g_vrTwoHandWeaponBlend > 0.999f)
+        {
+            g_vrTwoHandWeaponBlend = 1.0f;
+        }
+    }
+
+    if (logTwoHandEngaged)
+    {
+        Com_Printf(
+            0,
+            "[VR] Left controller engaged optional "
+            "two-hand weapon stabilization.\n");
+    }
+
+    if (logTwoHandReleased)
+    {
+        Com_Printf(
+            0,
+            "[VR] Left controller released optional "
+            "two-hand weapon stabilization.\n");
     }
 }
 
@@ -4972,6 +5186,9 @@ bool VR_ApplyRightControllerToWeaponPlacement(
     float attachmentAxis[3][3] = {};
     bool attachmentValid = false;
 
+    float leftForegripPosition[3] = {};
+    float twoHandBlend = 0.0f;
+
     {
         std::lock_guard<std::mutex> lock(
             g_vrWeaponControllerPoseMutex);
@@ -4990,6 +5207,14 @@ bool VR_ApplyRightControllerToWeaponPlacement(
             currentAxis,
             g_vrRightControllerWeaponAxis,
             sizeof(currentAxis));
+
+        memcpy(
+            leftForegripPosition,
+            g_vrLeftControllerForegripPosition,
+            sizeof(leftForegripPosition));
+
+        twoHandBlend =
+            g_vrTwoHandWeaponBlend;
 
         attachmentValid =
             g_vrRightControllerWeaponBaseValid;
@@ -5132,6 +5357,304 @@ bool VR_ApplyRightControllerToWeaponPlacement(
                 "position and orientation offsets.\n");
 
             g_vrLoggedRightControllerWeaponCalibration = true;
+        }
+    }
+
+    if (twoHandBlend > 0.001f)
+    {
+        float twoHandForward[3] = {
+            leftForegripPosition[0] -
+                currentPosition[0],
+            leftForegripPosition[1] -
+                currentPosition[1],
+            leftForegripPosition[2] -
+                currentPosition[2],
+        };
+
+        const float forwardLength =
+            std::sqrt(
+                twoHandForward[0] *
+                    twoHandForward[0] +
+                twoHandForward[1] *
+                    twoHandForward[1] +
+                twoHandForward[2] *
+                    twoHandForward[2]);
+
+        if (forwardLength > 0.0001f)
+        {
+            twoHandForward[0] /= forwardLength;
+            twoHandForward[1] /= forwardLength;
+            twoHandForward[2] /= forwardLength;
+
+            const float upAlongForward =
+                currentAxis[2][0] *
+                    twoHandForward[0] +
+                currentAxis[2][1] *
+                    twoHandForward[1] +
+                currentAxis[2][2] *
+                    twoHandForward[2];
+
+            float twoHandUp[3] = {
+                currentAxis[2][0] -
+                    upAlongForward *
+                    twoHandForward[0],
+                currentAxis[2][1] -
+                    upAlongForward *
+                    twoHandForward[1],
+                currentAxis[2][2] -
+                    upAlongForward *
+                    twoHandForward[2],
+            };
+
+            float upLength =
+                std::sqrt(
+                    twoHandUp[0] * twoHandUp[0] +
+                    twoHandUp[1] * twoHandUp[1] +
+                    twoHandUp[2] * twoHandUp[2]);
+
+            if (upLength <= 0.0001f)
+            {
+                twoHandUp[0] = currentAxis[1][1] *
+                                   twoHandForward[2] -
+                               currentAxis[1][2] *
+                                   twoHandForward[1];
+
+                twoHandUp[1] = currentAxis[1][2] *
+                                   twoHandForward[0] -
+                               currentAxis[1][0] *
+                                   twoHandForward[2];
+
+                twoHandUp[2] = currentAxis[1][0] *
+                                   twoHandForward[1] -
+                               currentAxis[1][1] *
+                                   twoHandForward[0];
+
+                upLength =
+                    std::sqrt(
+                        twoHandUp[0] *
+                            twoHandUp[0] +
+                        twoHandUp[1] *
+                            twoHandUp[1] +
+                        twoHandUp[2] *
+                            twoHandUp[2]);
+            }
+
+            if (upLength > 0.0001f)
+            {
+                twoHandUp[0] /= upLength;
+                twoHandUp[1] /= upLength;
+                twoHandUp[2] /= upLength;
+
+                float twoHandLeft[3] = {
+                    twoHandUp[1] *
+                        twoHandForward[2] -
+                    twoHandUp[2] *
+                        twoHandForward[1],
+                    twoHandUp[2] *
+                        twoHandForward[0] -
+                    twoHandUp[0] *
+                        twoHandForward[2],
+                    twoHandUp[0] *
+                        twoHandForward[1] -
+                    twoHandUp[1] *
+                        twoHandForward[0],
+                };
+
+                const float leftLength =
+                    std::sqrt(
+                        twoHandLeft[0] *
+                            twoHandLeft[0] +
+                        twoHandLeft[1] *
+                            twoHandLeft[1] +
+                        twoHandLeft[2] *
+                            twoHandLeft[2]);
+
+                if (leftLength > 0.0001f)
+                {
+                    twoHandLeft[0] /= leftLength;
+                    twoHandLeft[1] /= leftLength;
+                    twoHandLeft[2] /= leftLength;
+
+                    const float blend =
+                        std::clamp(
+                            twoHandBlend,
+                            0.0f,
+                            1.0f);
+
+                    float blendedForward[3] = {
+                        currentAxis[0][0] *
+                                (1.0f - blend) +
+                            twoHandForward[0] *
+                                blend,
+                        currentAxis[0][1] *
+                                (1.0f - blend) +
+                            twoHandForward[1] *
+                                blend,
+                        currentAxis[0][2] *
+                                (1.0f - blend) +
+                            twoHandForward[2] *
+                                blend,
+                    };
+
+                    float blendedUpHint[3] = {
+                        currentAxis[2][0] *
+                                (1.0f - blend) +
+                            twoHandUp[0] *
+                                blend,
+                        currentAxis[2][1] *
+                                (1.0f - blend) +
+                            twoHandUp[1] *
+                                blend,
+                        currentAxis[2][2] *
+                                (1.0f - blend) +
+                            twoHandUp[2] *
+                                blend,
+                    };
+
+                    const float blendedForwardLength =
+                        std::sqrt(
+                            blendedForward[0] *
+                                blendedForward[0] +
+                            blendedForward[1] *
+                                blendedForward[1] +
+                            blendedForward[2] *
+                                blendedForward[2]);
+
+                    if (blendedForwardLength > 0.0001f)
+                    {
+                        blendedForward[0] /=
+                            blendedForwardLength;
+
+                        blendedForward[1] /=
+                            blendedForwardLength;
+
+                        blendedForward[2] /=
+                            blendedForwardLength;
+
+                        const float blendedUpAlongForward =
+                            blendedUpHint[0] *
+                                blendedForward[0] +
+                            blendedUpHint[1] *
+                                blendedForward[1] +
+                            blendedUpHint[2] *
+                                blendedForward[2];
+
+                        blendedUpHint[0] -=
+                            blendedUpAlongForward *
+                            blendedForward[0];
+
+                        blendedUpHint[1] -=
+                            blendedUpAlongForward *
+                            blendedForward[1];
+
+                        blendedUpHint[2] -=
+                            blendedUpAlongForward *
+                            blendedForward[2];
+
+                        const float blendedUpLength =
+                            std::sqrt(
+                                blendedUpHint[0] *
+                                    blendedUpHint[0] +
+                                blendedUpHint[1] *
+                                    blendedUpHint[1] +
+                                blendedUpHint[2] *
+                                    blendedUpHint[2]);
+
+                        if (blendedUpLength > 0.0001f)
+                        {
+                            blendedUpHint[0] /=
+                                blendedUpLength;
+
+                            blendedUpHint[1] /=
+                                blendedUpLength;
+
+                            blendedUpHint[2] /=
+                                blendedUpLength;
+
+                            float blendedLeft[3] = {
+                                blendedUpHint[1] *
+                                    blendedForward[2] -
+                                blendedUpHint[2] *
+                                    blendedForward[1],
+                                blendedUpHint[2] *
+                                    blendedForward[0] -
+                                blendedUpHint[0] *
+                                    blendedForward[2],
+                                blendedUpHint[0] *
+                                    blendedForward[1] -
+                                blendedUpHint[1] *
+                                    blendedForward[0],
+                            };
+
+                            const float blendedLeftLength =
+                                std::sqrt(
+                                    blendedLeft[0] *
+                                        blendedLeft[0] +
+                                    blendedLeft[1] *
+                                        blendedLeft[1] +
+                                    blendedLeft[2] *
+                                        blendedLeft[2]);
+
+                            if (blendedLeftLength > 0.0001f)
+                            {
+                                blendedLeft[0] /=
+                                    blendedLeftLength;
+
+                                blendedLeft[1] /=
+                                    blendedLeftLength;
+
+                                blendedLeft[2] /=
+                                    blendedLeftLength;
+
+                                float blendedUp[3] = {
+                                    blendedForward[1] *
+                                        blendedLeft[2] -
+                                    blendedForward[2] *
+                                        blendedLeft[1],
+                                    blendedForward[2] *
+                                        blendedLeft[0] -
+                                    blendedForward[0] *
+                                        blendedLeft[2],
+                                    blendedForward[0] *
+                                        blendedLeft[1] -
+                                    blendedForward[1] *
+                                        blendedLeft[0],
+                                };
+
+                                memcpy(
+                                    currentAxis[0],
+                                    blendedForward,
+                                    sizeof(blendedForward));
+
+                                memcpy(
+                                    currentAxis[1],
+                                    blendedLeft,
+                                    sizeof(blendedLeft));
+
+                                memcpy(
+                                    currentAxis[2],
+                                    blendedUp,
+                                    sizeof(blendedUp));
+
+                                static bool
+                                    loggedTwoHandWeaponApply =
+                                        false;
+
+                                if (!loggedTwoHandWeaponApply)
+                                {
+                                    Com_Printf(
+                                        0,
+                                        "[VR] Applied optional two-hand "
+                                        "foregrip stabilization.\n");
+
+                                    loggedTwoHandWeaponApply =
+                                        true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
