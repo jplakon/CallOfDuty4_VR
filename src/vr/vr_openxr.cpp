@@ -48,6 +48,7 @@ XrAction g_vrGripPoseAction = XR_NULL_HANDLE;
 XrAction g_vrAimPoseAction = XR_NULL_HANDLE;
 XrAction g_vrTriggerValueAction = XR_NULL_HANDLE;
 XrAction g_vrSqueezeValueAction = XR_NULL_HANDLE;
+XrAction g_vrMoveThumbstickAction = XR_NULL_HANDLE;
 XrAction g_vrHapticOutputAction = XR_NULL_HANDLE;
 
 std::array<XrPath, kVrControllerCount>
@@ -224,7 +225,10 @@ ComPtr<ID3D11ShaderResourceView>
 std::uint32_t g_vrCapturedStereoWidth = 0u;
 std::uint32_t g_vrCapturedStereoHeight = 0u;
 std::uint64_t g_vrUploadedStereoSerial = 0u;
+std::vector<std::uint8_t>
+    g_vrCapturedStereoUploadPixels;
 bool g_vrLoggedFirstStereoUpload = false;
+bool g_vrLoggedCaptureBufferHandoff = false;
 
 std::mutex g_vrHeadOrientationMutex;
 
@@ -232,8 +236,10 @@ constexpr float kVrGameUnitsPerMeter =
     39.37007874015748f;
 
 XrVector3f g_vrHeadPositionOrigin = {};
+XrVector3f g_vrLatestHeadPosition = {};
 float g_vrHeadPositionLocal[3] = {};
 bool g_vrHeadPositionOriginValid = false;
+bool g_vrLatestHeadPositionValid = false;
 bool g_vrHeadPositionValid = false;
 bool g_vrLoggedFirstPositionApply = false;
 
@@ -264,6 +270,9 @@ bool g_vrHeadBaseOrientationValid = false;
 bool g_vrHeadOrientationValid = false;
 bool g_vrLoggedFirstHeadPose = false;
 bool g_vrLoggedFirstCameraApply = false;
+
+float g_vrLeftThumbstick[2] = {};
+bool g_vrLeftThumbstickValid = false;
 
 
 std::vector<XrViewConfigurationView> g_vrViewConfigs;
@@ -1000,7 +1009,9 @@ float4 PSMain(PixelInput input) : SV_TARGET
 
 bool VR_UpdateCapturedStereoTexture()
 {
-    std::vector<std::uint8_t> pixels;
+    std::vector<std::uint8_t>& pixels =
+        g_vrCapturedStereoUploadPixels;
+
     std::uint32_t width = 0u;
     std::uint32_t height = 0u;
     std::uint64_t serial = 0u;
@@ -1084,6 +1095,16 @@ bool VR_UpdateCapturedStereoTexture()
         0);
 
     g_vrUploadedStereoSerial = serial;
+
+    if (!g_vrLoggedCaptureBufferHandoff)
+    {
+        Com_Printf(
+            0,
+            "[VR] Enabled zero-copy handoff between D3D9 capture "
+            "and the persistent D3D11 upload buffer.\n");
+
+        g_vrLoggedCaptureBufferHandoff = true;
+    }
 
     if (!g_vrLoggedFirstStereoUpload)
     {
@@ -1602,6 +1623,18 @@ void VR_ResetHeadOrientation()
     g_vrHeadOrientationValid = false;
     g_vrLoggedFirstHeadPose = false;
     g_vrLoggedFirstCameraApply = false;
+
+    g_vrHeadPositionOrigin = {};
+    g_vrLatestHeadPosition = {};
+
+    g_vrHeadPositionLocal[0] = 0.0f;
+    g_vrHeadPositionLocal[1] = 0.0f;
+    g_vrHeadPositionLocal[2] = 0.0f;
+
+    g_vrHeadPositionOriginValid = false;
+    g_vrLatestHeadPositionValid = false;
+    g_vrHeadPositionValid = false;
+    g_vrLoggedFirstPositionApply = false;
 }
 
 void VR_PublishHeadOrientation(
@@ -1686,6 +1719,12 @@ void VR_PublishHeadOrientation(
              g_vrViews[1].pose.position.y) * 0.5f,
             (g_vrViews[0].pose.position.z +
              g_vrViews[1].pose.position.z) * 0.5f};
+
+        g_vrLatestHeadPosition =
+            centerHeadPosition;
+
+        g_vrLatestHeadPositionValid =
+            true;
 
         if (!g_vrHeadPositionOriginValid)
         {
@@ -2634,6 +2673,12 @@ void VR_DestroyControllerInput()
         g_vrHapticOutputAction = XR_NULL_HANDLE;
     }
 
+    if (g_vrMoveThumbstickAction != XR_NULL_HANDLE)
+    {
+        xrDestroyAction(g_vrMoveThumbstickAction);
+        g_vrMoveThumbstickAction = XR_NULL_HANDLE;
+    }
+
     if (g_vrSqueezeValueAction != XR_NULL_HANDLE)
     {
         xrDestroyAction(g_vrSqueezeValueAction);
@@ -2679,6 +2724,15 @@ void VR_DestroyControllerInput()
     g_vrControllerSqueezePressed.fill(false);
     g_vrControllerDiagnosticFrame = 0u;
     g_vrControllerRenderPoses = {};
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrHeadOrientationMutex);
+
+        g_vrLeftThumbstick[0] = 0.0f;
+        g_vrLeftThumbstick[1] = 0.0f;
+        g_vrLeftThumbstickValid = false;
+    }
 
     {
         std::lock_guard<std::mutex> lock(
@@ -2825,9 +2879,9 @@ bool VR_SuggestControllerBindings()
         return false;
     }
 
-    std::array<XrPath, 10> touchBindingPaths = {};
+    std::array<XrPath, 11> touchBindingPaths = {};
 
-    const std::array<const char*, 10>
+    const std::array<const char*, 11>
         touchBindingStrings = {
             "/user/hand/left/input/grip/pose",
             "/user/hand/right/input/grip/pose",
@@ -2839,6 +2893,7 @@ bool VR_SuggestControllerBindings()
             "/user/hand/right/input/squeeze/value",
             "/user/hand/left/output/haptic",
             "/user/hand/right/output/haptic",
+            "/user/hand/left/input/thumbstick",
         };
 
     for (std::uint32_t bindingIndex = 0u;
@@ -2853,7 +2908,7 @@ bool VR_SuggestControllerBindings()
         }
     }
 
-    const std::array<XrActionSuggestedBinding, 10>
+    const std::array<XrActionSuggestedBinding, 11>
         touchBindings = {{
             {
                 g_vrGripPoseAction,
@@ -2894,6 +2949,10 @@ bool VR_SuggestControllerBindings()
             {
                 g_vrHapticOutputAction,
                 touchBindingPaths[9],
+            },
+            {
+                g_vrMoveThumbstickAction,
+                touchBindingPaths[10],
             },
         }};
 
@@ -3108,6 +3167,11 @@ bool VR_CreateControllerActions()
             "squeeze_value",
             "Squeeze Value",
             &g_vrSqueezeValueAction) ||
+        !VR_CreateControllerAction(
+            XR_ACTION_TYPE_VECTOR2F_INPUT,
+            "move_thumbstick",
+            "Move Thumbstick",
+            &g_vrMoveThumbstickAction) ||
         !VR_CreateControllerAction(
             XR_ACTION_TYPE_VIBRATION_OUTPUT,
             "haptic_output",
@@ -3330,6 +3394,58 @@ bool VR_GetControllerFloatState(
 
     *active = state.isActive == XR_TRUE;
     *value = *active ? state.currentState : 0.0f;
+
+    return true;
+}
+
+bool VR_GetControllerVector2State(
+    const XrAction action,
+    const XrPath handPath,
+    XrVector2f* value,
+    bool* active)
+{
+    if (value == nullptr ||
+        active == nullptr)
+    {
+        return false;
+    }
+
+    XrActionStateGetInfo getInfo{
+        XR_TYPE_ACTION_STATE_GET_INFO
+    };
+
+    getInfo.action = action;
+    getInfo.subactionPath = handPath;
+
+    XrActionStateVector2f state{
+        XR_TYPE_ACTION_STATE_VECTOR2F
+    };
+
+    const XrResult result =
+        xrGetActionStateVector2f(
+            g_vrSession,
+            &getInfo,
+            &state);
+
+    if (XR_FAILED(result))
+    {
+        VR_LogXrFailure(
+            "xrGetActionStateVector2f",
+            result);
+
+        return false;
+    }
+
+    *active = state.isActive == XR_TRUE;
+
+    if (*active)
+    {
+        *value = state.currentState;
+    }
+    else
+    {
+        *value = {};
+    }
 
     return true;
 }
@@ -3854,6 +3970,36 @@ void VR_UpdateControllerActions(
             handPath,
             &squeezeValue,
             &squeezeActive);
+
+        if (handIndex == VR_CONTROLLER_LEFT)
+        {
+            XrVector2f thumbstickValue = {};
+            bool thumbstickActive = false;
+
+            const bool thumbstickStateValid =
+                VR_GetControllerVector2State(
+                    g_vrMoveThumbstickAction,
+                    handPath,
+                    &thumbstickValue,
+                    &thumbstickActive);
+
+            std::lock_guard<std::mutex> lock(
+                g_vrHeadOrientationMutex);
+
+            g_vrLeftThumbstickValid =
+                thumbstickStateValid &&
+                thumbstickActive;
+
+            g_vrLeftThumbstick[0] =
+                g_vrLeftThumbstickValid
+                    ? thumbstickValue.x
+                    : 0.0f;
+
+            g_vrLeftThumbstick[1] =
+                g_vrLeftThumbstickValid
+                    ? thumbstickValue.y
+                    : 0.0f;
+        }
 
         const bool triggerPressed =
             triggerActive &&
@@ -5920,6 +6066,102 @@ bool VR_ApplyRightControllerWeaponHaptic(
 }
 
 
+bool VR_GetHmdOrientedMovement(
+    float* forward,
+    float* right)
+{
+    if (forward == nullptr ||
+        right == nullptr)
+    {
+        return false;
+    }
+
+    *forward = 0.0f;
+    *right = 0.0f;
+
+    float stickX = 0.0f;
+    float stickY = 0.0f;
+    float headForward = 1.0f;
+    float headLeft = 0.0f;
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrHeadOrientationMutex);
+
+        if (!g_vrLeftThumbstickValid ||
+            !g_vrHeadOrientationValid)
+        {
+            return false;
+        }
+
+        stickX = g_vrLeftThumbstick[0];
+        stickY = g_vrLeftThumbstick[1];
+
+        headForward =
+            g_vrHeadOrientationAxis[0][0];
+
+        headLeft =
+            g_vrHeadOrientationAxis[0][1];
+    }
+
+    const float rawMagnitude =
+        std::sqrt(
+            stickX * stickX +
+            stickY * stickY);
+
+    constexpr float deadzone = 0.18f;
+
+    if (rawMagnitude <= deadzone)
+    {
+        return false;
+    }
+
+    const float clampedMagnitude =
+        rawMagnitude < 1.0f
+            ? rawMagnitude
+            : 1.0f;
+
+    const float remappedMagnitude =
+        (clampedMagnitude - deadzone) /
+        (1.0f - deadzone);
+
+    const float inverseRawMagnitude =
+        1.0f / rawMagnitude;
+
+    stickX *=
+        inverseRawMagnitude *
+        remappedMagnitude;
+
+    stickY *=
+        inverseRawMagnitude *
+        remappedMagnitude;
+
+    const float horizontalHeadLength =
+        std::sqrt(
+            headForward * headForward +
+            headLeft * headLeft);
+
+    if (horizontalHeadLength <= 0.0001f)
+    {
+        return false;
+    }
+
+    headForward /= horizontalHeadLength;
+    headLeft /= horizontalHeadLength;
+
+    // CoD's local camera basis is +forward, +left. OpenXR stick X is
+    // positive right, so command-right is the negative local-left result.
+    *forward =
+        stickY * headForward +
+        stickX * headLeft;
+
+    *right =
+        stickX * headForward -
+        stickY * headLeft;
+
+    return true;
+}
+
 bool VR_GetRightControllerWeaponCommand(
     float* gunPitch,
     float* gunYaw,
@@ -6009,6 +6251,32 @@ bool VR_GetRightControllerWeaponCommand(
 
         g_vrLoggedRightControllerUsercmdAim = true;
     }
+
+    return true;
+}
+
+bool VR_RecenterHeadPosition()
+{
+    std::lock_guard<std::mutex> lock(
+        g_vrHeadOrientationMutex);
+
+    if (!g_vrLatestHeadPositionValid)
+    {
+        return false;
+    }
+
+    g_vrHeadPositionOrigin =
+        g_vrLatestHeadPosition;
+
+    g_vrHeadPositionOriginValid =
+        true;
+
+    g_vrHeadPositionLocal[0] = 0.0f;
+    g_vrHeadPositionLocal[1] = 0.0f;
+    g_vrHeadPositionLocal[2] = 0.0f;
+
+    g_vrHeadPositionValid =
+        true;
 
     return true;
 }

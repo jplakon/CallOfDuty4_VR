@@ -20,6 +20,10 @@ bool VR_IsInitialized();
 bool VR_ApplyHeadPosition(
     float viewOrigin[3],
     const float viewAxis[3][3]);
+
+// Makes the latest physical headset center the zero-translation pose.
+// Orientation is not changed. Returns false until a valid head pose exists.
+bool VR_RecenterHeadPosition();
 bool VR_ApplyHeadOrientation(float viewAxis[3][3]);
 bool VR_ApplyStereoEyeOffsetForEye(
     float viewOrigin[3],
@@ -63,6 +67,13 @@ bool VR_GetRightControllerWeaponCommand(
     float* gunPitch,
     float* gunYaw,
     bool* attackPressed);
+
+// Returns left-thumbstick movement rotated by the horizontal HMD yaw.
+// Values are normalized to [-1, 1] after a circular remapped deadzone.
+// Forward and right are expressed in the current CoD usercmd/body basis.
+bool VR_GetHmdOrientedMovement(
+    float* forward,
+    float* right);
 
 
 // Applies a short vibration pulse to the right-hand OpenXR controller.

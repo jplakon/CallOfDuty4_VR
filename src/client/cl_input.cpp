@@ -1484,6 +1484,41 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
     {
         CL_CmdButtons(result);
         CL_KeyMove(result);
+
+        float vrMoveForward = 0.0f;
+        float vrMoveRight = 0.0f;
+
+        if (VR_GetHmdOrientedMovement(
+                &vrMoveForward,
+                &vrMoveRight))
+        {
+            result->forwardmove =
+                ClampChar(
+                    static_cast<int>(
+                        result->forwardmove) +
+                    static_cast<int>(
+                        vrMoveForward * 127.0f));
+
+            result->rightmove =
+                ClampChar(
+                    static_cast<int>(
+                        result->rightmove) +
+                    static_cast<int>(
+                        vrMoveRight * 127.0f));
+
+            static bool loggedVrHmdMovement = false;
+
+            if (!loggedVrHmdMovement)
+            {
+                Com_Printf(
+                    0,
+                    "[VR] Applied HMD-oriented "
+                    "left-thumbstick movement.\n");
+
+                loggedVrHmdMovement = true;
+            }
+        }
+
         CL_MouseMove(result);
         // KISAKTODO
         //if (GPad_IsActive(CL_ControllerIndexFromClientNum(0)))
