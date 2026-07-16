@@ -1517,23 +1517,101 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
 
             if (vrAttackPressed)
             {
-                result->buttons |=
-                    BUTTON_ATTACK;
+                bool vrMuzzleBlocked = false;
+                float vrMuzzleWorld[3] = {};
 
-                static bool
-                    loggedSpVrAttackInjection =
-                        false;
-
-                if (!loggedSpVrAttackInjection)
+                if (VR_GetRightControllerWeaponMuzzleWorld(
+                        vrMuzzleWorld))
                 {
-                    Com_Printf(
-                        0,
-                        "[VR] Injected right-controller "
-                        "BUTTON_ATTACK into SP.\n");
+                    cg_s* cgameGlob =
+                        CG_GetLocalClientGlobals(0);
 
-                    loggedSpVrAttackInjection =
-                        true;
+                    float vrViewOrigin[3] = {
+                        cgameGlob->refdef.vieworg[0],
+                        cgameGlob->refdef.vieworg[1],
+                        cgameGlob->refdef.vieworg[2],
+                    };
+
+                    static bool
+                        loggedSpEarlyTraceViewOrigin =
+                            false;
+
+                    if (!loggedSpEarlyTraceViewOrigin)
+                    {
+                        Com_Printf(
+                            0,
+                            "[VR] SP early muzzle trace uses "
+                            "the current rendered view origin.\n");
+
+                        loggedSpEarlyTraceViewOrigin =
+                            true;
+                    }
+
+                    trace_t vrMuzzleObstruction = {};
+
+                    CG_LocationalTrace(
+                        &vrMuzzleObstruction,
+                        vrViewOrigin,
+                        vrMuzzleWorld,
+                        cgameGlob->predictedPlayerState.clientNum,
+                        0x2806831);
+
+                    vrMuzzleBlocked =
+                        vrMuzzleObstruction.startsolid ||
+                        vrMuzzleObstruction.fraction < 1.0f;
+
+                    VR_SetRightControllerWeaponMuzzleBlocked(
+                        vrMuzzleBlocked);
                 }
+                else
+                {
+                    VR_SetRightControllerWeaponMuzzleBlocked(
+                        false);
+                }
+
+                if (!vrMuzzleBlocked)
+                {
+                    result->buttons |=
+                        BUTTON_ATTACK;
+
+                    static bool
+                        loggedSpVrAttackInjection =
+                            false;
+
+                    if (!loggedSpVrAttackInjection)
+                    {
+                        Com_Printf(
+                            0,
+                            "[VR] Injected right-controller "
+                            "BUTTON_ATTACK into SP.\n");
+
+                        loggedSpVrAttackInjection =
+                            true;
+                    }
+                }
+                else
+                {
+                    static bool
+                        loggedSpEarlyMuzzleSuppression =
+                            false;
+
+                    if (!loggedSpEarlyMuzzleSuppression)
+                    {
+                        Com_Printf(
+                            0,
+                            "[VR] Suppressed SP BUTTON_ATTACK before "
+                            "weapon simulation because the physical "
+                            "muzzle is blocked.\n");
+
+                        loggedSpEarlyMuzzleSuppression =
+                            true;
+                    }
+                }
+            }
+            else
+            {
+                VR_SetRightControllerWeaponMuzzleBlocked(
+                    false);
             }
         }
     }

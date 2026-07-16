@@ -2747,7 +2747,7 @@ void __cdecl CG_FireWeapon(
 
             if (isPlayer)
             {
-#ifdef KISAK_MP
+#if defined(KISAK_MP) || defined(KISAK_SP)
                 if (weaponDef->weapType != WEAPTYPE_GRENADE)
                 {
                     VR_ApplyRightControllerWeaponHaptic(
