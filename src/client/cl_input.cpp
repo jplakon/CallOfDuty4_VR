@@ -1525,6 +1525,134 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
             }
         }
 
+        bool vrSprintHeld = false;
+        bool vrMeleeHeld = false;
+        bool vrStanceHeld = false;
+
+        VR_GetLocomotionCombatButtons(
+            &vrSprintHeld,
+            &vrMeleeHeld,
+            &vrStanceHeld);
+
+        if (vrSprintHeld)
+        {
+            result->buttons |=
+                BUTTON_SPRINT;
+        }
+
+        if (vrMeleeHeld)
+        {
+            result->buttons |=
+                BUTTON_MELEE;
+        }
+
+        static bool vrStanceWasHeld = false;
+        static bool vrStanceHoldConsumed = false;
+        static int vrStancePressTime = 0;
+        static StanceState vrStancePressPosition =
+            CL_STANCE_STAND;
+
+        bool vrStanceChanged = false;
+
+        if (vrStanceHeld &&
+            !vrStanceWasHeld)
+        {
+            vrStancePressTime =
+                com_frameTime;
+
+            vrStancePressPosition =
+                clients[0].stance;
+
+            vrStanceHoldConsumed =
+                false;
+        }
+
+        if (vrStanceHeld &&
+            !vrStanceHoldConsumed &&
+            com_frameTime - vrStancePressTime >=
+                cl_stanceHoldTime->current.integer)
+        {
+            const StanceState targetStance =
+                vrStancePressPosition ==
+                    CL_STANCE_PRONE
+                    ? CL_STANCE_STAND
+                    : CL_STANCE_PRONE;
+
+            CL_SetStance(
+                0,
+                targetStance);
+
+            vrStanceHoldConsumed =
+                true;
+
+            vrStanceChanged =
+                true;
+        }
+
+        if (!vrStanceHeld &&
+            vrStanceWasHeld &&
+            !vrStanceHoldConsumed)
+        {
+            StanceState targetStance =
+                CL_STANCE_CROUCH;
+
+            if (vrStancePressPosition ==
+                CL_STANCE_CROUCH)
+            {
+                targetStance =
+                    CL_STANCE_STAND;
+            }
+            else if (vrStancePressPosition ==
+                     CL_STANCE_PRONE)
+            {
+                targetStance =
+                    CL_STANCE_CROUCH;
+            }
+
+            CL_SetStance(
+                0,
+                targetStance);
+
+            vrStanceChanged =
+                true;
+        }
+
+        vrStanceWasHeld =
+            vrStanceHeld;
+
+        if (vrStanceChanged)
+        {
+            CL_AddCurrentStanceToCmd(
+                result);
+        }
+
+        static bool loggedVrSprintMelee = false;
+        static bool loggedVrStance = false;
+
+        if ((vrSprintHeld ||
+             vrMeleeHeld) &&
+            !loggedVrSprintMelee)
+        {
+            Com_Printf(
+                0,
+                "[VR] Injected Touch sprint and melee controls.\n");
+
+            loggedVrSprintMelee =
+                true;
+        }
+
+        if (vrStanceChanged &&
+            !loggedVrStance)
+        {
+            Com_Printf(
+                0,
+                "[VR] Applied tap-crouch and hold-prone "
+                "Touch stance control.\n");
+
+            loggedVrStance =
+                true;
+        }
+
         float vrMoveForward = 0.0f;
         float vrMoveRight = 0.0f;
 

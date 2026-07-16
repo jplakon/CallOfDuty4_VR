@@ -52,6 +52,9 @@ XrAction g_vrMoveThumbstickAction = XR_NULL_HANDLE;
 XrAction g_vrTurnThumbstickAction = XR_NULL_HANDLE;
 XrAction g_vrJumpButtonAction = XR_NULL_HANDLE;
 XrAction g_vrUseReloadButtonAction = XR_NULL_HANDLE;
+XrAction g_vrSprintButtonAction = XR_NULL_HANDLE;
+XrAction g_vrMeleeButtonAction = XR_NULL_HANDLE;
+XrAction g_vrStanceButtonAction = XR_NULL_HANDLE;
 XrAction g_vrHapticOutputAction = XR_NULL_HANDLE;
 
 std::array<XrPath, kVrControllerCount>
@@ -284,6 +287,10 @@ bool g_vrSnapTurnArmed = true;
 bool g_vrLeftTriggerAdsHeld = false;
 bool g_vrRightAJumpHeld = false;
 bool g_vrLeftXUseReloadHeld = false;
+
+bool g_vrLeftStickSprintHeld = false;
+bool g_vrRightStickMeleeHeld = false;
+bool g_vrRightBStanceHeld = false;
 
 
 std::vector<XrViewConfigurationView> g_vrViewConfigs;
@@ -2684,6 +2691,24 @@ void VR_DestroyControllerInput()
         g_vrHapticOutputAction = XR_NULL_HANDLE;
     }
 
+    if (g_vrStanceButtonAction != XR_NULL_HANDLE)
+    {
+        xrDestroyAction(g_vrStanceButtonAction);
+        g_vrStanceButtonAction = XR_NULL_HANDLE;
+    }
+
+    if (g_vrMeleeButtonAction != XR_NULL_HANDLE)
+    {
+        xrDestroyAction(g_vrMeleeButtonAction);
+        g_vrMeleeButtonAction = XR_NULL_HANDLE;
+    }
+
+    if (g_vrSprintButtonAction != XR_NULL_HANDLE)
+    {
+        xrDestroyAction(g_vrSprintButtonAction);
+        g_vrSprintButtonAction = XR_NULL_HANDLE;
+    }
+
     if (g_vrUseReloadButtonAction != XR_NULL_HANDLE)
     {
         xrDestroyAction(g_vrUseReloadButtonAction);
@@ -2769,6 +2794,10 @@ void VR_DestroyControllerInput()
         g_vrLeftTriggerAdsHeld = false;
         g_vrRightAJumpHeld = false;
         g_vrLeftXUseReloadHeld = false;
+
+        g_vrLeftStickSprintHeld = false;
+        g_vrRightStickMeleeHeld = false;
+        g_vrRightBStanceHeld = false;
     }
 
     {
@@ -2916,9 +2945,9 @@ bool VR_SuggestControllerBindings()
         return false;
     }
 
-    std::array<XrPath, 14> touchBindingPaths = {};
+    std::array<XrPath, 17> touchBindingPaths = {};
 
-    const std::array<const char*, 14>
+    const std::array<const char*, 17>
         touchBindingStrings = {
             "/user/hand/left/input/grip/pose",
             "/user/hand/right/input/grip/pose",
@@ -2934,6 +2963,9 @@ bool VR_SuggestControllerBindings()
             "/user/hand/right/input/thumbstick",
             "/user/hand/right/input/a/click",
             "/user/hand/left/input/x/click",
+            "/user/hand/left/input/thumbstick/click",
+            "/user/hand/right/input/thumbstick/click",
+            "/user/hand/right/input/b/click",
         };
 
     for (std::uint32_t bindingIndex = 0u;
@@ -2948,7 +2980,7 @@ bool VR_SuggestControllerBindings()
         }
     }
 
-    const std::array<XrActionSuggestedBinding, 14>
+    const std::array<XrActionSuggestedBinding, 17>
         touchBindings = {{
             {
                 g_vrGripPoseAction,
@@ -3005,6 +3037,18 @@ bool VR_SuggestControllerBindings()
             {
                 g_vrUseReloadButtonAction,
                 touchBindingPaths[13],
+            },
+            {
+                g_vrSprintButtonAction,
+                touchBindingPaths[14],
+            },
+            {
+                g_vrMeleeButtonAction,
+                touchBindingPaths[15],
+            },
+            {
+                g_vrStanceButtonAction,
+                touchBindingPaths[16],
             },
         }};
 
@@ -3239,6 +3283,21 @@ bool VR_CreateControllerActions()
             "use_reload_button",
             "Use Reload Button",
             &g_vrUseReloadButtonAction) ||
+        !VR_CreateControllerAction(
+            XR_ACTION_TYPE_BOOLEAN_INPUT,
+            "sprint_button",
+            "Sprint Button",
+            &g_vrSprintButtonAction) ||
+        !VR_CreateControllerAction(
+            XR_ACTION_TYPE_BOOLEAN_INPUT,
+            "melee_button",
+            "Melee Button",
+            &g_vrMeleeButtonAction) ||
+        !VR_CreateControllerAction(
+            XR_ACTION_TYPE_BOOLEAN_INPUT,
+            "stance_button",
+            "Stance Button",
+            &g_vrStanceButtonAction) ||
         !VR_CreateControllerAction(
             XR_ACTION_TYPE_VIBRATION_OUTPUT,
             "haptic_output",
@@ -4190,6 +4249,15 @@ void VR_UpdateControllerActions(
                 &useReloadPressed,
                 &useReloadActive);
 
+            bool sprintPressed = false;
+            bool sprintActive = false;
+
+            VR_GetControllerBooleanState(
+                g_vrSprintButtonAction,
+                handPath,
+                &sprintPressed,
+                &sprintActive);
+
             std::lock_guard<std::mutex> lock(
                 g_vrHeadOrientationMutex);
 
@@ -4200,6 +4268,10 @@ void VR_UpdateControllerActions(
             g_vrLeftXUseReloadHeld =
                 useReloadActive &&
                 useReloadPressed;
+
+            g_vrLeftStickSprintHeld =
+                sprintActive &&
+                sprintPressed;
         }
 
         if (handIndex == VR_CONTROLLER_RIGHT)
@@ -4213,6 +4285,24 @@ void VR_UpdateControllerActions(
                 &jumpPressed,
                 &jumpActive);
 
+            bool meleePressed = false;
+            bool meleeActive = false;
+
+            VR_GetControllerBooleanState(
+                g_vrMeleeButtonAction,
+                handPath,
+                &meleePressed,
+                &meleeActive);
+
+            bool stancePressed = false;
+            bool stanceActive = false;
+
+            VR_GetControllerBooleanState(
+                g_vrStanceButtonAction,
+                handPath,
+                &stancePressed,
+                &stanceActive);
+
             {
                 std::lock_guard<std::mutex> lock(
                     g_vrHeadOrientationMutex);
@@ -4220,6 +4310,14 @@ void VR_UpdateControllerActions(
                 g_vrRightAJumpHeld =
                     jumpActive &&
                     jumpPressed;
+
+                g_vrRightStickMeleeHeld =
+                    meleeActive &&
+                    meleePressed;
+
+                g_vrRightBStanceHeld =
+                    stanceActive &&
+                    stancePressed;
             }
 
             const bool attackPressed =
@@ -6269,6 +6367,33 @@ bool VR_GetBasicGameplayButtons(
         *adsHeld ||
         *jumpHeld ||
         *useReloadHeld;
+}
+
+bool VR_GetLocomotionCombatButtons(
+    bool* sprintHeld,
+    bool* meleeHeld,
+    bool* stanceHeld)
+{
+    if (sprintHeld == nullptr ||
+        meleeHeld == nullptr ||
+        stanceHeld == nullptr)
+    {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(
+        g_vrHeadOrientationMutex);
+
+    *sprintHeld =
+        g_vrLeftStickSprintHeld;
+
+    *meleeHeld =
+        g_vrRightStickMeleeHeld;
+
+    *stanceHeld =
+        g_vrRightBStanceHeld;
+
+    return true;
 }
 
 bool VR_ConsumeSnapTurn(

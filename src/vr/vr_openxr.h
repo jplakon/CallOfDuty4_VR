@@ -87,6 +87,14 @@ bool VR_GetBasicGameplayButtons(
     bool* jumpHeld,
     bool* useReloadHeld);
 
+// Returns the next Touch gameplay-control set:
+// left-stick click = sprint, right-stick click = melee,
+// right B = tap crouch/stand or hold prone/stand.
+bool VR_GetLocomotionCombatButtons(
+    bool* sprintHeld,
+    bool* meleeHeld,
+    bool* stanceHeld);
+
 
 // Applies a short vibration pulse to the right-hand OpenXR controller.
 // Intended for confirmed local firearm events.
