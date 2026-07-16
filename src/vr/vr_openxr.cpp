@@ -109,6 +109,20 @@ std::mutex g_vrWeaponControllerPoseMutex;
 
 bool g_vrRightControllerWeaponPoseValid = false;
 bool g_vrRightControllerWeaponBaseValid = false;
+bool g_vrRightControllerWeaponFilterValid = false;
+
+XrVector3f g_vrRightControllerFilteredGripPosition = {
+    0.0f,
+    0.0f,
+    0.0f,
+};
+
+XrQuaternionf g_vrRightControllerFilteredAimOrientation = {
+    0.0f,
+    0.0f,
+    0.0f,
+    1.0f,
+};
 
 float g_vrRightControllerWeaponPosition[3] = {};
 float g_vrRightControllerWeaponAxis[3][3] = {};
@@ -2664,6 +2678,7 @@ void VR_DestroyControllerInput()
 
         g_vrRightControllerWeaponPoseValid = false;
         g_vrRightControllerWeaponBaseValid = false;
+        g_vrRightControllerWeaponFilterValid = false;
         g_vrRightControllerFinalWeaponAimValid = false;
         g_vrRightControllerFinalWeaponMuzzleValid = false;
         g_vrRightControllerFinalWeaponMuzzleBlocked = false;
@@ -2672,6 +2687,19 @@ void VR_DestroyControllerInput()
         g_vrRightControllerFinalWeaponForward[0] = 1.0f;
         g_vrRightControllerFinalWeaponForward[1] = 0.0f;
         g_vrRightControllerFinalWeaponForward[2] = 0.0f;
+
+        g_vrRightControllerFilteredGripPosition = {
+            0.0f,
+            0.0f,
+            0.0f,
+        };
+
+        g_vrRightControllerFilteredAimOrientation = {
+            0.0f,
+            0.0f,
+            0.0f,
+            1.0f,
+        };
 
         memset(
             g_vrRightControllerWeaponPosition,
@@ -3353,11 +3381,123 @@ void VR_LogControllerPoseSnapshot(
 
 
 void VR_PublishRightControllerWeaponPose(
+    const XrPosef& controllerGripPose,
     const XrPosef& controllerAimPose)
 {
     if (g_vrViews.size() < kVrStereoEyeCount)
     {
         return;
+    }
+
+    XrVector3f filteredGripPosition = {};
+    XrQuaternionf filteredAimOrientation = {};
+
+    const XrQuaternionf normalizedAimOrientation =
+        VR_NormalizeQuaternion(
+            controllerAimPose.orientation);
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrWeaponControllerPoseMutex);
+
+        if (!g_vrRightControllerWeaponFilterValid)
+        {
+            g_vrRightControllerFilteredGripPosition =
+                controllerGripPose.position;
+
+            g_vrRightControllerFilteredAimOrientation =
+                normalizedAimOrientation;
+
+            g_vrRightControllerWeaponFilterValid = true;
+        }
+        else
+        {
+            // Modest smoothing removes visible tracking shimmer while
+            // retaining responsive one-handed aiming at typical VR rates.
+            constexpr float positionBlend = 0.45f;
+            constexpr float orientationBlend = 0.55f;
+
+            g_vrRightControllerFilteredGripPosition.x +=
+                (controllerGripPose.position.x -
+                 g_vrRightControllerFilteredGripPosition.x) *
+                positionBlend;
+
+            g_vrRightControllerFilteredGripPosition.y +=
+                (controllerGripPose.position.y -
+                 g_vrRightControllerFilteredGripPosition.y) *
+                positionBlend;
+
+            g_vrRightControllerFilteredGripPosition.z +=
+                (controllerGripPose.position.z -
+                 g_vrRightControllerFilteredGripPosition.z) *
+                positionBlend;
+
+            XrQuaternionf targetOrientation =
+                normalizedAimOrientation;
+
+            const float orientationDot =
+                g_vrRightControllerFilteredAimOrientation.x *
+                    targetOrientation.x +
+                g_vrRightControllerFilteredAimOrientation.y *
+                    targetOrientation.y +
+                g_vrRightControllerFilteredAimOrientation.z *
+                    targetOrientation.z +
+                g_vrRightControllerFilteredAimOrientation.w *
+                    targetOrientation.w;
+
+            if (orientationDot < 0.0f)
+            {
+                targetOrientation.x =
+                    -targetOrientation.x;
+                targetOrientation.y =
+                    -targetOrientation.y;
+                targetOrientation.z =
+                    -targetOrientation.z;
+                targetOrientation.w =
+                    -targetOrientation.w;
+            }
+
+            XrQuaternionf blendedOrientation = {
+                g_vrRightControllerFilteredAimOrientation.x +
+                    (targetOrientation.x -
+                     g_vrRightControllerFilteredAimOrientation.x) *
+                    orientationBlend,
+                g_vrRightControllerFilteredAimOrientation.y +
+                    (targetOrientation.y -
+                     g_vrRightControllerFilteredAimOrientation.y) *
+                    orientationBlend,
+                g_vrRightControllerFilteredAimOrientation.z +
+                    (targetOrientation.z -
+                     g_vrRightControllerFilteredAimOrientation.z) *
+                    orientationBlend,
+                g_vrRightControllerFilteredAimOrientation.w +
+                    (targetOrientation.w -
+                     g_vrRightControllerFilteredAimOrientation.w) *
+                    orientationBlend,
+            };
+
+            g_vrRightControllerFilteredAimOrientation =
+                VR_NormalizeQuaternion(
+                    blendedOrientation);
+        }
+
+        filteredGripPosition =
+            g_vrRightControllerFilteredGripPosition;
+
+        filteredAimOrientation =
+            g_vrRightControllerFilteredAimOrientation;
+    }
+
+    static bool loggedFilteredGripWeaponPose = false;
+
+    if (!loggedFilteredGripWeaponPose)
+    {
+        Com_Printf(
+            0,
+            "[VR] Using filtered right grip position and aim orientation "
+            "for the weapon pose.\n");
+
+        loggedFilteredGripWeaponPose = true;
     }
 
     const XrQuaternionf headOrientation =
@@ -3378,11 +3518,11 @@ void VR_PublishRightControllerWeaponPose(
     };
 
     const VrHeadVector controllerOffsetOpenXr = {
-        controllerAimPose.position.x -
+        filteredGripPosition.x -
             headCenter.x,
-        controllerAimPose.position.y -
+        filteredGripPosition.y -
             headCenter.y,
-        controllerAimPose.position.z -
+        filteredGripPosition.z -
             headCenter.z,
     };
 
@@ -3396,8 +3536,7 @@ void VR_PublishRightControllerWeaponPose(
             controllerOffsetHeadLocal);
 
     const XrQuaternionf controllerOrientation =
-        VR_NormalizeQuaternion(
-            controllerAimPose.orientation);
+        filteredAimOrientation;
 
     const XrQuaternionf controllerRelativeToHead =
         VR_NormalizeQuaternion(
@@ -3566,12 +3705,15 @@ void VR_UpdateControllerActions(
         {
             renderPose.aimPose =
                 aimLocation.pose;
+        }
 
-            if (handIndex == VR_CONTROLLER_RIGHT)
-            {
-                VR_PublishRightControllerWeaponPose(
-                    aimLocation.pose);
-            }
+        if (handIndex == VR_CONTROLLER_RIGHT &&
+            gripValid &&
+            aimValid)
+        {
+            VR_PublishRightControllerWeaponPose(
+                gripLocation.pose,
+                aimLocation.pose);
         }
 
         if (gripValid &&
@@ -4757,6 +4899,57 @@ void VR_ResetState()
 }
 }
 
+
+
+bool VR_GetRightControllerWeaponGripWorld(
+    const float cameraOrigin[3],
+    const float cameraAxis[3][3],
+    float gripWorld[3])
+{
+    if (cameraOrigin == nullptr ||
+        cameraAxis == nullptr ||
+        gripWorld == nullptr)
+    {
+        return false;
+    }
+
+    float gripCameraLocal[3] = {};
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrWeaponControllerPoseMutex);
+
+        if (!g_vrRightControllerWeaponPoseValid)
+        {
+            return false;
+        }
+
+        gripCameraLocal[0] =
+            g_vrRightControllerWeaponPosition[0];
+
+        gripCameraLocal[1] =
+            g_vrRightControllerWeaponPosition[1];
+
+        gripCameraLocal[2] =
+            g_vrRightControllerWeaponPosition[2];
+    }
+
+    for (int worldComponent = 0;
+         worldComponent < 3;
+         ++worldComponent)
+    {
+        gripWorld[worldComponent] =
+            cameraOrigin[worldComponent] +
+            gripCameraLocal[0] *
+                cameraAxis[0][worldComponent] +
+            gripCameraLocal[1] *
+                cameraAxis[1][worldComponent] +
+            gripCameraLocal[2] *
+                cameraAxis[2][worldComponent];
+    }
+
+    return true;
+}
 
 
 bool VR_ApplyRightControllerToWeaponPlacement(

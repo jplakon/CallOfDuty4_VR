@@ -3,7 +3,7 @@
 
 #include "cg_local.h"
 #include "cg_public.h"
-
+#include <script/scr_stringlist.h>\n
 
 #include <xanim/dobj.h>
 #include <DynEntity/DynEntity_client.h>
@@ -543,6 +543,14 @@ void __cdecl CG_GetPlayerViewOrigin(int32_t localClientNum, const playerState_s 
 }
 #endif
 
+#ifdef KISAK_MP
+// Returns the filtered OpenXR right grip origin in CoD world space.
+bool VR_GetRightControllerWeaponGripWorld(
+    const float cameraOrigin[3],
+    const float cameraAxis[3][3],
+    float gripWorld[3]);
+#endif
+
 void __cdecl CG_AddPlayerWeapon(
     int32_t localClientNum,
     const GfxScaledPlacement* placement,
@@ -592,6 +600,92 @@ void __cdecl CG_AddPlayerWeapon(
             CG_UpdateViewModelPose(weapInfo->viewModelDObj, localClientNum);
 
 #ifdef KISAK_MP
+            if (bDrawGun &&
+                !cgameGlob->renderingThirdPerson)
+            {
+                float vrTrackedGripWorld[3] = {};
+                float vrViewmodelRightHandWorld[3] = {};
+
+                const char* vrRightHandTagName =
+                    "tag_weapon_right";
+
+                if (cg_weaponrightbone != nullptr &&
+                    cg_weaponrightbone->current.string != nullptr &&
+                    cg_weaponrightbone->current.string[0] != '\0')
+                {
+                    vrRightHandTagName =
+                        cg_weaponrightbone->current.string;
+                }
+
+                const uint32_t vrRightHandTag =
+                    SL_FindString(
+                        vrRightHandTagName);
+
+                if (vrRightHandTag != 0 &&
+                    VR_GetRightControllerWeaponGripWorld(
+                        cgameGlob->refdef.vieworg,
+                        cgameGlob->refdef.viewaxis,
+                        vrTrackedGripWorld) &&
+                    CG_DObjGetWorldTagPos(
+                        &cgameGlob->viewModelPose,
+                        weapInfo->viewModelDObj,
+                        vrRightHandTag,
+                        vrViewmodelRightHandWorld))
+                {
+                    const float vrGripCorrection[3] = {
+                        vrTrackedGripWorld[0] -
+                            vrViewmodelRightHandWorld[0],
+                        vrTrackedGripWorld[1] -
+                            vrViewmodelRightHandWorld[1],
+                        vrTrackedGripWorld[2] -
+                            vrViewmodelRightHandWorld[2],
+                    };
+
+                    cgameGlob->viewModelAxis[3][0] +=
+                        vrGripCorrection[0];
+
+                    cgameGlob->viewModelAxis[3][1] +=
+                        vrGripCorrection[1];
+
+                    cgameGlob->viewModelAxis[3][2] +=
+                        vrGripCorrection[2];
+
+                    // Rebuild and clear the DObj skeleton after moving the
+                    // root. Later tag_flash queries now see the corrected
+                    // rifle position as well.
+                    CG_UpdateViewModelPose(
+                        weapInfo->viewModelDObj,
+                        localClientNum);
+
+                    static bool loggedVrRightHandTagAlignment = false;
+
+                    if (!loggedVrRightHandTagAlignment)
+                    {
+                        Com_Printf(
+                            0,
+                            "[VR] Aligned viewmodel tag_weapon_right "
+                            "to the tracked grip pose.\n");
+
+                        loggedVrRightHandTagAlignment = true;
+                    }
+                }
+                else
+                {
+                    static bool loggedVrRightHandTagAlignmentFailure =
+                        false;
+
+                    if (!loggedVrRightHandTagAlignmentFailure)
+                    {
+                        Com_PrintWarning(
+                            0,
+                            "[VR] Could not align tag_weapon_right "
+                            "to the tracked grip pose.\n");
+
+                        loggedVrRightHandTagAlignmentFailure = true;
+                    }
+                }
+            }
+
             if (bDrawGun && !cgameGlob->renderingThirdPerson)
             {
                 const int32_t vrWeaponDobjNumber =
