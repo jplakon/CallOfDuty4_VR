@@ -65,6 +65,13 @@ bool VR_GetRightControllerWeaponCommand(
     bool* attackPressed);
 
 
+// Applies a short vibration pulse to the right-hand OpenXR controller.
+// Intended for confirmed local firearm events.
+bool VR_ApplyRightControllerWeaponHaptic(
+    float amplitude,
+    float durationSeconds);
+
+
 // Publishes and retrieves the latest transformed viewmodel tag_flash world
 // position. The client render path publishes it every frame; the local
 // listen-server weapon path consumes it for authoritative bullet origins.

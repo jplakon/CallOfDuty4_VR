@@ -48,6 +48,7 @@ XrAction g_vrGripPoseAction = XR_NULL_HANDLE;
 XrAction g_vrAimPoseAction = XR_NULL_HANDLE;
 XrAction g_vrTriggerValueAction = XR_NULL_HANDLE;
 XrAction g_vrSqueezeValueAction = XR_NULL_HANDLE;
+XrAction g_vrHapticOutputAction = XR_NULL_HANDLE;
 
 std::array<XrPath, kVrControllerCount>
     g_vrControllerHandPaths = {
@@ -2605,6 +2606,12 @@ void VR_DestroyControllerInput()
         }
     }
 
+    if (g_vrHapticOutputAction != XR_NULL_HANDLE)
+    {
+        xrDestroyAction(g_vrHapticOutputAction);
+        g_vrHapticOutputAction = XR_NULL_HANDLE;
+    }
+
     if (g_vrSqueezeValueAction != XR_NULL_HANDLE)
     {
         xrDestroyAction(g_vrSqueezeValueAction);
@@ -2766,9 +2773,9 @@ bool VR_SuggestControllerBindings()
         return false;
     }
 
-    std::array<XrPath, 8> touchBindingPaths = {};
+    std::array<XrPath, 10> touchBindingPaths = {};
 
-    const std::array<const char*, 8>
+    const std::array<const char*, 10>
         touchBindingStrings = {
             "/user/hand/left/input/grip/pose",
             "/user/hand/right/input/grip/pose",
@@ -2778,6 +2785,8 @@ bool VR_SuggestControllerBindings()
             "/user/hand/right/input/trigger/value",
             "/user/hand/left/input/squeeze/value",
             "/user/hand/right/input/squeeze/value",
+            "/user/hand/left/output/haptic",
+            "/user/hand/right/output/haptic",
         };
 
     for (std::uint32_t bindingIndex = 0u;
@@ -2792,7 +2801,7 @@ bool VR_SuggestControllerBindings()
         }
     }
 
-    const std::array<XrActionSuggestedBinding, 8>
+    const std::array<XrActionSuggestedBinding, 10>
         touchBindings = {{
             {
                 g_vrGripPoseAction,
@@ -2825,6 +2834,14 @@ bool VR_SuggestControllerBindings()
             {
                 g_vrSqueezeValueAction,
                 touchBindingPaths[7],
+            },
+            {
+                g_vrHapticOutputAction,
+                touchBindingPaths[8],
+            },
+            {
+                g_vrHapticOutputAction,
+                touchBindingPaths[9],
             },
         }};
 
@@ -2865,14 +2882,16 @@ bool VR_SuggestControllerBindings()
             "simple_controller",
             &simpleProfile))
     {
-        std::array<XrPath, 4> simpleBindingPaths = {};
+        std::array<XrPath, 6> simpleBindingPaths = {};
 
-        const std::array<const char*, 4>
+        const std::array<const char*, 6>
             simpleBindingStrings = {
                 "/user/hand/left/input/grip/pose",
                 "/user/hand/right/input/grip/pose",
                 "/user/hand/left/input/aim/pose",
                 "/user/hand/right/input/aim/pose",
+                "/user/hand/left/output/haptic",
+                "/user/hand/right/output/haptic",
             };
 
         bool simplePathsValid = true;
@@ -2892,7 +2911,7 @@ bool VR_SuggestControllerBindings()
         {
             const std::array<
                 XrActionSuggestedBinding,
-                4>
+                6>
                 simpleBindings = {{
                     {
                         g_vrGripPoseAction,
@@ -2909,6 +2928,14 @@ bool VR_SuggestControllerBindings()
                     {
                         g_vrAimPoseAction,
                         simpleBindingPaths[3],
+                    },
+                    {
+                        g_vrHapticOutputAction,
+                        simpleBindingPaths[4],
+                    },
+                    {
+                        g_vrHapticOutputAction,
+                        simpleBindingPaths[5],
                     },
                 }};
 
@@ -2945,7 +2972,7 @@ bool VR_SuggestControllerBindings()
     Com_Printf(
         0,
         "[VR] Suggested Oculus Touch controller "
-        "pose and analog bindings.\n");
+        "pose, analog, and haptic bindings.\n");
 
     return true;
 }
@@ -3028,7 +3055,12 @@ bool VR_CreateControllerActions()
             XR_ACTION_TYPE_FLOAT_INPUT,
             "squeeze_value",
             "Squeeze Value",
-            &g_vrSqueezeValueAction))
+            &g_vrSqueezeValueAction) ||
+        !VR_CreateControllerAction(
+            XR_ACTION_TYPE_VIBRATION_OUTPUT,
+            "haptic_output",
+            "Haptic Output",
+            &g_vrHapticOutputAction))
     {
         VR_DestroyControllerInput();
         return false;
@@ -5038,6 +5070,104 @@ bool VR_GetRightControllerWeaponMuzzleWorld(
 
     muzzleOrigin[2] =
         g_vrRightControllerFinalWeaponMuzzleWorld[2];
+
+    return true;
+}
+
+
+bool VR_ApplyRightControllerWeaponHaptic(
+    const float amplitude,
+    const float durationSeconds)
+{
+    if (!g_vrControllerActionsAttached ||
+        !g_vrSessionRunning ||
+        g_vrSession == XR_NULL_HANDLE ||
+        g_vrHapticOutputAction == XR_NULL_HANDLE ||
+        g_vrControllerHandPaths[VR_CONTROLLER_RIGHT] ==
+            XR_NULL_PATH)
+    {
+        return false;
+    }
+
+    float clampedAmplitude =
+        amplitude;
+
+    if (clampedAmplitude < 0.0f)
+    {
+        clampedAmplitude = 0.0f;
+    }
+    else if (clampedAmplitude > 1.0f)
+    {
+        clampedAmplitude = 1.0f;
+    }
+
+    if (clampedAmplitude <= 0.0f ||
+        durationSeconds <= 0.0f)
+    {
+        return false;
+    }
+
+    XrHapticActionInfo actionInfo{
+        XR_TYPE_HAPTIC_ACTION_INFO
+    };
+
+    actionInfo.action =
+        g_vrHapticOutputAction;
+
+    actionInfo.subactionPath =
+        g_vrControllerHandPaths[
+            VR_CONTROLLER_RIGHT];
+
+    XrHapticVibration vibration{
+        XR_TYPE_HAPTIC_VIBRATION
+    };
+
+    vibration.amplitude =
+        clampedAmplitude;
+
+    vibration.duration =
+        static_cast<XrDuration>(
+            static_cast<double>(durationSeconds) *
+            1000000000.0);
+
+    vibration.frequency =
+        XR_FREQUENCY_UNSPECIFIED;
+
+    const XrResult result =
+        xrApplyHapticFeedback(
+            g_vrSession,
+            &actionInfo,
+            reinterpret_cast<
+                const XrHapticBaseHeader*>(
+                    &vibration));
+
+    if (XR_FAILED(result))
+    {
+        static bool loggedHapticFailure = false;
+
+        if (!loggedHapticFailure)
+        {
+            VR_LogXrFailure(
+                "xrApplyHapticFeedback",
+                result);
+
+            loggedHapticFailure = true;
+        }
+
+        return false;
+    }
+
+    static bool loggedFirstWeaponHaptic = false;
+
+    if (!loggedFirstWeaponHaptic)
+    {
+        Com_Printf(
+            0,
+            "[VR] Applied right-controller "
+            "firearm haptic recoil.\n");
+
+        loggedFirstWeaponHaptic = true;
+    }
 
     return true;
 }

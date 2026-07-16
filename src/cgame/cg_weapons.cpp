@@ -2500,6 +2500,11 @@ void __cdecl CG_EjectWeaponBrass(int32_t localClientNum, const entityState_s *en
     }
 }
 
+// OpenXR recoil pulse for confirmed local firearm events.
+bool VR_ApplyRightControllerWeaponHaptic(
+    float amplitude,
+    float durationSeconds);
+
 void __cdecl CG_FireWeapon(
     int32_t localClientNum,
     centity_s *cent,
@@ -2548,6 +2553,15 @@ void __cdecl CG_FireWeapon(
 
             if (isPlayer)
             {
+#ifdef KISAK_MP
+                if (weaponDef->weapType != WEAPTYPE_GRENADE)
+                {
+                    VR_ApplyRightControllerWeaponHaptic(
+                        0.78f,
+                        0.050f);
+                }
+#endif
+
                 CG_UpdateViewModelPose(weapInfo->viewModelDObj, localClientNum);
                 BG_WeaponFireRecoil(&cgameGlob->predictedPlayerState, cgameGlob->vGunSpeed, cgameGlob->kickAVel);
             }
