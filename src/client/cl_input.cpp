@@ -3,6 +3,7 @@
 #endif
 
 #include "cl_input.h"
+#include "vr/vr_openxr.h"
 #include <qcommon/mem_track.h>
 #include <qcommon/cmd.h>
 #include <cgame/cg_main.h>
@@ -1497,6 +1498,46 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
             clients[0].viewangles[0] = oldAngles + 90.0;
         }
     }
+    if (!Key_IsCatcherActive(0, 8))
+    {
+        float vrGunPitch = 0.0f;
+        float vrGunYaw = 0.0f;
+        bool vrAttackPressed = false;
+
+        if (VR_GetRightControllerWeaponCommand(
+                &vrGunPitch,
+                &vrGunYaw,
+                &vrAttackPressed))
+        {
+            clients[0].cgameUserCmdGunPitch =
+                vrGunPitch;
+
+            clients[0].cgameUserCmdGunYaw =
+                vrGunYaw;
+
+            if (vrAttackPressed)
+            {
+                result->buttons |=
+                    BUTTON_ATTACK;
+
+                static bool
+                    loggedSpVrAttackInjection =
+                        false;
+
+                if (!loggedSpVrAttackInjection)
+                {
+                    Com_Printf(
+                        0,
+                        "[VR] Injected right-controller "
+                        "BUTTON_ATTACK into SP.\n");
+
+                    loggedSpVrAttackInjection =
+                        true;
+                }
+            }
+        }
+    }
+
     CL_FinishMove(result);
 }
 

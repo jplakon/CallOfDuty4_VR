@@ -543,7 +543,7 @@ void __cdecl CG_GetPlayerViewOrigin(int32_t localClientNum, const playerState_s 
 }
 #endif
 
-#ifdef KISAK_MP
+#if defined(KISAK_MP) || defined(KISAK_SP)
 // Returns the filtered OpenXR right grip origin in CoD world space.
 bool VR_GetRightControllerWeaponGripWorld(
     const float cameraOrigin[3],
@@ -599,9 +599,13 @@ void __cdecl CG_AddPlayerWeapon(
             cgameGlob->viewModelAxis[3][2] = placement->base.origin[2];
             CG_UpdateViewModelPose(weapInfo->viewModelDObj, localClientNum);
 
-#ifdef KISAK_MP
+#if defined(KISAK_MP) || defined(KISAK_SP)
+#if defined(KISAK_MP)
             if (bDrawGun &&
                 !cgameGlob->renderingThirdPerson)
+#else
+            if (bDrawGun)
+#endif
             {
                 float vrTrackedGripWorld[3] = {};
                 float vrViewmodelGripTagWorld[3] = {};
@@ -609,6 +613,7 @@ void __cdecl CG_AddPlayerWeapon(
                 const char* configuredTagName =
                     "tag_weapon_right";
 
+#if defined(KISAK_MP)
                 if (cg_weaponrightbone != nullptr &&
                     cg_weaponrightbone->current.string != nullptr &&
                     cg_weaponrightbone->current.string[0] != '\0')
@@ -616,6 +621,19 @@ void __cdecl CG_AddPlayerWeapon(
                     configuredTagName =
                         cg_weaponrightbone->current.string;
                 }
+#else
+                static bool loggedSpGripTagFallback = false;
+
+                if (!loggedSpGripTagFallback)
+                {
+                    Com_Printf(
+                        0,
+                        "[VR] SP uses the default viewmodel "
+                        "grip tag fallback.\n");
+
+                    loggedSpGripTagFallback = true;
+                }
+#endif
 
                 const char* candidateTagNames[] = {
                     configuredTagName,
@@ -719,7 +737,12 @@ void __cdecl CG_AddPlayerWeapon(
                 }
             }
 
-            if (bDrawGun && !cgameGlob->renderingThirdPerson)
+#if defined(KISAK_MP)
+            if (bDrawGun &&
+                !cgameGlob->renderingThirdPerson)
+#else
+            if (bDrawGun)
+#endif
             {
                 const int32_t vrWeaponDobjNumber =
                     CG_WeaponDObjHandle(weaponNum);
@@ -1779,6 +1802,50 @@ void __cdecl CG_AddViewWeapon(int32_t localClientNum)
                 Vec3Mad(placement.base.origin, cg_gun_z->current.value, cgameGlob->viewModelAxis[2], placement.base.origin);
                 CalculateWeaponAxis(cgameGlob, axis);
                 AxisToQuat(axis, placement.base.quat);
+
+                float vrAbsoluteWeaponAxis[3][3] = {};
+
+                memcpy(
+                    vrAbsoluteWeaponAxis,
+                    cgameGlob->refdef.viewaxis,
+                    sizeof(vrAbsoluteWeaponAxis));
+
+                if (VR_ApplyRightControllerToWeaponPlacement(
+                        cgameGlob->refdef.vieworg,
+                        cgameGlob->refdef.viewaxis,
+                        placement.base.origin,
+                        vrAbsoluteWeaponAxis))
+                {
+                    memcpy(
+                        axis,
+                        vrAbsoluteWeaponAxis,
+                        sizeof(axis));
+
+                    AxisToQuat(
+                        axis,
+                        placement.base.quat);
+
+                    static bool
+                        loggedSpTrackedWeaponPlacement =
+                            false;
+
+                    if (!loggedSpTrackedWeaponPlacement)
+                    {
+                        Com_Printf(
+                            0,
+                            "[VR] Applied tracked weapon placement "
+                            "to the single-player viewmodel.\n");
+
+                        Com_Printf(
+                            0,
+                            "[VR] SP uses the HMD-updated "
+                            "canonical weapon basis.\n");
+
+                        loggedSpTrackedWeaponPlacement =
+                            true;
+                    }
+                }
+
                 placement.scale = 1.0f;
                 CG_AddPlayerWeapon(localClientNum, &placement, ps, &cgameGlob->predictedPlayerEntity, drawgun);
 #else
