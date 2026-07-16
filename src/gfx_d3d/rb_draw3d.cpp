@@ -803,32 +803,7 @@ void RB_StandardDrawCommandsCommon()
             }
             R_SetRenderTargetSize(&gfxCmdBufSourceState, R_RENDERTARGET_FRAME_BUFFER);
             R_SetRenderTarget(gfxCmdBufContext, R_RENDERTARGET_FRAME_BUFFER);
-
-            if (VR_D3D9IsSameFrameStereoEnabled() &&
-                data->viewInfoCount == 2u)
-            {
-                // Both eyes use the same localClientNum and therefore the
-                // same SunFlareDynamic state and occlusion-query history.
-                // Updating and drawing that full-screen effect twice can
-                // produce different blind/glare exposure in each eye.
-                static bool loggedVrSkippedSunPostEffects = false;
-
-                if (!loggedVrSkippedSunPostEffects)
-                {
-                    Com_Printf(
-                        0,
-                        "[VR] Diagnostic: skipped sun post effects "
-                        "during same-frame stereo.\n");
-
-                    loggedVrSkippedSunPostEffects = true;
-                }
-            }
-            else
-            {
-                RB_DrawSunPostEffects(
-                    viewInfo->localClientNum);
-            }
-
+            RB_DrawSunPostEffects(viewInfo->localClientNum);
             memcpy(&gfxCmdBufState, &gfxCmdBufState, sizeof(gfxCmdBufState));
             R_InitCmdBufSourceState(&gfxCmdBufSourceState, &gfxCmdBufInput, 0);
             gfxCmdBufSourceState.input.data = backEndData;

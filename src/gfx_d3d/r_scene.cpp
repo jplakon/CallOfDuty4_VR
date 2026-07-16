@@ -1652,8 +1652,33 @@ void __cdecl R_GenerateSortedDrawSurfs(
         if (gfxDrawMethod.drawScene == GFX_DRAW_SCENE_STANDARD)
         {
             R_AddAllBspDrawSurfacesCamera();
-            if (!sm_sunEnable->current.enabled && rgp.world->sunPrimaryLightIndex)
-                Com_BitClearAssert(scene.shadowableLightIsUsed, rgp.world->sunPrimaryLightIndex, 128);
+            const bool vrStereoSunShadowsDisabled =
+                VR_D3D9IsSameFrameStereoEnabled();
+
+            if (vrStereoSunShadowsDisabled)
+            {
+                static bool loggedVrStereoSunShadowDisable = false;
+
+                if (!loggedVrStereoSunShadowDisable)
+                {
+                    Com_Printf(
+                        0,
+                        "[VR] Disabled sun shadow maps during "
+                        "same-frame stereo.\n");
+
+                    loggedVrStereoSunShadowDisable = true;
+                }
+            }
+
+            if ((!sm_sunEnable->current.enabled ||
+                 vrStereoSunShadowsDisabled) &&
+                rgp.world->sunPrimaryLightIndex)
+            {
+                Com_BitClearAssert(
+                    scene.shadowableLightIsUsed,
+                    rgp.world->sunPrimaryLightIndex,
+                    128);
+            }
             Com_Memset(frontEndDataOut->shadowableLightHasShadowMap, 0, 32);
             if (R_GetAllowShadowMaps())
                 R_ChooseShadowedLights(viewInfo);

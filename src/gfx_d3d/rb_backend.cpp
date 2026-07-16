@@ -2820,7 +2820,7 @@ void __cdecl RB_Draw3D()
         {
             Com_Printf(
                 0,
-                "[VR] Diagnostic: synchronized draw-list lighting metadata "
+                "[VR] Synchronized stereo draw-list lighting metadata "
                 "without copying shadow or mesh resources.\n");
 
             loggedVrSafeLightingMetadataSync = true;
@@ -2832,8 +2832,8 @@ void __cdecl RB_Draw3D()
         {
             Com_Printf(
                 0,
-                "[VR] Diagnostic: reused the second-generated eye's "
-                "draw-surface references for the first eye.\n");
+                "[VR] Reused final stereo draw-surface references "
+                "for both eyes.\n");
 
             loggedVrSharedSecondEyeDrawSurfs = true;
         }
