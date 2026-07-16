@@ -55,6 +55,7 @@ XrAction g_vrUseReloadButtonAction = XR_NULL_HANDLE;
 XrAction g_vrSprintButtonAction = XR_NULL_HANDLE;
 XrAction g_vrMeleeButtonAction = XR_NULL_HANDLE;
 XrAction g_vrStanceButtonAction = XR_NULL_HANDLE;
+XrAction g_vrNextWeaponButtonAction = XR_NULL_HANDLE;
 XrAction g_vrHapticOutputAction = XR_NULL_HANDLE;
 
 std::array<XrPath, kVrControllerCount>
@@ -291,6 +292,9 @@ bool g_vrLeftXUseReloadHeld = false;
 bool g_vrLeftStickSprintHeld = false;
 bool g_vrRightStickMeleeHeld = false;
 bool g_vrRightBStanceHeld = false;
+
+bool g_vrRightGripFragHeld = false;
+bool g_vrLeftYNextWeaponHeld = false;
 
 
 std::vector<XrViewConfigurationView> g_vrViewConfigs;
@@ -2691,6 +2695,12 @@ void VR_DestroyControllerInput()
         g_vrHapticOutputAction = XR_NULL_HANDLE;
     }
 
+    if (g_vrNextWeaponButtonAction != XR_NULL_HANDLE)
+    {
+        xrDestroyAction(g_vrNextWeaponButtonAction);
+        g_vrNextWeaponButtonAction = XR_NULL_HANDLE;
+    }
+
     if (g_vrStanceButtonAction != XR_NULL_HANDLE)
     {
         xrDestroyAction(g_vrStanceButtonAction);
@@ -2798,6 +2808,9 @@ void VR_DestroyControllerInput()
         g_vrLeftStickSprintHeld = false;
         g_vrRightStickMeleeHeld = false;
         g_vrRightBStanceHeld = false;
+
+        g_vrRightGripFragHeld = false;
+        g_vrLeftYNextWeaponHeld = false;
     }
 
     {
@@ -2945,9 +2958,9 @@ bool VR_SuggestControllerBindings()
         return false;
     }
 
-    std::array<XrPath, 17> touchBindingPaths = {};
+    std::array<XrPath, 18> touchBindingPaths = {};
 
-    const std::array<const char*, 17>
+    const std::array<const char*, 18>
         touchBindingStrings = {
             "/user/hand/left/input/grip/pose",
             "/user/hand/right/input/grip/pose",
@@ -2966,6 +2979,7 @@ bool VR_SuggestControllerBindings()
             "/user/hand/left/input/thumbstick/click",
             "/user/hand/right/input/thumbstick/click",
             "/user/hand/right/input/b/click",
+            "/user/hand/left/input/y/click",
         };
 
     for (std::uint32_t bindingIndex = 0u;
@@ -2980,7 +2994,7 @@ bool VR_SuggestControllerBindings()
         }
     }
 
-    const std::array<XrActionSuggestedBinding, 17>
+    const std::array<XrActionSuggestedBinding, 18>
         touchBindings = {{
             {
                 g_vrGripPoseAction,
@@ -3049,6 +3063,10 @@ bool VR_SuggestControllerBindings()
             {
                 g_vrStanceButtonAction,
                 touchBindingPaths[16],
+            },
+            {
+                g_vrNextWeaponButtonAction,
+                touchBindingPaths[17],
             },
         }};
 
@@ -3298,6 +3316,11 @@ bool VR_CreateControllerActions()
             "stance_button",
             "Stance Button",
             &g_vrStanceButtonAction) ||
+        !VR_CreateControllerAction(
+            XR_ACTION_TYPE_BOOLEAN_INPUT,
+            "next_weapon_button",
+            "Next Weapon Button",
+            &g_vrNextWeaponButtonAction) ||
         !VR_CreateControllerAction(
             XR_ACTION_TYPE_VIBRATION_OUTPUT,
             "haptic_output",
@@ -4258,6 +4281,15 @@ void VR_UpdateControllerActions(
                 &sprintPressed,
                 &sprintActive);
 
+            bool nextWeaponPressed = false;
+            bool nextWeaponActive = false;
+
+            VR_GetControllerBooleanState(
+                g_vrNextWeaponButtonAction,
+                handPath,
+                &nextWeaponPressed,
+                &nextWeaponActive);
+
             std::lock_guard<std::mutex> lock(
                 g_vrHeadOrientationMutex);
 
@@ -4272,6 +4304,10 @@ void VR_UpdateControllerActions(
             g_vrLeftStickSprintHeld =
                 sprintActive &&
                 sprintPressed;
+
+            g_vrLeftYNextWeaponHeld =
+                nextWeaponActive &&
+                nextWeaponPressed;
         }
 
         if (handIndex == VR_CONTROLLER_RIGHT)
@@ -4318,6 +4354,9 @@ void VR_UpdateControllerActions(
                 g_vrRightBStanceHeld =
                     stanceActive &&
                     stancePressed;
+
+                g_vrRightGripFragHeld =
+                    squeezePressed;
             }
 
             const bool attackPressed =
@@ -6392,6 +6431,28 @@ bool VR_GetLocomotionCombatButtons(
 
     *stanceHeld =
         g_vrRightBStanceHeld;
+
+    return true;
+}
+
+bool VR_GetWeaponUtilityButtons(
+    bool* fragHeld,
+    bool* nextWeaponHeld)
+{
+    if (fragHeld == nullptr ||
+        nextWeaponHeld == nullptr)
+    {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(
+        g_vrHeadOrientationMutex);
+
+    *fragHeld =
+        g_vrRightGripFragHeld;
+
+    *nextWeaponHeld =
+        g_vrLeftYNextWeaponHeld;
 
     return true;
 }

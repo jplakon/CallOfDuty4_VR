@@ -4,6 +4,8 @@
 
 #include "cl_input.h"
 #include "vr/vr_openxr.h"
+
+void __cdecl CG_NextWeapon_f();
 #include <qcommon/mem_track.h>
 #include <qcommon/cmd.h>
 #include <cgame/cg_main.h>
@@ -1652,6 +1654,53 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
             loggedVrStance =
                 true;
         }
+
+        bool vrFragHeld = false;
+        bool vrNextWeaponHeld = false;
+
+        VR_GetWeaponUtilityButtons(
+            &vrFragHeld,
+            &vrNextWeaponHeld);
+
+        if (vrFragHeld)
+        {
+            result->buttons |=
+                BUTTON_FRAG;
+
+            static bool loggedVrFrag = false;
+
+            if (!loggedVrFrag)
+            {
+                Com_Printf(
+                    0,
+                    "[VR] Injected right-grip frag grenade control.\n");
+
+                loggedVrFrag = true;
+            }
+        }
+
+        static bool vrNextWeaponWasHeld = false;
+
+        if (vrNextWeaponHeld &&
+            !vrNextWeaponWasHeld)
+        {
+            CG_NextWeapon_f();
+
+            static bool loggedVrNextWeapon = false;
+
+            if (!loggedVrNextWeapon)
+            {
+                Com_Printf(
+                    0,
+                    "[VR] Bound left Y to the existing "
+                    "single-player next-weapon command.\n");
+
+                loggedVrNextWeapon = true;
+            }
+        }
+
+        vrNextWeaponWasHeld =
+            vrNextWeaponHeld;
 
         float vrMoveForward = 0.0f;
         float vrMoveRight = 0.0f;

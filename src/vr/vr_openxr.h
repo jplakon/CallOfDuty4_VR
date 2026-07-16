@@ -95,6 +95,12 @@ bool VR_GetLocomotionCombatButtons(
     bool* meleeHeld,
     bool* stanceHeld);
 
+// Returns weapon-utility controls:
+// right grip = hold/cook frag grenade, left Y = next primary weapon.
+bool VR_GetWeaponUtilityButtons(
+    bool* fragHeld,
+    bool* nextWeaponHeld);
+
 
 // Applies a short vibration pulse to the right-hand OpenXR controller.
 // Intended for confirmed local firearm events.
