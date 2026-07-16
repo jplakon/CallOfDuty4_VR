@@ -2650,12 +2650,225 @@ void __cdecl RB_Draw3D()
     if (VR_D3D9IsSameFrameStereoEnabled() &&
         data->viewInfoCount == 2u)
     {
+        // Both frontend eye generations share one GfxBackEndData and its
+        // dynamic geometry buffers. The second generated eye is the one
+        // that remains valid. As a diagnostic, keep each eye's own camera,
+        // projection, viewport, and constants, but make the first eye use
+        // the second eye's final draw-surface references.
+        GfxViewInfo* firstGeneratedView =
+            &data->viewInfo[0];
+
+        const GfxViewInfo* secondGeneratedView =
+            &data->viewInfo[1];
+
+        firstGeneratedView->litInfo.drawSurfs =
+            secondGeneratedView->litInfo.drawSurfs;
+
+        firstGeneratedView->litInfo.drawSurfCount =
+            secondGeneratedView->litInfo.drawSurfCount;
+
+        firstGeneratedView->decalInfo.drawSurfs =
+            secondGeneratedView->decalInfo.drawSurfs;
+
+        firstGeneratedView->decalInfo.drawSurfCount =
+            secondGeneratedView->decalInfo.drawSurfCount;
+
+        firstGeneratedView->emissiveInfo.drawSurfs =
+            secondGeneratedView->emissiveInfo.drawSurfs;
+
+        firstGeneratedView->emissiveInfo.drawSurfCount =
+            secondGeneratedView->emissiveInfo.drawSurfCount;
+
+        firstGeneratedView->emissiveSpotDrawSurfs =
+            secondGeneratedView->emissiveSpotDrawSurfs;
+
+        firstGeneratedView->emissiveSpotDrawSurfCount =
+            secondGeneratedView->emissiveSpotDrawSurfCount;
+
+        for (std::uint32_t pointLightIndex = 0;
+             pointLightIndex < 4u;
+             ++pointLightIndex)
+        {
+            firstGeneratedView->
+                pointLightPartitions[pointLightIndex].
+                info.drawSurfs =
+                    secondGeneratedView->
+                        pointLightPartitions[pointLightIndex].
+                        info.drawSurfs;
+
+            firstGeneratedView->
+                pointLightPartitions[pointLightIndex].
+                info.drawSurfCount =
+                    secondGeneratedView->
+                        pointLightPartitions[pointLightIndex].
+                        info.drawSurfCount;
+        }
+
+        // The first eye now reuses the second eye's valid geometry
+        // pointers. Synchronize only the small, non-owning metadata fields
+        // that describe how those lists are lit. Do not copy shadow maps,
+        // mesh buffers, render targets, or any owning renderer structures.
+        firstGeneratedView->litInfo.baseTechType =
+            secondGeneratedView->litInfo.baseTechType;
+
+        firstGeneratedView->litInfo.viewInfo =
+            firstGeneratedView;
+
+        firstGeneratedView->litInfo.light =
+            secondGeneratedView->litInfo.light;
+
+        firstGeneratedView->litInfo.cameraView =
+            secondGeneratedView->litInfo.cameraView;
+
+        firstGeneratedView->decalInfo.baseTechType =
+            secondGeneratedView->decalInfo.baseTechType;
+
+        firstGeneratedView->decalInfo.viewInfo =
+            firstGeneratedView;
+
+        firstGeneratedView->decalInfo.light =
+            secondGeneratedView->decalInfo.light;
+
+        firstGeneratedView->decalInfo.cameraView =
+            secondGeneratedView->decalInfo.cameraView;
+
+        firstGeneratedView->emissiveInfo.baseTechType =
+            secondGeneratedView->emissiveInfo.baseTechType;
+
+        firstGeneratedView->emissiveInfo.viewInfo =
+            firstGeneratedView;
+
+        firstGeneratedView->emissiveInfo.light =
+            secondGeneratedView->emissiveInfo.light;
+
+        firstGeneratedView->emissiveInfo.cameraView =
+            secondGeneratedView->emissiveInfo.cameraView;
+
+        for (std::uint32_t originComponent = 0;
+             originComponent < 4u;
+             ++originComponent)
+        {
+            const float firstEyeOrigin =
+                firstGeneratedView->
+                    viewParms.origin[originComponent];
+
+            firstGeneratedView->
+                litInfo.viewOrigin[originComponent] =
+                    firstEyeOrigin;
+
+            firstGeneratedView->
+                decalInfo.viewOrigin[originComponent] =
+                    firstEyeOrigin;
+
+            firstGeneratedView->
+                emissiveInfo.viewOrigin[originComponent] =
+                    firstEyeOrigin;
+        }
+
+        firstGeneratedView->pointLightCount =
+            secondGeneratedView->pointLightCount;
+
+        firstGeneratedView->emissiveSpotLightIndex =
+            secondGeneratedView->emissiveSpotLightIndex;
+
+        firstGeneratedView->emissiveSpotLightCount =
+            secondGeneratedView->emissiveSpotLightCount;
+
+        firstGeneratedView->needsFloatZ =
+            secondGeneratedView->needsFloatZ;
+
+        for (std::uint32_t pointLightIndex = 0;
+             pointLightIndex < 4u;
+             ++pointLightIndex)
+        {
+            GfxDrawSurfListInfo* firstPointLightInfo =
+                &firstGeneratedView->
+                    pointLightPartitions[pointLightIndex].
+                    info;
+
+            const GfxDrawSurfListInfo* secondPointLightInfo =
+                &secondGeneratedView->
+                    pointLightPartitions[pointLightIndex].
+                    info;
+
+            firstPointLightInfo->baseTechType =
+                secondPointLightInfo->baseTechType;
+
+            firstPointLightInfo->viewInfo =
+                firstGeneratedView;
+
+            firstPointLightInfo->light =
+                secondPointLightInfo->light;
+
+            firstPointLightInfo->cameraView =
+                secondPointLightInfo->cameraView;
+
+            for (std::uint32_t originComponent = 0;
+                 originComponent < 4u;
+                 ++originComponent)
+            {
+                firstPointLightInfo->
+                    viewOrigin[originComponent] =
+                        firstGeneratedView->
+                            viewParms.origin[originComponent];
+            }
+        }
+
+        static bool loggedVrSafeLightingMetadataSync = false;
+
+        if (!loggedVrSafeLightingMetadataSync)
+        {
+            Com_Printf(
+                0,
+                "[VR] Diagnostic: synchronized draw-list lighting metadata "
+                "without copying shadow or mesh resources.\n");
+
+            loggedVrSafeLightingMetadataSync = true;
+        }
+
+        static bool loggedVrSharedSecondEyeDrawSurfs = false;
+
+        if (!loggedVrSharedSecondEyeDrawSurfs)
+        {
+            Com_Printf(
+                0,
+                "[VR] Diagnostic: reused the second-generated eye's "
+                "draw-surface references for the first eye.\n");
+
+            loggedVrSharedSecondEyeDrawSurfs = true;
+        }
+
+        const std::uint32_t savedViewInfoIndex =
+            data->viewInfoIndex;
+
         for (std::uint32_t viewInfoIndex = 0;
              viewInfoIndex < data->viewInfoCount;
              ++viewInfoIndex)
         {
+            // R_GenerateSortedDrawSurfs leaves this field set to the final
+            // generated view. Some backend paths still consult the global
+            // current-view index instead of only the explicit viewInfo
+            // argument, so update it before drawing each eye.
+            backEndData->viewInfoIndex =
+                viewInfoIndex;
+
             RB_Draw3DInternal(
                 &data->viewInfo[viewInfoIndex]);
+        }
+
+        backEndData->viewInfoIndex =
+            savedViewInfoIndex;
+
+        static bool loggedVrPerEyeBackendViewIndex = false;
+
+        if (!loggedVrPerEyeBackendViewIndex)
+        {
+            Com_Printf(
+                0,
+                "[VR] Updated backend current-view index "
+                "for each stereo eye.\n");
+
+            loggedVrPerEyeBackendViewIndex = true;
         }
 
         static bool loggedSameFrameViews = false;
