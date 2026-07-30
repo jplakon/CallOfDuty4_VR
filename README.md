@@ -9,7 +9,7 @@ This project is based on [KisakCOD](https://github.com/SwagSoftware/KisakCOD).
 It contains no Call of Duty game data and requires a legitimately installed
 copy of the original game.
 
-[Get the current precompiled beta and supporter updates](PATREON_URL_HERE)
+[Get the current precompiled beta and supporter updates](https://www.patreon.com/c/J_Play)
 
 ## Current status
 
