@@ -3,6 +3,7 @@
 #endif
 
 #include "turret.h"
+#include "vr/vr_openxr.h"
 #include <qcommon/mem_track.h>
 #include <bgame/bg_public.h>
 #include "g_main.h"
@@ -74,7 +75,91 @@ void __cdecl Turret_FillWeaponParms(const gentity_s *ent, const gentity_s *activ
     if (client)
     {
         G_GetPlayerViewOrigin(&client->ps, viewOrigin);
-        G_GetPlayerViewDirection(activator, wp->forward, wp->right, wp->up);
+
+        float vrAimPitch = 0.0f;
+        float vrAimYaw = 0.0f;
+
+        const bool fixedScopedTurret =
+            BG_GetWeaponDef(
+                ent->s.weapon)->overlayInterface ==
+            WEAPOVERLAYINTERFACE_TURRETSCOPE;
+
+        // KISAK_SP_VR_FIXED_SCOPED_TURRET_CONTROLS_V3_FIRE_RAY
+        // KISAK_SP_VR_FIXED_SCOPED_TURRET_RUNTIME_V4
+        // The previous revision obtained the fused fixed-scope pitch/yaw but
+        // discarded both values and fired from the turret model's delayed
+        // gun angles. Use the actual fused ray directly for this Barrett.
+        const bool vrFixedScopeAimAvailable =
+            fixedScopedTurret &&
+            VR_GetFixedScopedTurretAim(
+                &vrAimPitch,
+                &vrAimYaw);
+
+        if (vrFixedScopeAimAvailable)
+        {
+            angles[0] = vrAimPitch;
+            angles[1] = vrAimYaw;
+            angles[2] = 0.0f;
+
+            AngleVectors(
+                angles,
+                wp->forward,
+                wp->right,
+                wp->up);
+
+            static bool loggedVrFixedScopeDirectShotRay = false;
+
+            if (!loggedVrFixedScopeDirectShotRay)
+            {
+                Com_Printf(
+                    0,
+                    "[VR][FIXED SCOPE] Built the fixed Barrett shot "
+                    "directly from fused HMD pitch %.2f yaw %.2f.\n",
+                    vrAimPitch,
+                    vrAimYaw);
+
+                loggedVrFixedScopeDirectShotRay = true;
+            }
+        }
+        else
+        {
+            const bool vrMountedAimAvailable =
+                !fixedScopedTurret &&
+                VR_GetRightControllerMountedWeaponAim(
+                    &vrAimPitch,
+                    &vrAimYaw);
+
+            if (vrMountedAimAvailable)
+            {
+                // Ordinary mounted guns retain their native mechanical
+                // limits and their existing right-controller behavior.
+                angles[0] =
+                    ent->r.currentAngles[0] +
+                    ent->s.lerp.u.turret.gunAngles[0];
+
+                angles[1] =
+                    ent->r.currentAngles[1] +
+                    ent->s.lerp.u.turret.gunAngles[1];
+
+                angles[2] =
+                    ent->r.currentAngles[2];
+
+                AngleVectors(
+                    angles,
+                    wp->forward,
+                    wp->right,
+                    wp->up);
+            }
+            else
+            {
+                G_GetPlayerViewDirection(
+                    activator,
+                    wp->forward,
+                    wp->right,
+                    wp->up);
+            }
+        }
+
         v11 = viewOrigin[1];
         v12 = (float)(tagMat[10] - viewOrigin[1]);
         v13 = viewOrigin[2];
@@ -283,7 +368,59 @@ void turret_clientaim(gentity_s *self, gentity_s *other)
     iassert(self->r.ownerNum.isDefined() && self->r.ownerNum.entnum() == other->s.number);
 
     gclient_s *client = other->client;
-    double pitchView = client->ps.viewangles[0];
+    float pitchView = client->ps.viewangles[0];
+    float yawView = client->ps.viewangles[1];
+
+    // KISAK_SP_VR_MOUNTED_TURRET_AIM_V1
+    // KISAK_SP_VR_FIXED_SCOPED_TURRET_CONTROLS_V3_AIM
+    // A fixed scope's binocular crosshair represents the HMD-center camera
+    // ray.  Other mounted weapons retain their live right-controller aim.
+    const bool fixedScopedTurret =
+        BG_GetWeaponDef(
+            self->s.weapon)->overlayInterface ==
+        WEAPOVERLAYINTERFACE_TURRETSCOPE;
+
+    const bool vrMountedAim =
+        fixedScopedTurret
+            ? VR_GetFixedScopedTurretAim(
+                  &pitchView,
+                  &yawView)
+            : VR_GetRightControllerMountedWeaponAim(
+                  &pitchView,
+                  &yawView);
+
+    if (vrMountedAim)
+    {
+        if (fixedScopedTurret)
+        {
+            static bool loggedVrFixedScopedTurretAim = false;
+
+            if (!loggedVrFixedScopedTurretAim)
+            {
+                Com_Printf(
+                    0,
+                    "[VR][FIXED SCOPE] Fixed Barrett aim follows the "
+                    "fused HMD crosshair; ordinary mounted guns still "
+                    "follow the right controller.\n");
+
+                loggedVrFixedScopedTurretAim = true;
+            }
+        }
+        else
+        {
+            static bool loggedVrMountedTurretAim = false;
+
+            if (!loggedVrMountedTurretAim)
+            {
+                Com_Printf(
+                    0,
+                    "[VR][TURRET] Mounted machine-gun aim follows the "
+                    "live right controller; head-look remains independent.\n");
+
+                loggedVrMountedTurretAim = true;
+            }
+        }
+    }
 
     client->ps.viewlocked = PLAYERVIEWLOCK_FULL;
     client->ps.viewlocked_entNum = self->s.number;
@@ -297,7 +434,9 @@ void turret_clientaim(gentity_s *self, gentity_s *other)
     if (pitchDeg < ti->arcmin[0]) pitchDeg = ti->arcmin[0];
     self->s.lerp.u.turret.gunAngles[0] = pitchDeg;
 
-    double yawView = client->ps.viewangles[1];
+    // KISAK_SP_VR_FIXED_SCOPED_TURRET_CONTROLS_V3_YAW
+    // yawView is the fixed scope's HMD ray, the ordinary mounted-weapon
+    // controller ray, or the native view-angle fallback selected above.
     double baseYaw = yawView - self->r.currentAngles[1];
     float normDy = (float)(baseYaw * (1.0 / 360.0));
     float fracDy = normDy - floorf(normDy + 0.5f);
@@ -329,6 +468,37 @@ void __cdecl turret_shoot_internal(gentity_s *self, gentity_s *other)
         if (other->client)
         {
             Fire_Lead(self, other, 0);
+
+            // KISAK_SP_VR_FIXED_SCOPED_TURRET_CONTROLS_V3_SHOT
+            // KISAK_SP_VR_FIXED_SCOPED_TURRET_RUNTIME_V4
+            // Fire_Lead dispatches either a hitscan bullet or a projectile
+            // according to the mission weapon definition. Report that exact
+            // type without claiming that an impact has already occurred.
+            const WeaponDef *firedWeaponDef =
+                BG_GetWeaponDef(
+                    self->s.weapon);
+
+            if (VR_IsInitialized() &&
+                firedWeaponDef->overlayInterface ==
+                    WEAPOVERLAYINTERFACE_TURRETSCOPE)
+            {
+                static bool loggedVrFixedScopeWeaponDispatch = false;
+
+                if (!loggedVrFixedScopeWeaponDispatch)
+                {
+                    Com_Printf(
+                        0,
+                        "[VR][FIXED SCOPE] Dispatched fixed-scope "
+                        "weapon '%s' with type %d from the corrected "
+                        "fused ray.\n",
+                        firedWeaponDef->szInternalName,
+                        static_cast<int>(
+                            firedWeaponDef->weapType));
+
+                    loggedVrFixedScopeWeaponDispatch = true;
+                }
+            }
+
             other->client->ps.viewlocked = PLAYERVIEWLOCK_WEAPONJITTER;
         }
         else
@@ -362,11 +532,50 @@ void __cdecl turret_track(gentity_s *self, gentity_s *other)
     {
         turretInfo->fireTime = 0;
         client = other->client;
-        if ((client->ps.pm_flags & 0x800) != 0 || (client->buttons & 1) == 0)
+
+        // KISAK_SP_VR_MOUNTED_WEAPON_TRIGGER_BOOTSTRAP_V1
+        // The normal SP fire bridge deliberately waits for a rendered
+        // first-person weapon pose.  Turrets suppress that viewmodel, so a
+        // mission that starts on a turret needs this narrowly scoped raw
+        // trigger fallback.
+        bool vrMountedAttackHeld = false;
+
+        const bool vrMountedAttackAvailable =
+            VR_GetRightControllerMountedWeaponTrigger(
+                &vrMountedAttackHeld);
+
+        const bool nativeAttackHeld =
+            (client->buttons & 1) != 0;
+
+        const bool mountedAttackHeld =
+            nativeAttackHeld ||
+            (vrMountedAttackAvailable &&
+             vrMountedAttackHeld);
+
+        if (vrMountedAttackHeld &&
+            !nativeAttackHeld)
+        {
+            static bool loggedVrMountedTriggerBootstrap = false;
+
+            if (!loggedVrMountedTriggerBootstrap)
+            {
+                Com_Printf(
+                    0,
+                    "[VR][TURRET] Routed the raw right trigger directly "
+                    "to the mounted weapon before a viewmodel command "
+                    "was available.\n");
+
+                loggedVrMountedTriggerBootstrap = true;
+            }
+        }
+
+        if ((client->ps.pm_flags & 0x800) != 0 ||
+            !mountedAttackHeld)
         {
             turretInfo->triggerDown = 0;
         }
-        else if (weapDef->fireType != WEAPON_FIRETYPE_SINGLESHOT || !turretInfo->triggerDown)
+        else if (weapDef->fireType != WEAPON_FIRETYPE_SINGLESHOT ||
+                 !turretInfo->triggerDown)
         {
             turretInfo->triggerDown = 1;
             turretInfo->fireTime = weapDef->iFireTime;

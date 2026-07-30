@@ -889,6 +889,8 @@ void CG_ReachedCheckpoint()
     const char *v1; // r3
 
     v0 = SEH_LocalizeTextMessage("EXE_CHECKPOINT_REACHED", "game message", LOCMSG_SAFE);
+    Cbuf_AddText(0, "savegame_lastcommit\n");
+    Com_Printf(10, "[VR][SAVE] Queued committed checkpoint for PC disk write.\n");
     v1 = va("^7%s", v0);
     CG_GameMessage(v1, 17);
 }

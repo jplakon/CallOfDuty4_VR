@@ -1,0 +1,87 @@
+name: Bug report
+description: Report a reproducible KisakCOD VR problem
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Death From Above is unsupported in the current beta. For another issue,
+        complete every field and attach the relevant console log excerpt.
+  - type: input
+    id: version
+    attributes:
+      label: Mod version and source commit
+      description: Copy both from SOURCE.txt.
+      placeholder: v0.9.0-beta.1 / full commit hash
+    validations:
+      required: true
+  - type: input
+    id: headset
+    attributes:
+      label: Headset and controllers
+      placeholder: Meta Quest 3 with Touch Plus controllers
+    validations:
+      required: true
+  - type: input
+    id: runtime
+    attributes:
+      label: OpenXR runtime and connection
+      placeholder: Virtual Desktop OpenXR over Wi-Fi
+    validations:
+      required: true
+  - type: input
+    id: hardware
+    attributes:
+      label: GPU, CPU, and Windows version
+      placeholder: RTX 3080 Ti / CPU model / Windows 11
+    validations:
+      required: true
+  - type: input
+    id: mission
+    attributes:
+      label: Mission and checkpoint
+      placeholder: One Shot, One Kill / helicopter escape
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Load...
+        2. Equip...
+        3. Press...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Relevant main/console.log excerpt
+      render: text
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I reproduced this with the normal packaged launcher.
+          required: true
+        - label: This is not the unsupported Death From Above mission.
+          required: true
+        - label: I searched existing issues for the same problem.
+          required: true

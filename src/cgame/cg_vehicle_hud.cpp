@@ -11,6 +11,7 @@
 #include <xanim/xanim.h>
 #include <script/scr_const.h>
 #include "cg_ents.h"
+#include "vr/vr_openxr.h"
 
 const dvar_t *vehHudReticlePipOnAStickCenterCircle;
 const dvar_t *vehHudReticlePipOnAStickMovingCircle;
@@ -354,7 +355,56 @@ int __cdecl WorldDirToScreenPos(int localClientNum, const float *worldDir, float
             "%s\n\t(localClientNum) = %i",
             "(localClientNum == 0)",
             localClientNum);
-    AnglesToAxis(cgArray[0].refdefViewAngles, axis);
+    // KISAK_SP_JAVELIN_CONTROLLER_LOCK_FIX
+    // Keep the green offscreen arrow and square in the same aiming frame as
+    // the server's native target_isincircle lock test.
+    float targetViewAngles[3] = {
+        cgArray[0].refdefViewAngles[0],
+        cgArray[0].refdefViewAngles[1],
+        cgArray[0].refdefViewAngles[2],
+    };
+
+    // KISAK_SP_STINGER_CONTROLLER_LOCK_FIX
+    const unsigned int vrLockOnWeaponIndex =
+        BG_GetViewmodelWeaponIndex(
+            &cgArray[0].predictedPlayerState);
+    WeaponDef *vrLockOnWeaponDef =
+        BG_GetWeaponDef(vrLockOnWeaponIndex);
+    const bool vrLockOnWeaponActive =
+        VR_IsInitialized() &&
+        vrLockOnWeaponDef != nullptr &&
+        (CG_JavelinADS(localClientNum) ||
+         vrLockOnWeaponDef->requireLockonToFire) &&
+        cgArray[0].predictedPlayerState.fWeaponPosFrac > 0.0f;
+
+    if (vrLockOnWeaponActive)
+    {
+        float vrJavelinPitch = 0.0f;
+        float vrJavelinYaw = 0.0f;
+        bool ignoredVrAttackPressed = false;
+
+        if (VR_GetRightControllerWeaponCommand(
+                &vrJavelinPitch,
+                &vrJavelinYaw,
+                &ignoredVrAttackPressed))
+        {
+            targetViewAngles[0] = vrJavelinPitch;
+            targetViewAngles[1] = vrJavelinYaw;
+            targetViewAngles[2] = 0.0f;
+
+            static bool loggedVrJavelinHudProjection = false;
+            if (!loggedVrJavelinHudProjection)
+            {
+                Com_Printf(
+                    0,
+                    "[VR][JAVELIN] Target arrows and squares now follow "
+                    "the tracked launcher direction.\n");
+                loggedVrJavelinHudProjection = true;
+            }
+        }
+    }
+
+    AnglesToAxis(targetViewAngles, axis);
     MatrixTransposeTransformVector(worldDir, (const mat3x3&)axis, transformed);
     v5 = (float)(cls.vidConfig.aspectRatioWindow * (float)480.0);
     if (transformed[0] <= 0.0)
@@ -502,6 +552,7 @@ LABEL_16:
     return result;
 }
 
+// KISAK_SP_JAVELIN_VEHICLE_TARGET_FIX
 void __cdecl CG_DrawVehicleTargets(int localClientNum, rectDef_s *rect, float *color, Material *defaultMaterial)
 {
     float *v6; // r29
@@ -541,12 +592,47 @@ void __cdecl CG_DrawVehicleTargets(int localClientNum, rectDef_s *rect, float *c
             "%s\n\t(localClientNum) = %i",
             "(localClientNum == 0)",
             localClientNum);
-    v6 = &cgArray[0].targets[0].offset[2];
-    do
+    // KISAK_SP_JAVELIN_VR_COMPLETION_FIX
+    const bool vrJavelinActive =
+        VR_IsInitialized() && CG_JavelinADS(localClientNum);
+    const playerState_s *vrJavelinPlayerState =
+        &cgArray[0].predictedPlayerState;
+    const unsigned int vrLockOnWeaponIndex =
+        BG_GetViewmodelWeaponIndex(vrJavelinPlayerState);
+    WeaponDef *vrLockOnWeaponDef =
+        BG_GetWeaponDef(vrLockOnWeaponIndex);
+    const bool vrLockOnWeaponActive =
+        VR_IsInitialized() &&
+        vrLockOnWeaponDef != nullptr &&
+        vrLockOnWeaponDef->requireLockonToFire &&
+        vrJavelinPlayerState->fWeaponPosFrac > 0.0f;
+
+    // The recovered pointer terminator used a field inside shellshock,
+    // so this loop walked beyond targets[32]. Iterate the declared array only.
+    for (int targetIndex = 0; targetIndex < 32; ++targetIndex)
     {
-        if (*((unsigned int *)v6 - 3) != ENTITYNUM_NONE && (((unsigned int)v6[3] & 2) == 0 || CG_JavelinADS(localClientNum)))
+        targetInfo_t *target = &cgArray[0].targets[targetIndex];
+        v6 = &target->offset[2];
+
+        // Once acquisition starts, draw only the target chosen by the native
+        // lock script. Before that, valid on-screen candidates remain visible.
+        if (vrJavelinActive &&
+            (vrJavelinPlayerState->weapLockFlags & 1) != 0 &&
+            vrJavelinPlayerState->weapLockedEntnum != ENTITYNUM_NONE &&
+            target->entNum != vrJavelinPlayerState->weapLockedEntnum)
         {
-            Entity = CG_GetEntity(localClientNum, *((unsigned int *)v6 - 3));
+            continue;
+        }
+
+        // CG_GetEntity indexes the client-entity array directly. Reject stale
+        // or corrupt target slots before allowing that lookup.
+        if (target->entNum >= 0 &&
+            target->entNum < ENTITYNUM_NONE &&
+            ((target->flags & 2) == 0 ||
+             CG_JavelinADS(localClientNum) ||
+             vrLockOnWeaponActive))
+        {
+            Entity = CG_GetEntity(localClientNum, target->entNum);
             if (!Entity)
                 MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\cgame\\cg_vehicle_hud.cpp", 209, 0, "%s", "targetEnt");
             v29 = *(v6 - 2) + Entity->pose.origin[0];
@@ -557,11 +643,39 @@ void __cdecl CG_DrawVehicleTargets(int localClientNum, rectDef_s *rect, float *c
             v31 = (float)v8 - cgArray[0].refdef.vieworg[2];
             WorldDirToScreenPos(localClientNum, &v29, screenpos);
             v9 = ClampScreenPosToEdges_0(localClientNum, screenpos);
-            if (v9 && (v13 = *((unsigned int *)v6 + 2), v13 != -1) || (v13 = *((unsigned int *)v6 + 1), v13 != -1))
+
+            // Four BMPs are registered on Bog. Their stock off-screen arrows
+            // obscure the VR sight and appear to multiply as the launcher
+            // moves, so show candidates only after they enter the optic.
+            if (vrJavelinActive && v9 != CLIP_NONE)
+                continue;
+
+            // The recovered code registered the selected server material but
+            // discarded its pointer, then submitted the menu's null fallback.
+            // Preserve the registered material and skip only if neither source
+            // can provide a drawable material.
+            v10 = defaultMaterial;
+            const int materialIndex =
+                v9 != CLIP_NONE && target->offscreenMaterialIndex != -1
+                    ? target->offscreenMaterialIndex
+                    : target->materialIndex;
+
+            if (materialIndex != -1 &&
+                CG_ServerMaterialName(
+                    localClientNum,
+                    materialIndex,
+                    v34,
+                    0x40u))
             {
-                if (CG_ServerMaterialName(localClientNum, v13, v34, 0x40u))
+                Material *registeredMaterial =
                     Material_RegisterHandle(v34, 7);
+                if (registeredMaterial)
+                    v10 = registeredMaterial;
             }
+
+            if (!v10)
+                continue;
+
             v15 = (float)(vehHudTargetSize->current.value * (float)0.5);
             if (v9 == CLIP_NONE || *((unsigned int *)v6 + 2) == -1)
             {
@@ -578,7 +692,7 @@ void __cdecl CG_DrawVehicleTargets(int localClientNum, rectDef_s *rect, float *c
                     1.0,
                     1.0,
                     color,
-                    defaultMaterial); // KISAKTODO: args sus
+                    v10);
             }
             else
             {
@@ -605,11 +719,10 @@ void __cdecl CG_DrawVehicleTargets(int localClientNum, rectDef_s *rect, float *c
                     rect->vertAlign,
                     angle,
                     color,
-                    defaultMaterial); // KISAKTODO: sus args
+                    v10);
             }
         }
-        v6 += 7;
-    } while ((int)v6 < (int)&cgArray[0].shellshock.loopEndTime);
+    }
 }
 
 void __cdecl CG_DrawJavelinTargets(int localClientNum, rectDef_s *rect, float *color, Material *defaultMaterial)

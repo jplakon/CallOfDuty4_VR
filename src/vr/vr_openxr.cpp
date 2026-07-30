@@ -1,4 +1,7 @@
 #include "vr/vr_openxr.h"
+#include "client/client.h"
+
+void __cdecl UI_MouseEvent(int localClientNum, int x, int y);
 #include "vr/vr_d3d9_capture.h"
 #include "vr/vr_d3d9ex_interop_probe.h"
 #include "gfx_d3d/r_init.h"
@@ -16,8 +19,10 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 
@@ -50,12 +55,14 @@ XrAction g_vrTriggerValueAction = XR_NULL_HANDLE;
 XrAction g_vrSqueezeValueAction = XR_NULL_HANDLE;
 XrAction g_vrMoveThumbstickAction = XR_NULL_HANDLE;
 XrAction g_vrTurnThumbstickAction = XR_NULL_HANDLE;
+XrAction g_vrRightThumbrestTouchAction = XR_NULL_HANDLE;
 XrAction g_vrJumpButtonAction = XR_NULL_HANDLE;
 XrAction g_vrUseReloadButtonAction = XR_NULL_HANDLE;
 XrAction g_vrSprintButtonAction = XR_NULL_HANDLE;
 XrAction g_vrMeleeButtonAction = XR_NULL_HANDLE;
 XrAction g_vrStanceButtonAction = XR_NULL_HANDLE;
 XrAction g_vrNextWeaponButtonAction = XR_NULL_HANDLE;
+XrAction g_vrMenuButtonAction = XR_NULL_HANDLE;
 XrAction g_vrHapticOutputAction = XR_NULL_HANDLE;
 
 std::array<XrPath, kVrControllerCount>
@@ -127,6 +134,10 @@ float g_vrLeftControllerForegripPosition[3] = {};
 float g_vrTwoHandWeaponBlend = 0.0f;
 bool g_vrTwoHandWeaponTargetActive = false;
 
+bool g_vrPoseFocusAimPoseHeld = false;
+std::uint32_t g_vrPoseFocusAimEngageFrames = 0u;
+std::uint32_t g_vrPoseFocusAimReleaseFrames = 0u;
+
 XrVector3f g_vrRightControllerFilteredGripPosition = {
     0.0f,
     0.0f,
@@ -143,6 +154,17 @@ XrQuaternionf g_vrRightControllerFilteredAimOrientation = {
 float g_vrRightControllerWeaponPosition[3] = {};
 float g_vrRightControllerWeaponAxis[3][3] = {};
 
+// KISAK_SP_VR_MOUNTED_TURRET_AIM_V1
+// The raw controller axis above is HMD-local.  Snapshot the completed
+// camera world axis so mounted weapons can recover live controller aim even
+// when CoD4 suppresses the ordinary first-person viewmodel.
+float g_vrMountedWeaponCameraAxisWorld[3][3] = {
+    {1.0f, 0.0f, 0.0f},
+    {0.0f, 1.0f, 0.0f},
+    {0.0f, 0.0f, 1.0f},
+};
+bool g_vrMountedWeaponCameraAxisWorldValid = false;
+
 float g_vrRightControllerWeaponBasePosition[3] = {};
 float g_vrRightControllerWeaponBaseAxis[3][3] = {};
 
@@ -154,6 +176,32 @@ float g_vrRightControllerFinalWeaponForward[3] = {
     0.0f,
     0.0f,
 };
+
+// KISAK_VR_SCOPE_BALLISTIC_ALIGNMENT_V1
+// Final rendered weapon basis relative to the current HMD camera.  The
+// physical scope consumes this exact post-attachment, post-two-hand basis.
+float g_vrRightControllerFinalWeaponAxisCameraLocal[3][3] = {};
+bool g_vrRightControllerFinalWeaponAxisCameraLocalValid = false;
+
+// KISAK_VR_RIFLE_ATTACHED_SCOPE_V1
+// The viewmodel publishes its optic position relative to the tracked grip
+// in the final rendered weapon basis.  The same pose also supplies the
+// authoritative world-space scope ray used for ballistic convergence.
+float g_vrPhysicalSniperScopeOffsetWeaponLocal[3] = {};
+bool g_vrPhysicalSniperScopeOffsetWeaponLocalValid = false;
+
+float g_vrPhysicalSniperScopeOriginWorld[3] = {};
+float g_vrPhysicalSniperScopeForwardWorld[3] = {
+    1.0f,
+    0.0f,
+    0.0f,
+};
+float g_vrPhysicalSniperScopeAxisWorld[3][3] = {
+    {1.0f, 0.0f, 0.0f},
+    {0.0f, 1.0f, 0.0f},
+    {0.0f, 0.0f, 1.0f},
+};
+bool g_vrPhysicalSniperScopePoseWorldValid = false;
 
 bool g_vrRightControllerFinalWeaponAimValid = false;
 
@@ -217,10 +265,69 @@ bool g_vrLoggedFirstTestFrame = false;
 
 ComPtr<ID3D11VertexShader> g_vrBlitVertexShader;
 ComPtr<ID3D11PixelShader> g_vrBlitPixelShader;
+ComPtr<ID3D11PixelShader> g_vrScopePixelShader;
+ComPtr<ID3D11Buffer> g_vrScopeConstantBuffer;
+ComPtr<ID3D11Buffer> g_vrCompositorConstantBuffer;
+
+// KISAK_SP_VR_NATIVE_FSR_COMPOSITOR_V1
+ComPtr<ID3D11PixelShader> g_vrFsrEasuPixelShader;
+ComPtr<ID3D11PixelShader> g_vrFsrRcasPixelShader;
+ComPtr<ID3D11Buffer> g_vrFsrConstantBuffer;
+ComPtr<ID3D11Texture2D> g_vrFsrIntermediateTexture;
+ComPtr<ID3D11RenderTargetView> g_vrFsrIntermediateTarget;
+ComPtr<ID3D11ShaderResourceView> g_vrFsrIntermediateView;
+
 ComPtr<ID3D11InputLayout> g_vrBlitInputLayout;
 std::array<ComPtr<ID3D11Buffer>, 2>
     g_vrBlitVertexBuffers;
+
+// Both eyes use this full-texture buffer while a UI menu is active.
+// A centered viewport preserves the captured desktop aspect ratio.
+ComPtr<ID3D11Buffer> g_vrMenuBlitVertexBuffer;
+
+// Active SP pause UI is painted into the right half of the SBS
+// backbuffer. Sample only that completed eye for a clean mono screen.
+ComPtr<ID3D11Buffer> g_vrPauseMenuBlitVertexBuffer;
+
 ComPtr<ID3D11SamplerState> g_vrBlitSampler;
+bool g_vrLoggedMenuComfortScreen = false;
+
+// KISAK_SP_VR_COMPOSITOR_BRIGHTNESS_V1
+float g_vrCompositorBrightness = 1.0f;
+
+bool g_vrFsrEnabled = true;
+bool g_vrFsrShadersAvailable = false;
+float g_vrFsrSharpness = 0.60f;
+float g_vrOutputScale = 1.0f;
+bool g_vrLoggedFirstFsrFrame = false;
+bool g_vrLoggedFsrFallback = false;
+
+std::mutex g_vrScopeStateMutex;
+bool g_vrScopeActive = false;
+float g_vrScopeAdsFraction = 0.0f;
+float g_vrScopeAdsFovDegrees = 65.0f;
+bool g_vrLoggedFirstPhysicalScopeDraw = false;
+
+// KISAK_SP_VR_FIXED_SCOPED_TURRET_VIEW_FIX_V1
+bool g_vrFixedScopedTurretActive = false;
+bool g_vrLoggedFixedScopedTurretCompositor = false;
+
+// KISAK_SP_VR_FIXED_SCOPED_TURRET_RUNTIME_V4
+float g_vrFixedScopedTurretZoomFovDegrees = 20.0f;
+float g_vrFixedScopedTurretMaximumZoomFovDegrees = 20.0f;
+bool g_vrLoggedFixedScopedTurretVisibleZoom = false;
+bool g_vrLoggedFixedScopedTurretFsrBypass = false;
+
+float g_vrScopeForwardCalibrationMeters = 0.0f;
+float g_vrScopeLeftCalibrationMeters = 0.0f;
+float g_vrScopeUpCalibrationMeters = 0.0f;
+float g_vrScopeLensRadiusMeters = 0.032f;
+// KISAK_VR_DEDICATED_SCOPE_CAMERA_V2
+int g_vrScopeCaptureSizePixels = 1024;
+bool g_vrLoggedDedicatedScopeLayout = false;
+bool g_vrLoggedDedicatedScopeLayoutMissing = false;
+bool g_vrLoggedDedicatedScopeSample = false;
+
 constexpr std::uint32_t kVrStereoEyeCount = 2u;
 
 ComPtr<ID3D11Texture2D>
@@ -236,6 +343,39 @@ std::vector<std::uint8_t>
     g_vrCapturedStereoUploadPixels;
 bool g_vrLoggedFirstStereoUpload = false;
 bool g_vrLoggedCaptureBufferHandoff = false;
+
+// KISAK_SP_VR_GPU_SHARED_BRIDGE_V1
+struct VrRetiredSharedFrame
+{
+    bool active = false;
+    std::uint32_t slotIndex = 0u;
+    std::uint64_t serial = 0u;
+    ComPtr<ID3D11Texture2D> texture;
+    ComPtr<ID3D11ShaderResourceView> view;
+    ComPtr<ID3D11Query> completionQuery;
+};
+
+std::array<
+    VrRetiredSharedFrame,
+    kVrD3D9SharedFrameSlotCount>
+    g_vrRetiredSharedFrames = {};
+
+bool g_vrCurrentSharedFrameActive = false;
+std::uint32_t g_vrCurrentSharedSlot = 0u;
+std::uint64_t g_vrCurrentSharedGeneration = 0u;
+std::uint64_t g_vrCurrentSharedSerial = 0u;
+bool g_vrLoggedFirstSharedFrameOpen = false;
+bool g_vrLoggedSharedConsumerFailure = false;
+
+std::array<XrView, kVrStereoEyeCount>
+    g_vrPublishedRenderViews = {};
+
+std::array<XrView, kVrStereoEyeCount>
+    g_vrCapturedStereoViews = {};
+
+bool g_vrPublishedRenderViewsValid = false;
+bool g_vrCapturedStereoViewsValid = false;
+bool g_vrLoggedCapturedPoseMatch = false;
 
 std::mutex g_vrHeadOrientationMutex;
 
@@ -278,23 +418,42 @@ bool g_vrHeadOrientationValid = false;
 bool g_vrLoggedFirstHeadPose = false;
 bool g_vrLoggedFirstCameraApply = false;
 
+// Horizontal physical turning already transferred into clients[0]
+// body yaw. Future HMD publications remove this amount from the
+// camera-local pose so body alignment does not rotate the visible view.
+float g_vrTransferredBodyYawDegrees = 0.0f;
+
 float g_vrLeftThumbstick[2] = {};
 bool g_vrLeftThumbstickValid = false;
 
 float g_vrRightThumbstickX = 0.0f;
+float g_vrRightThumbstickY = 0.0f;
 bool g_vrRightThumbstickValid = false;
 bool g_vrSnapTurnArmed = true;
+bool g_vrRightStickUtilityArmed = true;
+bool g_vrRightThumbrestTouched = false;
+bool g_vrModifierDpadArmed = true;
 
-bool g_vrLeftTriggerAdsHeld = false;
+// KISAK_SP_VR_POSE_FOCUS_AIM_V1
+// ADS is published by the two-hand eye-level pose detector instead of the
+// left index trigger, leaving that trigger available for a separate action.
+bool g_vrPoseFocusAimHeld = false;
+
+// KISAK_SP_VR_SEPARATE_USE_RELOAD_V1
+// Keep pickup/activate and reload on independent usercmd bits.
+bool g_vrLeftTriggerReloadHeld = false;
 bool g_vrRightAJumpHeld = false;
-bool g_vrLeftXUseReloadHeld = false;
+bool g_vrLeftXUseHeld = false;
 
 bool g_vrLeftStickSprintHeld = false;
 bool g_vrRightStickMeleeHeld = false;
 bool g_vrRightBStanceHeld = false;
 
-bool g_vrRightGripFragHeld = false;
+bool g_vrRightGripOffhandHeld = false;
 bool g_vrLeftYNextWeaponHeld = false;
+
+bool g_vrLeftMenuHeld = false;
+bool g_vrLeftMenuWasHeld = false;
 
 
 std::vector<XrViewConfigurationView> g_vrViewConfigs;
@@ -332,8 +491,6 @@ struct VrEyeSwapchain
 
     std::vector<XrSwapchainImageD3D11KHR> images;
     std::vector<ComPtr<ID3D11RenderTargetView>> renderTargetViews;
-    std::vector<ComPtr<ID3D11Texture2D>> depthTextures;
-    std::vector<ComPtr<ID3D11DepthStencilView>> depthStencilViews;
 };
 
 std::vector<VrEyeSwapchain> g_vrEyeSwapchains;
@@ -822,11 +979,70 @@ struct VrBlitVertex
     float uv[2];
 };
 
+struct VrScopeConstants
+{
+    float lens[4];
+    float basis[4];
+    float sample[4];
+    float bounds[4];
+    float viewport[4];
+};
+
+struct VrCompositorConstants
+{
+    float settings[4];
+    float fixedScope[4];
+
+    // KISAK_SP_VR_FIXED_SCOPED_TURRET_RUNTIME_V4
+    // xy scale source rays around the fixed scope's center.
+    // KISAK_SP_VR_FIXED_SCOPE_SHARP_VIEW_AND_TRACER_V5
+    // z selects the dedicated fixed-scope source.
+    float fixedScopeZoom[4];
+
+    // xy are the dedicated panel center in captured-texture UV; zw are its
+    // inset half-extents. They remain zero when the crop fallback is used.
+    float fixedScopeSource[4];
+};
+
+struct VrFsrConstants
+{
+    // Source eye origin and dimensions inside the side-by-side texture.
+    float inputRect[4];
+
+    // Full source dimensions plus inclusive eye-rectangle maximum.
+    float inputSize[4];
+
+    // Output dimensions and their reciprocals.
+    float outputSize[4];
+
+    // RCAS strength and reserved values.
+    float settings[4];
+};
+
 bool VR_CreateCapturedFrameBlitResources()
 {
-    static const char* shaderSource = R"(
+    // KISAK_VR_DEDICATED_SCOPE_CAMERA_V2_SHADER_SPLIT_FIX
+    static const char shaderSourcePart1[] = R"(
 Texture2D capturedFrame : register(t0);
 SamplerState capturedSampler : register(s0);
+
+cbuffer VrCompositorConstants : register(b1)
+{
+    float4 vrCompositorSettings;
+    float4 vrFixedScopeSettings;
+    float4 vrFixedScopeZoom;
+
+    // KISAK_SP_VR_FIXED_SCOPE_SHARP_VIEW_AND_TRACER_V5
+    float4 vrFixedScopeSource;
+};
+
+cbuffer VrFsrConstants : register(b2)
+{
+    float4 vrFsrInputRect;
+    float4 vrFsrInputSize;
+    float4 vrFsrOutputSize;
+    float4 vrFsrSettings;
+};
 
 struct VertexInput
 {
@@ -848,16 +1064,794 @@ PixelInput VSMain(VertexInput input)
     return output;
 }
 
+// KISAK_SP_VR_FIXED_SCOPED_TURRET_VIEW_FIX_V1
+float4 VR_ApplyFixedScopedTurretOverlay(
+    float4 color,
+    float2 pixelPosition)
+{
+    if (vrFixedScopeSettings.x <= 0.5f)
+    {
+        return color;
+    }
+
+    // KISAK_SP_VR_FIXED_SCOPE_BINOCULAR_RETICLE_FIX_V2
+    // SV_POSITION is in full render-target pixels.  The compositor settings
+    // convert it to eye-local UV, while fixedScope.zw stores the center of
+    // this eye's asymmetric-frustum viewport.  That viewport center is the
+    // projection of CoD4's shared forward aim ray; using it makes the two
+    // reticles fuse instead of placing one at each raw texture center.
+    const float2 eyeUv =
+        pixelPosition *
+        vrCompositorSettings.zw;
+
+    // Convert the ray-relative UV to a height-normalized coordinate so the
+    // aperture stays circular even when the eye texture is not square.
+    float2 scopePosition =
+        (eyeUv - vrFixedScopeSettings.zw) * 2.0f;
+
+    scopePosition.x *=
+        max(vrFixedScopeSettings.y, 0.01f);
+
+    const float scopeRadius =
+        length(scopePosition);
+
+    // A soft one-pixel-scale edge avoids shimmer while retaining CoD4's
+    // intended black surround.
+    const float outsideScope =
+        smoothstep(0.815f, 0.835f, scopeRadius);
+
+    color.rgb = lerp(
+        color.rgb,
+        float3(0.0f, 0.0f, 0.0f),
+        outsideScope);
+
+    const float verticalLine =
+        1.0f - smoothstep(
+            0.0015f,
+            0.0030f,
+            abs(scopePosition.x));
+
+    const float horizontalLine =
+        1.0f - smoothstep(
+            0.0015f,
+            0.0030f,
+            abs(scopePosition.y));
+
+    const float centerGap =
+        smoothstep(
+            0.030f,
+            0.050f,
+            scopeRadius);
+
+    const float reticleLimit =
+        1.0f - smoothstep(
+            0.700f,
+            0.750f,
+            scopeRadius);
+
+    const float centerDot =
+        1.0f - smoothstep(
+            0.0015f,
+            0.0035f,
+            scopeRadius);
+
+    const float reticle =
+        saturate(
+            max(
+                max(verticalLine, horizontalLine) *
+                    centerGap,
+                centerDot) *
+            reticleLimit *
+            (1.0f - outsideScope));
+
+    color.rgb = lerp(
+        color.rgb,
+        float3(0.01f, 0.01f, 0.01f),
+        reticle);
+
+    color.a = 1.0f;
+    return color;
+}
+
 float4 PSMain(PixelInput input) : SV_TARGET
 {
-    return capturedFrame.Sample(
+    float2 sourceUv = input.uv;
+    bool scaleIntoMainStereoRegion = true;
+
+    if (vrFixedScopeSettings.x > 0.5f)
+    {
+        // KISAK_SP_VR_FIXED_SCOPE_SHARP_VIEW_AND_TRACER_V5
+        // A value above 0.5 means the packed square scope camera was rendered
+        // at the requested optical FOV. Duplicate that one sharp source into
+        // both eyes; the existing overlay projects the reticle itself onto
+        // the common binocular forward ray.
+        if (vrFixedScopeZoom.z > 0.5f)
+        {
+            const float eyeLocalX =
+                input.uv.x < 0.5f
+                    ? input.uv.x * 2.0f
+                    : (input.uv.x - 0.5f) * 2.0f;
+
+            const float2 eyeLocalUv =
+                float2(eyeLocalX, input.uv.y);
+
+            sourceUv =
+                vrFixedScopeSource.xy +
+                (eyeLocalUv - float2(0.5f, 0.5f)) *
+                    2.0f *
+                    vrFixedScopeSource.zw;
+
+            scaleIntoMainStereoRegion = false;
+        }
+        else
+        {
+            // Preserve the old crop as a safe fallback when the packed panel
+            // is unavailable.
+            const float sourceCenterX =
+                input.uv.x < 0.5f
+                    ? 0.25f
+                    : 0.75f;
+
+            const float2 sourceCenter =
+                float2(sourceCenterX, 0.5f);
+
+            sourceUv =
+                sourceCenter +
+                (sourceUv - sourceCenter) *
+                    max(
+                        vrFixedScopeZoom.xy,
+                        float2(0.01f, 0.01f));
+        }
+    }
+
+    if (scaleIntoMainStereoRegion)
+    {
+        sourceUv.x *= vrCompositorSettings.y;
+    }
+
+    float4 color = capturedFrame.Sample(
         capturedSampler,
-        input.uv);
+        sourceUv);
+
+    color = VR_ApplyFixedScopedTurretOverlay(
+        color,
+        input.position.xy);
+
+    color.rgb *= vrCompositorSettings.x;
+    return color;
+}
+
+// FidelityFX Super Resolution 1.0 EASU/RCAS algorithm.
+// Copyright (c) 2021 Advanced Micro Devices, Inc. All rights reserved.
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and associated documentation files (the "Software"),
+// to deal in the Software without restriction, including without limitation
+// the rights to use, copy, modify, merge, publish, distribute, sublicense,
+// and/or sell copies of the Software, and to permit persons to whom the
+// Software is furnished to do so, subject to inclusion of this notice.
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO MERCHANTABILITY, FITNESS FOR A
+// PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+// COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY.
+
+int2 VR_FsrClampSourcePixel(int2 pixel)
+{
+    const int2 minimumPixel =
+        int2(vrFsrInputRect.xy);
+
+    const int2 maximumPixel =
+        int2(vrFsrInputSize.zw);
+
+    return clamp(
+        pixel,
+        minimumPixel,
+        maximumPixel);
+}
+
+float3 VR_FsrLoadSource(int2 pixel)
+{
+    return capturedFrame.Load(
+        int3(
+            VR_FsrClampSourcePixel(pixel),
+            0)).rgb;
+}
+
+float VR_FsrLuma(float3 color)
+{
+    return
+        color.b * 0.5f +
+        color.r * 0.5f +
+        color.g;
+}
+
+void VR_FsrEasuSet(
+    inout float2 direction,
+    inout float edgeLength,
+    float weight,
+    float lumaA,
+    float lumaB,
+    float lumaC,
+    float lumaD,
+    float lumaE)
+{
+    const float dc = lumaD - lumaC;
+    const float cb = lumaC - lumaB;
+    const float directionX = lumaD - lumaB;
+
+    float lengthX =
+        abs(directionX) /
+        max(
+            max(abs(dc), abs(cb)),
+            0.00001f);
+
+    lengthX = saturate(lengthX);
+    lengthX *= lengthX;
+
+    const float ec = lumaE - lumaC;
+    const float ca = lumaC - lumaA;
+    const float directionY = lumaE - lumaA;
+
+    float lengthY =
+        abs(directionY) /
+        max(
+            max(abs(ec), abs(ca)),
+            0.00001f);
+
+    lengthY = saturate(lengthY);
+    lengthY *= lengthY;
+
+    direction +=
+        float2(directionX, directionY) *
+        weight;
+
+    edgeLength +=
+        (lengthX + lengthY) *
+        weight;
+}
+
+void VR_FsrEasuTap(
+    inout float3 accumulatedColor,
+    inout float accumulatedWeight,
+    float2 offset,
+    float2 direction,
+    float2 anisotropicLength,
+    float negativeLobe,
+    float clippingPoint,
+    float3 color)
+{
+    float2 rotatedOffset = float2(
+        offset.x * direction.x +
+            offset.y * direction.y,
+        offset.x * -direction.y +
+            offset.y * direction.x);
+
+    rotatedOffset *= anisotropicLength;
+
+    float distanceSquared =
+        dot(rotatedOffset, rotatedOffset);
+
+    distanceSquared =
+        min(distanceSquared, clippingPoint);
+
+    float baseWindow =
+        0.4f * distanceSquared -
+        1.0f;
+
+    float lobeWindow =
+        negativeLobe * distanceSquared -
+        1.0f;
+
+    baseWindow *= baseWindow;
+    lobeWindow *= lobeWindow;
+
+    baseWindow =
+        1.5625f * baseWindow -
+        0.5625f;
+
+    const float weight =
+        baseWindow * lobeWindow;
+
+    accumulatedColor +=
+        color * weight;
+
+    accumulatedWeight +=
+        weight;
+}
+)"
+    // KISAK_SP_VR_FIXED_SCOPE_MSVC_SHADER_LITERAL_SPLIT_V1
+    R"(
+float4 PSEasu(PixelInput input) : SV_TARGET
+{
+    const float2 sourceToOutput =
+        vrFsrInputRect.zw /
+        vrFsrOutputSize.xy;
+
+    float2 sourcePosition =
+        input.position.xy *
+            sourceToOutput -
+        0.5f +
+        vrFsrInputRect.xy;
+
+    const float2 sourceFloor =
+        floor(sourcePosition);
+
+    const float2 fractionalPosition =
+        sourcePosition - sourceFloor;
+
+    const int2 basePixel =
+        int2(sourceFloor);
+
+    const float3 b =
+        VR_FsrLoadSource(basePixel + int2(0, -1));
+    const float3 c =
+        VR_FsrLoadSource(basePixel + int2(1, -1));
+    const float3 e =
+        VR_FsrLoadSource(basePixel + int2(-1, 0));
+    const float3 f =
+        VR_FsrLoadSource(basePixel + int2(0, 0));
+    const float3 g =
+        VR_FsrLoadSource(basePixel + int2(1, 0));
+    const float3 h =
+        VR_FsrLoadSource(basePixel + int2(2, 0));
+    const float3 i =
+        VR_FsrLoadSource(basePixel + int2(-1, 1));
+    const float3 j =
+        VR_FsrLoadSource(basePixel + int2(0, 1));
+    const float3 k =
+        VR_FsrLoadSource(basePixel + int2(1, 1));
+    const float3 l =
+        VR_FsrLoadSource(basePixel + int2(2, 1));
+    const float3 n =
+        VR_FsrLoadSource(basePixel + int2(0, 2));
+    const float3 o =
+        VR_FsrLoadSource(basePixel + int2(1, 2));
+
+    const float bL = VR_FsrLuma(b);
+    const float cL = VR_FsrLuma(c);
+    const float eL = VR_FsrLuma(e);
+    const float fL = VR_FsrLuma(f);
+    const float gL = VR_FsrLuma(g);
+    const float hL = VR_FsrLuma(h);
+    const float iL = VR_FsrLuma(i);
+    const float jL = VR_FsrLuma(j);
+    const float kL = VR_FsrLuma(k);
+    const float lL = VR_FsrLuma(l);
+    const float nL = VR_FsrLuma(n);
+    const float oL = VR_FsrLuma(o);
+
+    float2 direction = float2(0.0f, 0.0f);
+    float edgeLength = 0.0f;
+
+    VR_FsrEasuSet(
+        direction,
+        edgeLength,
+        (1.0f - fractionalPosition.x) *
+            (1.0f - fractionalPosition.y),
+        bL, eL, fL, gL, jL);
+
+    VR_FsrEasuSet(
+        direction,
+        edgeLength,
+        fractionalPosition.x *
+            (1.0f - fractionalPosition.y),
+        cL, fL, gL, hL, kL);
+
+    VR_FsrEasuSet(
+        direction,
+        edgeLength,
+        (1.0f - fractionalPosition.x) *
+            fractionalPosition.y,
+        fL, iL, jL, kL, nL);
+
+    VR_FsrEasuSet(
+        direction,
+        edgeLength,
+        fractionalPosition.x *
+            fractionalPosition.y,
+        gL, jL, kL, lL, oL);
+
+    const float directionMagnitudeSquared =
+        dot(direction, direction);
+
+    if (directionMagnitudeSquared <
+        (1.0f / 32768.0f))
+    {
+        direction = float2(1.0f, 0.0f);
+    }
+    else
+    {
+        direction *=
+            rsqrt(directionMagnitudeSquared);
+    }
+
+    edgeLength *= 0.5f;
+    edgeLength *= edgeLength;
+
+    const float stretch =
+        dot(direction, direction) /
+        max(
+            max(abs(direction.x), abs(direction.y)),
+            0.00001f);
+
+    const float2 anisotropicLength = float2(
+        1.0f +
+            (stretch - 1.0f) * edgeLength,
+        1.0f -
+            0.5f * edgeLength);
+
+    const float negativeLobe =
+        0.5f -
+        0.29f * edgeLength;
+
+    const float clippingPoint =
+        1.0f /
+        max(negativeLobe, 0.00001f);
+
+    const float3 minimumColor =
+        min(min(f, g), min(j, k));
+
+    const float3 maximumColor =
+        max(max(f, g), max(j, k));
+
+    float3 accumulatedColor =
+        float3(0.0f, 0.0f, 0.0f);
+
+    float accumulatedWeight = 0.0f;
+
+    VR_FsrEasuTap(accumulatedColor, accumulatedWeight,
+        float2(0.0f, -1.0f) - fractionalPosition,
+        direction, anisotropicLength, negativeLobe, clippingPoint, b);
+    VR_FsrEasuTap(accumulatedColor, accumulatedWeight,
+        float2(1.0f, -1.0f) - fractionalPosition,
+        direction, anisotropicLength, negativeLobe, clippingPoint, c);
+    VR_FsrEasuTap(accumulatedColor, accumulatedWeight,
+        float2(-1.0f, 1.0f) - fractionalPosition,
+        direction, anisotropicLength, negativeLobe, clippingPoint, i);
+    VR_FsrEasuTap(accumulatedColor, accumulatedWeight,
+        float2(0.0f, 1.0f) - fractionalPosition,
+        direction, anisotropicLength, negativeLobe, clippingPoint, j);
+    VR_FsrEasuTap(accumulatedColor, accumulatedWeight,
+        float2(0.0f, 0.0f) - fractionalPosition,
+        direction, anisotropicLength, negativeLobe, clippingPoint, f);
+    VR_FsrEasuTap(accumulatedColor, accumulatedWeight,
+        float2(-1.0f, 0.0f) - fractionalPosition,
+        direction, anisotropicLength, negativeLobe, clippingPoint, e);
+    VR_FsrEasuTap(accumulatedColor, accumulatedWeight,
+        float2(1.0f, 1.0f) - fractionalPosition,
+        direction, anisotropicLength, negativeLobe, clippingPoint, k);
+    VR_FsrEasuTap(accumulatedColor, accumulatedWeight,
+        float2(2.0f, 1.0f) - fractionalPosition,
+        direction, anisotropicLength, negativeLobe, clippingPoint, l);
+    VR_FsrEasuTap(accumulatedColor, accumulatedWeight,
+        float2(2.0f, 0.0f) - fractionalPosition,
+        direction, anisotropicLength, negativeLobe, clippingPoint, h);
+    VR_FsrEasuTap(accumulatedColor, accumulatedWeight,
+        float2(1.0f, 0.0f) - fractionalPosition,
+        direction, anisotropicLength, negativeLobe, clippingPoint, g);
+    VR_FsrEasuTap(accumulatedColor, accumulatedWeight,
+        float2(1.0f, 2.0f) - fractionalPosition,
+        direction, anisotropicLength, negativeLobe, clippingPoint, o);
+    VR_FsrEasuTap(accumulatedColor, accumulatedWeight,
+        float2(0.0f, 2.0f) - fractionalPosition,
+        direction, anisotropicLength, negativeLobe, clippingPoint, n);
+
+    const float3 upscaledColor =
+        min(
+            maximumColor,
+            max(
+                minimumColor,
+                accumulatedColor /
+                    max(accumulatedWeight, 0.00001f)));
+
+    return float4(upscaledColor, 1.0f);
+}
+
+int2 VR_FsrClampOutputPixel(int2 pixel)
+{
+    return clamp(
+        pixel,
+        int2(0, 0),
+        int2(vrFsrOutputSize.xy) - int2(1, 1));
+}
+
+float3 VR_FsrLoadUpscaled(int2 pixel)
+{
+    return capturedFrame.Load(
+        int3(
+            VR_FsrClampOutputPixel(pixel),
+            0)).rgb;
+}
+
+float4 PSRcas(PixelInput input) : SV_TARGET
+{
+    const int2 centerPixel =
+        int2(
+            floor(
+                input.uv *
+                vrFsrOutputSize.xy));
+
+    const float3 north =
+        VR_FsrLoadUpscaled(centerPixel + int2(0, -1));
+    const float3 west =
+        VR_FsrLoadUpscaled(centerPixel + int2(-1, 0));
+    const float3 center =
+        VR_FsrLoadUpscaled(centerPixel);
+    const float3 east =
+        VR_FsrLoadUpscaled(centerPixel + int2(1, 0));
+    const float3 south =
+        VR_FsrLoadUpscaled(centerPixel + int2(0, 1));
+
+    const float northLuma = VR_FsrLuma(north);
+    const float westLuma = VR_FsrLuma(west);
+    const float centerLuma = VR_FsrLuma(center);
+    const float eastLuma = VR_FsrLuma(east);
+    const float southLuma = VR_FsrLuma(south);
+
+    const float minimumLuma =
+        min(
+            min(min(northLuma, westLuma), centerLuma),
+            min(eastLuma, southLuma));
+
+    const float maximumLuma =
+        max(
+            max(max(northLuma, westLuma), centerLuma),
+            max(eastLuma, southLuma));
+
+    const float noise = saturate(
+        abs(
+            0.25f *
+                (northLuma + westLuma + eastLuma + southLuma) -
+            centerLuma) /
+        max(maximumLuma - minimumLuma, 0.00001f));
+
+    const float3 minimumRing =
+        min(min(north, west), min(east, south));
+
+    const float3 maximumRing =
+        max(max(north, west), max(east, south));
+
+    const float3 hitMinimum =
+        min(minimumRing, center) /
+        max(
+            4.0f * maximumRing,
+            float3(0.00001f, 0.00001f, 0.00001f));
+
+    const float3 hitMaximum =
+        (1.0f - max(maximumRing, center)) /
+        min(
+            4.0f * minimumRing - 4.0f,
+            float3(-0.00001f, -0.00001f, -0.00001f));
+
+    const float3 lobePerChannel =
+        max(-hitMinimum, hitMaximum);
+
+    float lobe =
+        max(
+            -0.1875f,
+            min(
+                max(
+                    max(lobePerChannel.r, lobePerChannel.g),
+                    lobePerChannel.b),
+                0.0f));
+
+    lobe *=
+        saturate(vrFsrSettings.x) *
+        (1.0f - 0.5f * noise);
+
+    float3 sharpenedColor =
+        (lobe *
+            (north + west + east + south) +
+         center) /
+        max(4.0f * lobe + 1.0f, 0.00001f);
+
+    float4 outputColor =
+        float4(
+            saturate(sharpenedColor),
+            1.0f);
+
+    // Apply the same render-target-centered fixed-scope mask after
+    // sharpening.
+    outputColor =
+        VR_ApplyFixedScopedTurretOverlay(
+            outputColor,
+            input.position.xy);
+
+    outputColor.rgb *=
+        vrCompositorSettings.x;
+
+    return outputColor;
 }
 )";
 
+    static const char shaderSourcePart2[] = R"(
+cbuffer ScopeConstants : register(b0)
+{
+    float4 scopeLens;
+    float4 scopeBasis;
+    float4 scopeSample;
+    float4 scopeBounds;
+    float4 scopeViewport;
+};
+
+float4 PSScope(PixelInput input) : SV_TARGET
+{
+    const float2 outputUv =
+        input.position.xy * scopeViewport.xy;
+
+    const float2 screenDelta =
+        outputUv - scopeLens.xy;
+
+    const float determinant =
+        scopeBasis.x * scopeBasis.w -
+        scopeBasis.z * scopeBasis.y;
+
+    if (abs(determinant) < 0.00001f)
+    {
+        discard;
+    }
+
+    const float2 lensDelta = float2(
+        (screenDelta.x * scopeBasis.w -
+         screenDelta.y * scopeBasis.z) /
+            determinant,
+        (-screenDelta.x * scopeBasis.y +
+         screenDelta.y * scopeBasis.x) /
+            determinant);
+
+    const float lensRadius = length(lensDelta);
+
+    if (lensRadius > 1.0f)
+    {
+        discard;
+    }
+
+    float2 sourceUv = float2(0.0f, 0.0f);
+
+    if (scopeLens.w > 0.5f)
+    {
+        // KISAK_VR_DEDICATED_SCOPE_CAMERA_V2_VERTICAL_FLIP_FIX
+        const float2 dedicatedScopeLensDelta =
+            float2(
+                lensDelta.x,
+                -lensDelta.y);
+
+        sourceUv = clamp(
+            scopeSample.xy +
+                dedicatedScopeLensDelta *
+                    scopeSample.zw,
+            scopeBounds.xz,
+            scopeBounds.yw);
+    }
+    else
+    {
+        sourceUv = clamp(
+            scopeSample.xy +
+                screenDelta *
+                    float2(0.5f, 1.0f) *
+                    scopeSample.z,
+            scopeBounds.xz,
+            scopeBounds.yw);
+    }
+
+    float2 normalUv = input.uv;
+    normalUv.x *= vrCompositorSettings.y;
+
+    const float4 normalColor =
+        capturedFrame.Sample(
+            capturedSampler,
+            normalUv);
+
+    const float2 sourceTexel =
+        scopeViewport.zw;
+
+    const float4 magnifiedCenter =
+        capturedFrame.Sample(
+            capturedSampler,
+            sourceUv);
+
+    const float3 magnifiedNeighbors =
+        capturedFrame.Sample(
+            capturedSampler,
+            sourceUv + float2(sourceTexel.x, 0.0f)).rgb +
+        capturedFrame.Sample(
+            capturedSampler,
+            sourceUv - float2(sourceTexel.x, 0.0f)).rgb +
+        capturedFrame.Sample(
+            capturedSampler,
+            sourceUv + float2(0.0f, sourceTexel.y)).rgb +
+        capturedFrame.Sample(
+            capturedSampler,
+            sourceUv - float2(0.0f, sourceTexel.y)).rgb;
+
+    float3 sharpenedScope =
+        magnifiedCenter.rgb * 1.72f -
+        magnifiedNeighbors * 0.18f;
+
+    sharpenedScope = saturate(
+        (sharpenedScope - 0.5f) * 1.06f +
+        0.5f);
+
+    const float4 magnifiedColor =
+        float4(
+            sharpenedScope,
+            magnifiedCenter.a);
+
+    const float opacity = saturate(scopeLens.z);
+
+    float4 color = lerp(
+        normalColor,
+        magnifiedColor,
+        opacity);
+
+    const float edge =
+        smoothstep(0.82f, 1.0f, lensRadius) *
+        opacity;
+
+    color.rgb = lerp(
+        color.rgb,
+        float3(0.005f, 0.007f, 0.009f),
+        edge);
+
+    const float centerGap =
+        smoothstep(0.055f, 0.09f, lensRadius);
+
+    const float verticalLine =
+        1.0f - smoothstep(
+            0.008f,
+            0.016f,
+            abs(lensDelta.x));
+
+    const float horizontalLine =
+        1.0f - smoothstep(
+            0.008f,
+            0.016f,
+            abs(lensDelta.y));
+
+    const float reticle =
+        max(verticalLine, horizontalLine) *
+        centerGap *
+        (1.0f - smoothstep(
+            0.72f,
+            0.88f,
+            lensRadius)) *
+        opacity;
+
+    color.rgb = lerp(
+        color.rgb,
+        float3(0.01f, 0.01f, 0.01f),
+        reticle);
+
+    color.rgb *= vrCompositorSettings.x;
+    color.a = 1.0f;
+    return color;
+}
+)";
+
+    std::vector<char> shaderSourceStorage;
+    shaderSourceStorage.reserve(
+        sizeof(shaderSourcePart1) +
+        sizeof(shaderSourcePart2) - 1u);
+
+    shaderSourceStorage.insert(
+        shaderSourceStorage.end(),
+        shaderSourcePart1,
+        shaderSourcePart1 + sizeof(shaderSourcePart1) - 1u);
+
+    shaderSourceStorage.insert(
+        shaderSourceStorage.end(),
+        shaderSourcePart2,
+        shaderSourcePart2 + sizeof(shaderSourcePart2) - 1u);
+
+    shaderSourceStorage.push_back('\0');
+
+    const char* shaderSource =
+        shaderSourceStorage.data();
+
     ComPtr<ID3DBlob> vertexCode;
     ComPtr<ID3DBlob> pixelCode;
+    ComPtr<ID3DBlob> easuPixelCode;
+    ComPtr<ID3DBlob> rcasPixelCode;
+    ComPtr<ID3DBlob> scopePixelCode;
 
     if (!VR_TestCompileShader(
             shaderSource,
@@ -873,6 +1867,37 @@ float4 PSMain(PixelInput input) : SV_TARGET
             "PSMain",
             "ps_4_0",
             pixelCode))
+    {
+        return false;
+    }
+
+    g_vrFsrShadersAvailable = false;
+
+    const bool fsrShadersCompiled =
+        VR_TestCompileShader(
+            shaderSource,
+            "PSEasu",
+            "ps_4_0",
+            easuPixelCode) &&
+        VR_TestCompileShader(
+            shaderSource,
+            "PSRcas",
+            "ps_4_0",
+            rcasPixelCode);
+
+    if (!fsrShadersCompiled)
+    {
+        Com_PrintWarning(
+            0,
+            "[VR] FSR shaders could not be compiled; "
+            "using the bilinear compositor fallback.\n");
+    }
+
+    if (!VR_TestCompileShader(
+            shaderSource,
+            "PSScope",
+            "ps_4_0",
+            scopePixelCode))
     {
         return false;
     }
@@ -907,6 +1932,476 @@ float4 PSMain(PixelInput input) : SV_TARGET
             hr);
 
         return false;
+    }
+
+    if (fsrShadersCompiled)
+    {
+        HRESULT fsrShaderHr =
+            g_vrD3dDevice->CreatePixelShader(
+                easuPixelCode->GetBufferPointer(),
+                easuPixelCode->GetBufferSize(),
+                nullptr,
+                g_vrFsrEasuPixelShader.GetAddressOf());
+
+        if (SUCCEEDED(fsrShaderHr))
+        {
+            fsrShaderHr =
+                g_vrD3dDevice->CreatePixelShader(
+                    rcasPixelCode->GetBufferPointer(),
+                    rcasPixelCode->GetBufferSize(),
+                    nullptr,
+                    g_vrFsrRcasPixelShader.GetAddressOf());
+        }
+
+        if (FAILED(fsrShaderHr))
+        {
+            VR_LogHrFailure(
+                "CreatePixelShader(FSR EASU/RCAS)",
+                fsrShaderHr);
+        }
+    }
+
+    g_vrFsrShadersAvailable =
+        g_vrFsrEasuPixelShader.Get() != nullptr &&
+        g_vrFsrRcasPixelShader.Get() != nullptr;
+
+    if (!g_vrFsrShadersAvailable)
+    {
+        g_vrFsrRcasPixelShader.Reset();
+        g_vrFsrEasuPixelShader.Reset();
+    }
+
+    hr =
+        g_vrD3dDevice->CreatePixelShader(
+            scopePixelCode->GetBufferPointer(),
+            scopePixelCode->GetBufferSize(),
+            nullptr,
+            g_vrScopePixelShader.GetAddressOf());
+
+    if (FAILED(hr))
+    {
+        VR_LogHrFailure(
+            "CreatePixelShader(physical scope)",
+            hr);
+
+        return false;
+    }
+
+    D3D11_BUFFER_DESC scopeConstantDescription = {};
+    scopeConstantDescription.ByteWidth =
+        static_cast<UINT>(
+            sizeof(VrScopeConstants));
+    scopeConstantDescription.Usage =
+        D3D11_USAGE_DYNAMIC;
+    scopeConstantDescription.BindFlags =
+        D3D11_BIND_CONSTANT_BUFFER;
+    scopeConstantDescription.CPUAccessFlags =
+        D3D11_CPU_ACCESS_WRITE;
+
+    hr =
+        g_vrD3dDevice->CreateBuffer(
+            &scopeConstantDescription,
+            nullptr,
+            g_vrScopeConstantBuffer.GetAddressOf());
+
+    if (FAILED(hr))
+    {
+        VR_LogHrFailure(
+            "CreateBuffer(physical scope constants)",
+            hr);
+
+        return false;
+    }
+
+    const auto readScopeSetting =
+        [](
+            const char* name,
+            const float defaultValue,
+            const float minimumValue,
+            const float maximumValue)
+        {
+            const char* requestedValue =
+                std::getenv(name);
+
+            if (requestedValue == nullptr ||
+                requestedValue[0] == '\0')
+            {
+                return defaultValue;
+            }
+
+            char* parseEnd = nullptr;
+
+            const float parsedValue =
+                std::strtof(
+                    requestedValue,
+                    &parseEnd);
+
+            if (parseEnd == requestedValue ||
+                parseEnd == nullptr ||
+                parseEnd[0] != '\0' ||
+                !std::isfinite(parsedValue) ||
+                parsedValue < minimumValue ||
+                parsedValue > maximumValue)
+            {
+                Com_PrintWarning(
+                    0,
+                    "[VR] Ignoring invalid %s='%s'; using %.3f. "
+                    "Valid range is %.3f through %.3f.\n",
+                    name,
+                    requestedValue,
+                    defaultValue,
+                    minimumValue,
+                    maximumValue);
+
+                return defaultValue;
+            }
+
+            return parsedValue;
+        };
+
+    g_vrScopeForwardCalibrationMeters =
+        readScopeSetting(
+            "KISAK_VR_SCOPE_FORWARD_METERS",
+            0.0f,
+            -0.25f,
+            0.25f);
+
+    g_vrScopeLeftCalibrationMeters =
+        readScopeSetting(
+            "KISAK_VR_SCOPE_LEFT_METERS",
+            0.0f,
+            -0.25f,
+            0.25f);
+
+    g_vrScopeUpCalibrationMeters =
+        readScopeSetting(
+            "KISAK_VR_SCOPE_UP_METERS",
+            0.0f,
+            -0.25f,
+            0.25f);
+
+    g_vrScopeLensRadiusMeters =
+        readScopeSetting(
+            "KISAK_VR_SCOPE_RADIUS_METERS",
+            0.032f,
+            0.015f,
+            0.080f);
+
+    g_vrScopeCaptureSizePixels =
+        static_cast<int>(
+            readScopeSetting(
+                "KISAK_VR_SCOPE_CAPTURE_SIZE",
+                1024.0f,
+                512.0f,
+                1536.0f));
+
+    Com_Printf(
+        0,
+        "[VR] Rifle-attached scope calibration: "
+        "forward %.3f m, left %.3f m, up %.3f m, radius %.3f m; "
+        "dedicated source %d px.\n",
+        g_vrScopeForwardCalibrationMeters,
+        g_vrScopeLeftCalibrationMeters,
+        g_vrScopeUpCalibrationMeters,
+        g_vrScopeLensRadiusMeters,
+        g_vrScopeCaptureSizePixels);
+
+    constexpr float defaultBrightness = 1.0f;
+    constexpr float minimumBrightness = 0.20f;
+    constexpr float maximumBrightness = 1.0f;
+
+    g_vrCompositorBrightness = defaultBrightness;
+
+    const char* requestedBrightness =
+        std::getenv("KISAK_VR_BRIGHTNESS");
+
+    if (requestedBrightness != nullptr &&
+        requestedBrightness[0] != '\0')
+    {
+        char* parseEnd = nullptr;
+
+        const float parsedBrightness =
+            std::strtof(
+                requestedBrightness,
+                &parseEnd);
+
+        if (parseEnd == requestedBrightness ||
+            parseEnd == nullptr ||
+            parseEnd[0] != '\0' ||
+            !std::isfinite(parsedBrightness) ||
+            parsedBrightness < minimumBrightness ||
+            parsedBrightness > maximumBrightness)
+        {
+            Com_PrintWarning(
+                0,
+                "[VR] Ignoring invalid KISAK_VR_BRIGHTNESS='%s'; "
+                "using %.2f. Valid range is %.2f through %.2f.\n",
+                requestedBrightness,
+                defaultBrightness,
+                minimumBrightness,
+                maximumBrightness);
+        }
+        else
+        {
+            g_vrCompositorBrightness =
+                parsedBrightness;
+        }
+    }
+
+    VrCompositorConstants compositorConstants = {};
+    compositorConstants.settings[0] =
+        g_vrCompositorBrightness;
+    compositorConstants.settings[1] = 1.0f;
+
+    D3D11_BUFFER_DESC compositorConstantDescription = {};
+    compositorConstantDescription.ByteWidth =
+        static_cast<UINT>(
+            sizeof(VrCompositorConstants));
+    compositorConstantDescription.Usage =
+        D3D11_USAGE_DYNAMIC;
+    compositorConstantDescription.BindFlags =
+        D3D11_BIND_CONSTANT_BUFFER;
+    compositorConstantDescription.CPUAccessFlags =
+        D3D11_CPU_ACCESS_WRITE;
+
+    D3D11_SUBRESOURCE_DATA compositorConstantData = {};
+    compositorConstantData.pSysMem =
+        &compositorConstants;
+
+    hr =
+        g_vrD3dDevice->CreateBuffer(
+            &compositorConstantDescription,
+            &compositorConstantData,
+            g_vrCompositorConstantBuffer.GetAddressOf());
+
+    if (FAILED(hr))
+    {
+        VR_LogHrFailure(
+            "CreateBuffer(VR compositor brightness)",
+            hr);
+
+        return false;
+    }
+
+    Com_Printf(
+        0,
+        "[VR] OpenXR compositor brightness scale is %.2f.\n",
+        g_vrCompositorBrightness);
+
+    g_vrFsrEnabled =
+        g_vrFsrShadersAvailable;
+
+    const char* requestedFsr =
+        std::getenv("KISAK_VR_FSR");
+
+    if (requestedFsr != nullptr &&
+        requestedFsr[0] != '\0')
+    {
+        if (std::strcmp(requestedFsr, "0") == 0)
+        {
+            g_vrFsrEnabled = false;
+        }
+        else if (std::strcmp(requestedFsr, "1") == 0 &&
+                 !g_vrFsrShadersAvailable)
+        {
+            Com_PrintWarning(
+                0,
+                "[VR] KISAK_VR_FSR=1 was requested, but the "
+                "FSR shader path is unavailable; using bilinear.\n");
+        }
+        else if (std::strcmp(requestedFsr, "1") != 0)
+        {
+            Com_PrintWarning(
+                0,
+                "[VR] Ignoring invalid KISAK_VR_FSR='%s'; "
+                "using 1. Valid values are 0 and 1.\n",
+                requestedFsr);
+        }
+    }
+
+    constexpr float defaultFsrSharpness = 0.60f;
+    constexpr float minimumFsrSharpness = 0.00f;
+    constexpr float maximumFsrSharpness = 1.00f;
+
+    g_vrFsrSharpness =
+        defaultFsrSharpness;
+
+    const char* requestedFsrSharpness =
+        std::getenv("KISAK_VR_FSR_SHARPNESS");
+
+    if (requestedFsrSharpness != nullptr &&
+        requestedFsrSharpness[0] != '\0')
+    {
+        char* parseEnd = nullptr;
+
+        const float parsedFsrSharpness =
+            std::strtof(
+                requestedFsrSharpness,
+                &parseEnd);
+
+        if (parseEnd == requestedFsrSharpness ||
+            parseEnd == nullptr ||
+            parseEnd[0] != '\0' ||
+            !std::isfinite(parsedFsrSharpness) ||
+            parsedFsrSharpness < minimumFsrSharpness ||
+            parsedFsrSharpness > maximumFsrSharpness)
+        {
+            Com_PrintWarning(
+                0,
+                "[VR] Ignoring invalid "
+                "KISAK_VR_FSR_SHARPNESS='%s'; using %.2f. "
+                "Valid range is %.2f through %.2f.\n",
+                requestedFsrSharpness,
+                defaultFsrSharpness,
+                minimumFsrSharpness,
+                maximumFsrSharpness);
+        }
+        else
+        {
+            g_vrFsrSharpness =
+                parsedFsrSharpness;
+        }
+    }
+
+    if (g_vrFsrEnabled)
+    {
+        D3D11_BUFFER_DESC fsrConstantDescription = {};
+        fsrConstantDescription.ByteWidth =
+            static_cast<UINT>(
+                sizeof(VrFsrConstants));
+        fsrConstantDescription.Usage =
+            D3D11_USAGE_DYNAMIC;
+        fsrConstantDescription.BindFlags =
+            D3D11_BIND_CONSTANT_BUFFER;
+        fsrConstantDescription.CPUAccessFlags =
+            D3D11_CPU_ACCESS_WRITE;
+
+        const HRESULT fsrConstantHr =
+            g_vrD3dDevice->CreateBuffer(
+                &fsrConstantDescription,
+                nullptr,
+                g_vrFsrConstantBuffer.GetAddressOf());
+
+        if (FAILED(fsrConstantHr))
+        {
+            VR_LogHrFailure(
+                "CreateBuffer(FSR constants)",
+                fsrConstantHr);
+
+            g_vrFsrConstantBuffer.Reset();
+            g_vrFsrEnabled = false;
+
+            Com_PrintWarning(
+                0,
+                "[VR] FSR constant-buffer allocation failed; "
+                "using the bilinear compositor fallback.\n");
+        }
+    }
+
+    if (g_vrFsrEnabled)
+    {
+        std::uint32_t intermediateWidth = 0u;
+        std::uint32_t intermediateHeight = 0u;
+
+        for (const VrEyeSwapchain& eyeSwapchain :
+             g_vrEyeSwapchains)
+        {
+            intermediateWidth =
+                (std::max)(
+                    intermediateWidth,
+                    static_cast<std::uint32_t>(
+                        eyeSwapchain.width));
+
+            intermediateHeight =
+                (std::max)(
+                    intermediateHeight,
+                    static_cast<std::uint32_t>(
+                        eyeSwapchain.height));
+        }
+
+        D3D11_TEXTURE2D_DESC intermediateDescription = {};
+        intermediateDescription.Width =
+            intermediateWidth;
+        intermediateDescription.Height =
+            intermediateHeight;
+        intermediateDescription.MipLevels = 1;
+        intermediateDescription.ArraySize = 1;
+        intermediateDescription.Format =
+            DXGI_FORMAT_R8G8B8A8_UNORM;
+        intermediateDescription.SampleDesc.Count = 1;
+        intermediateDescription.Usage =
+            D3D11_USAGE_DEFAULT;
+        intermediateDescription.BindFlags =
+            D3D11_BIND_RENDER_TARGET |
+            D3D11_BIND_SHADER_RESOURCE;
+
+        HRESULT fsrHr =
+            g_vrD3dDevice->CreateTexture2D(
+                &intermediateDescription,
+                nullptr,
+                g_vrFsrIntermediateTexture.GetAddressOf());
+
+        if (SUCCEEDED(fsrHr))
+        {
+            fsrHr =
+                g_vrD3dDevice->CreateRenderTargetView(
+                    g_vrFsrIntermediateTexture.Get(),
+                    nullptr,
+                    g_vrFsrIntermediateTarget.GetAddressOf());
+        }
+
+        if (SUCCEEDED(fsrHr))
+        {
+            fsrHr =
+                g_vrD3dDevice->CreateShaderResourceView(
+                    g_vrFsrIntermediateTexture.Get(),
+                    nullptr,
+                    g_vrFsrIntermediateView.GetAddressOf());
+        }
+
+        if (FAILED(fsrHr))
+        {
+            VR_LogHrFailure(
+                "CreateTexture2D(FSR intermediate)",
+                fsrHr);
+
+            g_vrFsrIntermediateView.Reset();
+            g_vrFsrIntermediateTarget.Reset();
+            g_vrFsrIntermediateTexture.Reset();
+            g_vrFsrEnabled = false;
+
+            Com_PrintWarning(
+                0,
+                "[VR] FSR intermediate allocation failed; "
+                "using the bilinear compositor fallback.\n");
+        }
+        else
+        {
+            Com_Printf(
+                0,
+                "[VR] Created one reusable FSR intermediate: "
+                "%u x %u. RCAS strength %.2f.\n",
+                intermediateWidth,
+                intermediateHeight,
+                g_vrFsrSharpness);
+        }
+    }
+    else
+    {
+        if (g_vrFsrShadersAvailable)
+        {
+            Com_Printf(
+                0,
+                "[VR] FSR compositor disabled or unavailable; "
+                "using bilinear output.\n");
+        }
+        else
+        {
+            Com_PrintWarning(
+                0,
+                "[VR] FSR shaders are unavailable; "
+                "using bilinear output.\n");
+        }
     }
 
     const D3D11_INPUT_ELEMENT_DESC layout[] = {
@@ -996,6 +2491,60 @@ float4 PSMain(PixelInput input) : SV_TARGET
         }
     }
 
+    static const VrBlitVertex menuVertices[4] = {
+        {{-1.0f,  1.0f}, {0.0f, 0.0f}},
+        {{ 1.0f,  1.0f}, {1.0f, 0.0f}},
+        {{-1.0f, -1.0f}, {0.0f, 1.0f}},
+        {{ 1.0f, -1.0f}, {1.0f, 1.0f}},
+    };
+
+    D3D11_SUBRESOURCE_DATA menuVertexData = {};
+    menuVertexData.pSysMem =
+        menuVertices;
+
+    hr =
+        g_vrD3dDevice->CreateBuffer(
+            &vertexDescription,
+            &menuVertexData,
+            g_vrMenuBlitVertexBuffer
+                .GetAddressOf());
+
+    if (FAILED(hr))
+    {
+        VR_LogHrFailure(
+            "CreateBuffer(menu comfort blit)",
+            hr);
+
+        return false;
+    }
+
+    static const VrBlitVertex pauseMenuVertices[4] = {
+        {{-1.0f,  1.0f}, {0.5f, 0.0f}},
+        {{ 1.0f,  1.0f}, {1.0f, 0.0f}},
+        {{-1.0f, -1.0f}, {0.5f, 1.0f}},
+        {{ 1.0f, -1.0f}, {1.0f, 1.0f}},
+    };
+
+    D3D11_SUBRESOURCE_DATA pauseMenuVertexData = {};
+    pauseMenuVertexData.pSysMem =
+        pauseMenuVertices;
+
+    hr =
+        g_vrD3dDevice->CreateBuffer(
+            &vertexDescription,
+            &pauseMenuVertexData,
+            g_vrPauseMenuBlitVertexBuffer
+                .GetAddressOf());
+
+    if (FAILED(hr))
+    {
+        VR_LogHrFailure(
+            "CreateBuffer(pause menu mono blit)",
+            hr);
+
+        return false;
+    }
+
     D3D11_SAMPLER_DESC samplerDescription = {};
     samplerDescription.Filter =
         D3D11_FILTER_MIN_MAG_MIP_LINEAR;
@@ -1029,8 +2578,637 @@ float4 PSMain(PixelInput input) : SV_TARGET
     return true;
 }
 
+std::uint32_t VR_GetCapturedMainStereoWidth()
+{
+    int mainStereoWidth = 0;
+    int scopePanelX = 0;
+    int scopePanelY = 0;
+    int scopePanelSize = 0;
+
+    if (VR_GetPhysicalSniperScopeCaptureLayout(
+            static_cast<int>(
+                g_vrCapturedStereoWidth),
+            static_cast<int>(
+                g_vrCapturedStereoHeight),
+            &mainStereoWidth,
+            &scopePanelX,
+            &scopePanelY,
+            &scopePanelSize))
+    {
+        return static_cast<std::uint32_t>(
+            mainStereoWidth);
+    }
+
+    return g_vrCapturedStereoWidth;
+}
+
+// KISAK_SP_VR_FIXED_SCOPE_BINOCULAR_RETICLE_FIX_V2
+void VR_UpdateCompositorConstantsForEye(
+    const D3D11_VIEWPORT& eyeViewport,
+    const int eyeWidth,
+    const int eyeHeight)
+{
+    if (!g_vrCompositorConstantBuffer ||
+        !g_vrD3dContext ||
+        eyeWidth <= 0 ||
+        eyeHeight <= 0)
+    {
+        return;
+    }
+
+    float mainStereoFraction = 1.0f;
+
+    if (g_vrCapturedStereoWidth > 0u)
+    {
+        mainStereoFraction =
+            static_cast<float>(
+                VR_GetCapturedMainStereoWidth()) /
+            static_cast<float>(
+                g_vrCapturedStereoWidth);
+    }
+
+    VrCompositorConstants constants = {};
+    constants.settings[0] =
+        g_vrCompositorBrightness;
+    constants.settings[1] =
+        mainStereoFraction;
+
+    // zw convert SV_POSITION from full-eye pixels to normalized eye UV.
+    constants.settings[2] =
+        1.0f /
+        static_cast<float>(eyeWidth);
+    constants.settings[3] =
+        1.0f /
+        static_cast<float>(eyeHeight);
+
+    bool fixedScopedTurretActive = false;
+    float fixedScopedTurretZoomFovDegrees = 20.0f;
+    float fixedScopedTurretMaximumZoomFovDegrees = 20.0f;
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrScopeStateMutex);
+
+        fixedScopedTurretActive =
+            g_vrFixedScopedTurretActive;
+
+        fixedScopedTurretZoomFovDegrees =
+            g_vrFixedScopedTurretZoomFovDegrees;
+
+        fixedScopedTurretMaximumZoomFovDegrees =
+            g_vrFixedScopedTurretMaximumZoomFovDegrees;
+    }
+
+    // x selects the compositor-owned fixed scope.  y converts normalized
+    // horizontal distance to height-normalized distance.  zw hold the
+    // eye-local UV of CoD4's centered source ray after the symmetric source
+    // is remapped into this eye's asymmetric OpenXR frustum.
+    constants.fixedScope[0] =
+        fixedScopedTurretActive
+            ? 1.0f
+            : 0.0f;
+
+    constants.fixedScope[1] =
+        static_cast<float>(eyeWidth) /
+        static_cast<float>(eyeHeight);
+
+    constants.fixedScope[2] =
+        (
+            eyeViewport.TopLeftX +
+            0.5f * eyeViewport.Width
+        ) /
+        static_cast<float>(eyeWidth);
+
+    constants.fixedScope[3] =
+        (
+            eyeViewport.TopLeftY +
+            0.5f * eyeViewport.Height
+        ) /
+        static_cast<float>(eyeHeight);
+
+    // KISAK_SP_VR_FIXED_SCOPED_TURRET_RUNTIME_V4
+    // CoD's turretScopeZoom is a 4:3 horizontal FOV. The ratio of tangents
+    // is the exact rectilinear sample scale, and the same ratio applies to
+    // both axes. At the normal 20-degree setting the scale is 1; at the
+    // maximum 5-degree magnification it is about 0.248.
+    constexpr float pi =
+        3.14159265358979323846f;
+
+    const float currentHalfFovTangent =
+        std::tan(
+            0.5f *
+            fixedScopedTurretZoomFovDegrees *
+            (pi / 180.0f));
+
+    const float maximumHalfFovTangent =
+        std::tan(
+            0.5f *
+            fixedScopedTurretMaximumZoomFovDegrees *
+            (pi / 180.0f));
+
+    float fixedScopeZoomScale =
+        maximumHalfFovTangent > 0.0001f
+            ? currentHalfFovTangent /
+                maximumHalfFovTangent
+            : 1.0f;
+
+    fixedScopeZoomScale =
+        (std::max)(
+            0.01f,
+            (std::min)(
+                fixedScopeZoomScale,
+                1.0f));
+
+    constants.fixedScopeZoom[0] =
+        fixedScopeZoomScale;
+    constants.fixedScopeZoom[1] =
+        fixedScopeZoomScale;
+    constants.fixedScopeZoom[2] = 0.0f;
+    constants.fixedScopeZoom[3] = 0.0f;
+
+    // KISAK_SP_VR_FIXED_SCOPE_SHARP_VIEW_AND_TRACER_V5
+    // The packed panel is rendered at the current optical FOV, so it needs
+    // neither crop magnification nor FSR. Publish its exact captured-texture
+    // rectangle to the direct compositor.
+    int fixedScopeMainStereoWidth = 0;
+    int fixedScopePanelX = 0;
+    int fixedScopePanelY = 0;
+    int fixedScopePanelSize = 0;
+
+    const bool dedicatedFixedScopeSource =
+        fixedScopedTurretActive &&
+        VR_GetPhysicalSniperScopeCaptureLayout(
+            static_cast<int>(
+                g_vrCapturedStereoWidth),
+            static_cast<int>(
+                g_vrCapturedStereoHeight),
+            &fixedScopeMainStereoWidth,
+            &fixedScopePanelX,
+            &fixedScopePanelY,
+            &fixedScopePanelSize);
+
+    if (dedicatedFixedScopeSource &&
+        fixedScopePanelSize > 4 &&
+        g_vrCapturedStereoWidth > 0u &&
+        g_vrCapturedStereoHeight > 0u)
+    {
+        const float inverseCaptureWidth =
+            1.0f /
+            static_cast<float>(
+                g_vrCapturedStereoWidth);
+
+        const float inverseCaptureHeight =
+            1.0f /
+            static_cast<float>(
+                g_vrCapturedStereoHeight);
+
+        const float sourceInsetPixels = 2.0f;
+
+        constants.fixedScopeZoom[2] = 1.0f;
+
+        constants.fixedScopeSource[0] =
+            (static_cast<float>(
+                 fixedScopePanelX) +
+             0.5f * static_cast<float>(
+                 fixedScopePanelSize)) *
+            inverseCaptureWidth;
+
+        constants.fixedScopeSource[1] =
+            (static_cast<float>(
+                 fixedScopePanelY) +
+             0.5f * static_cast<float>(
+                 fixedScopePanelSize)) *
+            inverseCaptureHeight;
+
+        constants.fixedScopeSource[2] =
+            (0.5f * static_cast<float>(
+                 fixedScopePanelSize) -
+             sourceInsetPixels) *
+            inverseCaptureWidth;
+
+        constants.fixedScopeSource[3] =
+            (0.5f * static_cast<float>(
+                 fixedScopePanelSize) -
+             sourceInsetPixels) *
+            inverseCaptureHeight;
+
+        static bool loggedDedicatedFixedScopeSource = false;
+
+        if (!loggedDedicatedFixedScopeSource)
+        {
+            Com_Printf(
+                0,
+                "[VR][FIXED SCOPE] Sampling the dedicated %d x %d "
+                "scope camera at %.2f degree FOV; eye-image "
+                "crop upscaling is disabled.\n",
+                fixedScopePanelSize,
+                fixedScopePanelSize,
+                fixedScopedTurretZoomFovDegrees);
+
+            loggedDedicatedFixedScopeSource = true;
+        }
+    }
+    else if (fixedScopedTurretActive &&
+             fixedScopeZoomScale < 0.999f &&
+             !g_vrLoggedFixedScopedTurretVisibleZoom)
+    {
+        Com_Printf(
+            0,
+            "[VR][FIXED SCOPE] Dedicated scope panel unavailable; "
+            "using the eye-image crop fallback at %.2f degree FOV "
+            "(sample scale %.4f).\n",
+            fixedScopedTurretZoomFovDegrees,
+            fixedScopeZoomScale);
+
+        g_vrLoggedFixedScopedTurretVisibleZoom = true;
+    }
+
+    if (fixedScopedTurretActive &&
+        !g_vrLoggedFixedScopedTurretCompositor)
+    {
+        Com_Printf(
+            0,
+            "[VR][FIXED SCOPE] Projected both scope reticles onto "
+            "one binocular forward ray.\n");
+
+        g_vrLoggedFixedScopedTurretCompositor = true;
+    }
+
+    D3D11_MAPPED_SUBRESOURCE mapped = {};
+
+    const HRESULT hr =
+        g_vrD3dContext->Map(
+            g_vrCompositorConstantBuffer.Get(),
+            0,
+            D3D11_MAP_WRITE_DISCARD,
+            0,
+            &mapped);
+
+    if (FAILED(hr) ||
+        mapped.pData == nullptr)
+    {
+        return;
+    }
+
+    std::memcpy(
+        mapped.pData,
+        &constants,
+        sizeof(constants));
+
+    g_vrD3dContext->Unmap(
+        g_vrCompositorConstantBuffer.Get(),
+        0);
+}
+
+void VR_RecordCapturedStereoPose()
+{
+    if (!g_vrPublishedRenderViewsValid)
+    {
+        return;
+    }
+
+    g_vrCapturedStereoViews =
+        g_vrPublishedRenderViews;
+
+    g_vrCapturedStereoViewsValid =
+        true;
+
+    if (!g_vrLoggedCapturedPoseMatch)
+    {
+        Com_Printf(
+            0,
+            "[VR] Matched captured stereo frame to its original "
+            "OpenXR render pose.\n");
+
+        g_vrLoggedCapturedPoseMatch =
+            true;
+    }
+}
+
+void VR_PollRetiredSharedFrames()
+{
+    if (g_vrD3dContext == nullptr)
+    {
+        return;
+    }
+
+    for (VrRetiredSharedFrame& retired :
+         g_vrRetiredSharedFrames)
+    {
+        if (!retired.active ||
+            retired.completionQuery == nullptr)
+        {
+            continue;
+        }
+
+        BOOL completed = FALSE;
+
+        const HRESULT hr =
+            g_vrD3dContext->GetData(
+                retired.completionQuery.Get(),
+                &completed,
+                sizeof(completed),
+                D3D11_ASYNC_GETDATA_DONOTFLUSH);
+
+        if (hr == S_OK &&
+            completed)
+        {
+            VR_D3D9ReleaseSharedFrame(
+                retired.slotIndex,
+                retired.serial);
+
+            retired.active = false;
+            retired.slotIndex = 0u;
+            retired.serial = 0u;
+            retired.view.Reset();
+            retired.texture.Reset();
+        }
+        else if (FAILED(hr) &&
+                 !g_vrLoggedSharedConsumerFailure)
+        {
+            VR_LogHrFailure(
+                "GetData(D3D11 shared consumer fence)",
+                hr);
+
+            VR_D3D9DisableSharedBridge();
+
+            g_vrLoggedSharedConsumerFailure = true;
+        }
+    }
+}
+
+VrRetiredSharedFrame*
+VR_FindFreeRetiredSharedFrame()
+{
+    for (VrRetiredSharedFrame& retired :
+         g_vrRetiredSharedFrames)
+    {
+        if (!retired.active)
+        {
+            return &retired;
+        }
+    }
+
+    return nullptr;
+}
+
+bool VR_RetireCurrentSharedFrame()
+{
+    if (!g_vrCurrentSharedFrameActive)
+    {
+        return true;
+    }
+
+    VrRetiredSharedFrame* retired =
+        VR_FindFreeRetiredSharedFrame();
+
+    if (retired == nullptr ||
+        g_vrD3dDevice == nullptr ||
+        g_vrD3dContext == nullptr)
+    {
+        return false;
+    }
+
+    if (retired->completionQuery == nullptr)
+    {
+        D3D11_QUERY_DESC queryDescription = {};
+        queryDescription.Query =
+            D3D11_QUERY_EVENT;
+
+        const HRESULT hr =
+            g_vrD3dDevice->CreateQuery(
+                &queryDescription,
+                retired->completionQuery
+                    .GetAddressOf());
+
+        if (FAILED(hr))
+        {
+            VR_LogHrFailure(
+                "CreateQuery(D3D11 shared consumer)",
+                hr);
+
+            return false;
+        }
+    }
+
+    // Ensure the resource is no longer bound before placing the fence after
+    // every D3D11 draw that sampled this frame.
+    ID3D11ShaderResourceView* nullView = nullptr;
+
+    g_vrD3dContext->PSSetShaderResources(
+        0,
+        1,
+        &nullView);
+
+    retired->active = true;
+    retired->slotIndex =
+        g_vrCurrentSharedSlot;
+    retired->serial =
+        g_vrCurrentSharedSerial;
+    retired->texture =
+        g_vrCapturedStereoTexture;
+    retired->view =
+        g_vrCapturedStereoView;
+
+    g_vrD3dContext->End(
+        retired->completionQuery.Get());
+    g_vrD3dContext->Flush();
+
+    g_vrCapturedStereoView.Reset();
+    g_vrCapturedStereoTexture.Reset();
+
+    g_vrCurrentSharedFrameActive = false;
+    g_vrCurrentSharedSlot = 0u;
+    g_vrCurrentSharedGeneration = 0u;
+    g_vrCurrentSharedSerial = 0u;
+
+    return true;
+}
+
+void VR_AbandonCurrentSharedFrameForFallback()
+{
+    if (!g_vrCurrentSharedFrameActive)
+    {
+        return;
+    }
+
+    if (g_vrD3dContext != nullptr)
+    {
+        ID3D11ShaderResourceView* nullView =
+            nullptr;
+
+        g_vrD3dContext->PSSetShaderResources(
+            0,
+            1,
+            &nullView);
+
+        g_vrD3dContext->Flush();
+    }
+
+    // The bridge is disabled before this path runs, so D3D9 will not
+    // overwrite this slot.  Keep the producer slot acquired until shutdown
+    // if a consumer fence could not be created.
+    g_vrCapturedStereoView.Reset();
+    g_vrCapturedStereoTexture.Reset();
+
+    g_vrCurrentSharedFrameActive = false;
+    g_vrCurrentSharedSlot = 0u;
+    g_vrCurrentSharedGeneration = 0u;
+    g_vrCurrentSharedSerial = 0u;
+}
+
+bool VR_OpenGpuSharedStereoFrame(
+    const VrD3D9SharedFrame& frame)
+{
+    if (g_vrD3dDevice == nullptr ||
+        frame.sharedHandle == nullptr ||
+        frame.width < 2u ||
+        frame.height == 0u)
+    {
+        return false;
+    }
+
+    ComPtr<ID3D11Texture2D> sharedTexture;
+
+    HRESULT hr =
+        g_vrD3dDevice->OpenSharedResource(
+            static_cast<HANDLE>(
+                frame.sharedHandle),
+            __uuidof(ID3D11Texture2D),
+            reinterpret_cast<void**>(
+                sharedTexture.GetAddressOf()));
+
+    if (FAILED(hr) ||
+        sharedTexture == nullptr)
+    {
+        VR_LogHrFailure(
+            "OpenSharedResource(D3D9Ex stereo frame)",
+            hr);
+
+        return false;
+    }
+
+    D3D11_TEXTURE2D_DESC description = {};
+    sharedTexture->GetDesc(&description);
+
+    if (description.Width != frame.width ||
+        description.Height != frame.height ||
+        description.SampleDesc.Count != 1u)
+    {
+        Com_PrintWarning(
+            0,
+            "[VR] Rejected mismatched D3D9Ex shared "
+            "frame description.\n");
+
+        return false;
+    }
+
+    ComPtr<ID3D11ShaderResourceView> sharedView;
+
+    hr =
+        g_vrD3dDevice->CreateShaderResourceView(
+            sharedTexture.Get(),
+            nullptr,
+            sharedView.GetAddressOf());
+
+    if (FAILED(hr) ||
+        sharedView == nullptr)
+    {
+        VR_LogHrFailure(
+            "CreateShaderResourceView("
+            "D3D9Ex shared stereo frame)",
+            hr);
+
+        return false;
+    }
+
+    if (!VR_RetireCurrentSharedFrame())
+    {
+        return false;
+    }
+
+    g_vrCapturedStereoTexture =
+        sharedTexture;
+    g_vrCapturedStereoView =
+        sharedView;
+
+    g_vrCapturedStereoWidth =
+        frame.width;
+    g_vrCapturedStereoHeight =
+        frame.height;
+    g_vrUploadedStereoSerial =
+        frame.serial;
+
+    g_vrCurrentSharedFrameActive = true;
+    g_vrCurrentSharedSlot =
+        frame.slotIndex;
+    g_vrCurrentSharedGeneration =
+        frame.generation;
+    g_vrCurrentSharedSerial =
+        frame.serial;
+
+    VR_RecordCapturedStereoPose();
+
+    if (!g_vrLoggedFirstSharedFrameOpen)
+    {
+        Com_Printf(
+            0,
+            "[VR] D3D11 opened the GPU-shared D3D9Ex "
+            "stereo frame directly: %u x %u; "
+            "CPU readback and upload are bypassed.\n",
+            frame.width,
+            frame.height);
+
+        g_vrLoggedFirstSharedFrameOpen = true;
+    }
+
+    return true;
+}
+
 bool VR_UpdateCapturedStereoTexture()
 {
+    VR_PollRetiredSharedFrames();
+
+    const bool canRetireCurrent =
+        !g_vrCurrentSharedFrameActive ||
+        VR_FindFreeRetiredSharedFrame() !=
+            nullptr;
+
+    if (canRetireCurrent)
+    {
+        VrD3D9SharedFrame sharedFrame = {};
+
+        if (VR_D3D9AcquireLatestSharedFrame(
+                g_vrUploadedStereoSerial,
+                sharedFrame))
+        {
+            if (VR_OpenGpuSharedStereoFrame(
+                    sharedFrame))
+            {
+                return true;
+            }
+
+            VR_D3D9ReleaseSharedFrame(
+                sharedFrame.slotIndex,
+                sharedFrame.serial);
+
+            VR_D3D9DisableSharedBridge();
+        }
+    }
+
+    if (VR_D3D9SharedBridgeActive())
+    {
+        return
+            g_vrCapturedStereoView !=
+            nullptr;
+    }
+
+    if (g_vrCurrentSharedFrameActive &&
+        !VR_RetireCurrentSharedFrame())
+    {
+        VR_AbandonCurrentSharedFrameForFallback();
+    }
+
     std::vector<std::uint8_t>& pixels =
         g_vrCapturedStereoUploadPixels;
 
@@ -1116,14 +3294,16 @@ bool VR_UpdateCapturedStereoTexture()
         width * 4u,
         0);
 
+    VR_RecordCapturedStereoPose();
+
     g_vrUploadedStereoSerial = serial;
 
     if (!g_vrLoggedCaptureBufferHandoff)
     {
         Com_Printf(
             0,
-            "[VR] Enabled zero-copy handoff between D3D9 capture "
-            "and the persistent D3D11 upload buffer.\n");
+            "[VR] CPU fallback handed its capture buffer "
+            "to the persistent D3D11 upload texture.\n");
 
         g_vrLoggedCaptureBufferHandoff = true;
     }
@@ -1132,9 +3312,8 @@ bool VR_UpdateCapturedStereoTexture()
     {
         Com_Printf(
             0,
-            "[VR] Uploaded first complete side-by-side "
-            "D3D9 frame to one D3D11 texture: "
-            "%u x %u.\n",
+            "[VR] CPU fallback uploaded the first complete "
+            "side-by-side D3D9 frame: %u x %u.\n",
             width,
             height);
 
@@ -1643,6 +3822,7 @@ void VR_ResetHeadOrientation()
 
     g_vrHeadBaseOrientationValid = false;
     g_vrHeadOrientationValid = false;
+    g_vrTransferredBodyYawDegrees = 0.0f;
     g_vrLoggedFirstHeadPose = false;
     g_vrLoggedFirstCameraApply = false;
 
@@ -1698,17 +3878,67 @@ void VR_PublishHeadOrientation(
             relativeOrientation,
             {0.0f, 1.0f, 0.0f});
 
-    const VrHeadVector forwardCod =
+    VrHeadVector forwardCod =
         VR_OpenXrVectorToCod(
             forwardOpenXr);
 
-    const VrHeadVector leftCod =
+    VrHeadVector leftCod =
         VR_OpenXrVectorToCod(
             leftOpenXr);
 
-    const VrHeadVector upCod =
+    VrHeadVector upCod =
         VR_OpenXrVectorToCod(
             upOpenXr);
+
+    constexpr float degreesToRadians =
+        0.01745329251994329577f;
+
+    const float transferredYawRadians =
+        g_vrTransferredBodyYawDegrees *
+        degreesToRadians;
+
+    const float transferredYawCos =
+        std::cos(
+            transferredYawRadians);
+
+    const float transferredYawSin =
+        std::sin(
+            transferredYawRadians);
+
+    const auto removeTransferredYaw =
+        [transferredYawCos,
+         transferredYawSin](
+            VrHeadVector& vector)
+        {
+            const float originalForward =
+                vector.x;
+
+            const float originalLeft =
+                vector.y;
+
+            // Rotate by the negative transferred yaw in CoD's
+            // +forward/+left horizontal basis.
+            vector.x =
+                transferredYawCos *
+                    originalForward +
+                transferredYawSin *
+                    originalLeft;
+
+            vector.y =
+                -transferredYawSin *
+                    originalForward +
+                transferredYawCos *
+                    originalLeft;
+        };
+
+    removeTransferredYaw(
+        forwardCod);
+
+    removeTransferredYaw(
+        leftCod);
+
+    removeTransferredYaw(
+        upCod);
 
     g_vrHeadOrientationAxis[0][0] =
         forwardCod.x;
@@ -1770,13 +4000,25 @@ void VR_PublishHeadOrientation(
 
         // OpenXR: +X right, +Y up, -Z forward.
         // CoD camera-local basis: +X forward, +Y left, +Z up.
-        g_vrHeadPositionLocal[0] =
+        const float rawPositionForward =
             -openXrDeltaZ *
             kVrGameUnitsPerMeter;
 
-        g_vrHeadPositionLocal[1] =
+        const float rawPositionLeft =
             -openXrDeltaX *
             kVrGameUnitsPerMeter;
+
+        g_vrHeadPositionLocal[0] =
+            transferredYawCos *
+                rawPositionForward +
+            transferredYawSin *
+                rawPositionLeft;
+
+        g_vrHeadPositionLocal[1] =
+            -transferredYawSin *
+                rawPositionForward +
+            transferredYawCos *
+                rawPositionLeft;
 
         g_vrHeadPositionLocal[2] =
             openXrDeltaY *
@@ -2415,6 +4657,16 @@ void VR_RenderControllerProxies(
     const int32_t viewportWidth,
     const int32_t viewportHeight)
 {
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrScopeStateMutex);
+
+        if (g_vrScopeActive)
+        {
+            return;
+        }
+    }
+
     if (!g_vrControllerProxyResourcesReady ||
         eyeIndex >= g_vrViews.size() ||
         viewportWidth <= 0 ||
@@ -2630,6 +4882,1113 @@ void VR_RenderControllerProxies(
     }
 }
 
+bool VR_ConfigureHudConvergedCaptureViewport(
+    const XrFovf& destinationFov,
+    const int32_t targetWidth,
+    const int32_t targetHeight,
+    D3D11_VIEWPORT* viewport)
+{
+    if (targetWidth <= 0 ||
+        targetHeight <= 0 ||
+        viewport == nullptr)
+    {
+        return false;
+    }
+
+    const float tanLeft =
+        std::tan(destinationFov.angleLeft);
+
+    const float tanRight =
+        std::tan(destinationFov.angleRight);
+
+    const float tanDown =
+        std::tan(destinationFov.angleDown);
+
+    const float tanUp =
+        std::tan(destinationFov.angleUp);
+
+    const float horizontalSpan =
+        tanRight - tanLeft;
+
+    const float verticalSpan =
+        tanUp - tanDown;
+
+    const float symmetricHorizontal =
+        (std::max)(-tanLeft, tanRight);
+
+    const float symmetricVertical =
+        (std::max)(-tanDown, tanUp);
+
+    if (horizontalSpan <= 0.0f ||
+        verticalSpan <= 0.0f ||
+        symmetricHorizontal <= 0.0f ||
+        symmetricVertical <= 0.0f)
+    {
+        return false;
+    }
+
+    // Map centered source NDC into the runtime's asymmetric destination
+    // NDC.  Because each symmetric half-FOV is the larger side, both scales
+    // are at least one and the oversized viewport is safely cropped rather
+    // than exposing an unrendered border.
+    const float scaleX =
+        2.0f * symmetricHorizontal /
+        horizontalSpan;
+
+    const float offsetX =
+        -(tanRight + tanLeft) /
+        horizontalSpan;
+
+    const float scaleY =
+        2.0f * symmetricVertical /
+        verticalSpan;
+
+    const float offsetY =
+        -(tanUp + tanDown) /
+        verticalSpan;
+
+    viewport->TopLeftX =
+        0.5f *
+        (1.0f + offsetX - scaleX) *
+        static_cast<float>(targetWidth);
+
+    viewport->TopLeftY =
+        0.5f *
+        (1.0f - offsetY - scaleY) *
+        static_cast<float>(targetHeight);
+
+    viewport->Width =
+        scaleX *
+        static_cast<float>(targetWidth);
+
+    viewport->Height =
+        scaleY *
+        static_cast<float>(targetHeight);
+
+    viewport->MinDepth = 0.0f;
+    viewport->MaxDepth = 1.0f;
+
+    static bool loggedHudConvergence = false;
+
+    if (!loggedHudConvergence)
+    {
+        Com_Printf(
+            0,
+            "[VR][HUD] Applied asymmetric-frustum correction; "
+            "shared 2D HUD elements now converge between eyes.\n");
+
+        loggedHudConvergence = true;
+    }
+
+    return true;
+}
+
+void VR_SetFullEyeViewport(
+    const int32_t targetWidth,
+    const int32_t targetHeight)
+{
+    if (targetWidth <= 0 ||
+        targetHeight <= 0)
+    {
+        return;
+    }
+
+    D3D11_VIEWPORT viewport = {};
+    viewport.Width =
+        static_cast<float>(targetWidth);
+    viewport.Height =
+        static_cast<float>(targetHeight);
+    viewport.MinDepth = 0.0f;
+    viewport.MaxDepth = 1.0f;
+
+    g_vrD3dContext->RSSetViewports(
+        1,
+        &viewport);
+}
+
+bool VR_RenderFsrUpscaledEye(
+    const std::uint32_t eyeIndex,
+    const int32_t outputWidth,
+    const int32_t outputHeight,
+    ID3D11ShaderResourceView* capturedView,
+    ID3D11RenderTargetView* outputTarget,
+    const D3D11_VIEWPORT& outputViewport)
+{
+    if (!g_vrFsrEnabled ||
+        capturedView == nullptr ||
+        outputTarget == nullptr ||
+        eyeIndex >= g_vrBlitVertexBuffers.size() ||
+        outputWidth <= 0 ||
+        outputHeight <= 0 ||
+        g_vrCapturedStereoWidth < 2u ||
+        g_vrCapturedStereoHeight == 0u ||
+        !g_vrFsrEasuPixelShader ||
+        !g_vrFsrRcasPixelShader ||
+        !g_vrFsrConstantBuffer ||
+        !g_vrFsrIntermediateTarget ||
+        !g_vrFsrIntermediateView)
+    {
+        return false;
+    }
+
+    // KISAK_SP_VR_FIXED_SCOPED_TURRET_RUNTIME_V4
+    // The fixed scope's variable magnification is performed by the direct
+    // compositor shader. Temporarily use that path even if FSR is generally
+    // enabled; ordinary gameplay resumes FSR as soon as the scope is left.
+    bool fixedScopedTurretActive = false;
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrScopeStateMutex);
+
+        fixedScopedTurretActive =
+            g_vrFixedScopedTurretActive;
+    }
+
+    if (fixedScopedTurretActive)
+    {
+        if (!g_vrLoggedFixedScopedTurretFsrBypass)
+        {
+            Com_Printf(
+                0,
+                "[VR][FIXED SCOPE] Using the direct compositor while "
+                "variable scope zoom is active.\n");
+
+            g_vrLoggedFixedScopedTurretFsrBypass = true;
+        }
+
+        return false;
+    }
+
+    const std::uint32_t inputWidth =
+        VR_GetCapturedMainStereoWidth() / 2u;
+
+    const std::uint32_t inputHeight =
+        g_vrCapturedStereoHeight;
+
+    const std::uint64_t inputArea =
+        static_cast<std::uint64_t>(inputWidth) *
+        static_cast<std::uint64_t>(inputHeight);
+
+    const std::uint64_t outputArea =
+        static_cast<std::uint64_t>(outputWidth) *
+        static_cast<std::uint64_t>(outputHeight);
+
+    // FSR 1 EASU is defined for 1x through 4x area upscaling.
+    if (static_cast<std::uint32_t>(outputWidth) < inputWidth ||
+        static_cast<std::uint32_t>(outputHeight) < inputHeight ||
+        outputArea > inputArea * 4u)
+    {
+        if (!g_vrLoggedFsrFallback)
+        {
+            Com_PrintWarning(
+                0,
+                "[VR] FSR bypassed because %u x %u to %d x %d "
+                "is outside its 1x-to-4x area upscale range; "
+                "using bilinear fallback.\n",
+                inputWidth,
+                inputHeight,
+                outputWidth,
+                outputHeight);
+
+            g_vrLoggedFsrFallback = true;
+        }
+
+        return false;
+    }
+
+    VrFsrConstants constants = {};
+
+    const std::uint32_t inputOriginX =
+        eyeIndex * inputWidth;
+
+    constants.inputRect[0] =
+        static_cast<float>(inputOriginX);
+    constants.inputRect[1] = 0.0f;
+    constants.inputRect[2] =
+        static_cast<float>(inputWidth);
+    constants.inputRect[3] =
+        static_cast<float>(inputHeight);
+
+    constants.inputSize[0] =
+        static_cast<float>(g_vrCapturedStereoWidth);
+    constants.inputSize[1] =
+        static_cast<float>(g_vrCapturedStereoHeight);
+    constants.inputSize[2] =
+        static_cast<float>(
+            inputOriginX + inputWidth - 1u);
+    constants.inputSize[3] =
+        static_cast<float>(inputHeight - 1u);
+
+    constants.outputSize[0] =
+        static_cast<float>(outputWidth);
+    constants.outputSize[1] =
+        static_cast<float>(outputHeight);
+    constants.outputSize[2] =
+        1.0f / static_cast<float>(outputWidth);
+    constants.outputSize[3] =
+        1.0f / static_cast<float>(outputHeight);
+
+    constants.settings[0] =
+        g_vrFsrSharpness;
+
+    D3D11_MAPPED_SUBRESOURCE mapped = {};
+
+    const HRESULT mapResult =
+        g_vrD3dContext->Map(
+            g_vrFsrConstantBuffer.Get(),
+            0,
+            D3D11_MAP_WRITE_DISCARD,
+            0,
+            &mapped);
+
+    if (FAILED(mapResult) ||
+        mapped.pData == nullptr)
+    {
+        return false;
+    }
+
+    std::memcpy(
+        mapped.pData,
+        &constants,
+        sizeof(constants));
+
+    g_vrD3dContext->Unmap(
+        g_vrFsrConstantBuffer.Get(),
+        0);
+
+    ID3D11ShaderResourceView* nullView = nullptr;
+
+    g_vrD3dContext->PSSetShaderResources(
+        0,
+        1,
+        &nullView);
+
+    ID3D11RenderTargetView* intermediateTarget =
+        g_vrFsrIntermediateTarget.Get();
+
+    g_vrD3dContext->OMSetRenderTargets(
+        1,
+        &intermediateTarget,
+        nullptr);
+
+    D3D11_VIEWPORT intermediateViewport = {};
+    intermediateViewport.Width =
+        static_cast<float>(outputWidth);
+    intermediateViewport.Height =
+        static_cast<float>(outputHeight);
+    intermediateViewport.MinDepth = 0.0f;
+    intermediateViewport.MaxDepth = 1.0f;
+
+    g_vrD3dContext->RSSetViewports(
+        1,
+        &intermediateViewport);
+
+    g_vrD3dContext->RSSetState(
+        g_vrTestRasterizerState.Get());
+
+    g_vrD3dContext->OMSetDepthStencilState(
+        nullptr,
+        0);
+
+    g_vrD3dContext->IASetInputLayout(
+        g_vrBlitInputLayout.Get());
+
+    const UINT stride =
+        sizeof(VrBlitVertex);
+
+    const UINT offset = 0u;
+
+    ID3D11Buffer* eyeVertexBuffer =
+        g_vrBlitVertexBuffers[eyeIndex].Get();
+
+    g_vrD3dContext->IASetVertexBuffers(
+        0,
+        1,
+        &eyeVertexBuffer,
+        &stride,
+        &offset);
+
+    g_vrD3dContext->IASetIndexBuffer(
+        nullptr,
+        DXGI_FORMAT_UNKNOWN,
+        0);
+
+    g_vrD3dContext->IASetPrimitiveTopology(
+        D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+
+    g_vrD3dContext->VSSetShader(
+        g_vrBlitVertexShader.Get(),
+        nullptr,
+        0);
+
+    g_vrD3dContext->PSSetShader(
+        g_vrFsrEasuPixelShader.Get(),
+        nullptr,
+        0);
+
+    ID3D11Buffer* fsrConstantBuffer =
+        g_vrFsrConstantBuffer.Get();
+
+    g_vrD3dContext->PSSetConstantBuffers(
+        2,
+        1,
+        &fsrConstantBuffer);
+
+    g_vrD3dContext->PSSetShaderResources(
+        0,
+        1,
+        &capturedView);
+
+    g_vrD3dContext->Draw(4, 0);
+
+    g_vrD3dContext->PSSetShaderResources(
+        0,
+        1,
+        &nullView);
+
+    g_vrD3dContext->OMSetRenderTargets(
+        1,
+        &outputTarget,
+        nullptr);
+
+    g_vrD3dContext->RSSetViewports(
+        1,
+        &outputViewport);
+
+    ID3D11Buffer* fullTextureVertexBuffer =
+        g_vrMenuBlitVertexBuffer.Get();
+
+    g_vrD3dContext->IASetVertexBuffers(
+        0,
+        1,
+        &fullTextureVertexBuffer,
+        &stride,
+        &offset);
+
+    g_vrD3dContext->PSSetShader(
+        g_vrFsrRcasPixelShader.Get(),
+        nullptr,
+        0);
+
+    ID3D11Buffer* compositorConstantBuffer =
+        g_vrCompositorConstantBuffer.Get();
+
+    g_vrD3dContext->PSSetConstantBuffers(
+        1,
+        1,
+        &compositorConstantBuffer);
+
+    ID3D11ShaderResourceView* intermediateView =
+        g_vrFsrIntermediateView.Get();
+
+    g_vrD3dContext->PSSetShaderResources(
+        0,
+        1,
+        &intermediateView);
+
+    g_vrD3dContext->Draw(4, 0);
+
+    g_vrD3dContext->PSSetShaderResources(
+        0,
+        1,
+        &nullView);
+
+    if (!g_vrLoggedFirstFsrFrame)
+    {
+        Com_Printf(
+            0,
+            "[VR] FSR 1 EASU/RCAS compositor active: "
+            "%u x %u per eye to %d x %d, RCAS %.2f.\n",
+            inputWidth,
+            inputHeight,
+            outputWidth,
+            outputHeight,
+            g_vrFsrSharpness);
+
+        g_vrLoggedFirstFsrFrame = true;
+    }
+
+    return true;
+}
+
+void VR_RenderPhysicalSniperScope(
+    const std::uint32_t eyeIndex,
+    const int32_t viewportWidth,
+    const int32_t viewportHeight,
+    const XrView& sourceView)
+{
+    if (eyeIndex >= g_vrViews.size() ||
+        eyeIndex >= g_vrBlitVertexBuffers.size() ||
+        viewportWidth <= 0 ||
+        viewportHeight <= 0 ||
+        !g_vrScopePixelShader ||
+        !g_vrScopeConstantBuffer ||
+        !g_vrCapturedStereoView)
+    {
+        return;
+    }
+
+    bool scopeActive = false;
+    float adsFraction = 0.0f;
+    float adsFovDegrees = 65.0f;
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrScopeStateMutex);
+
+        scopeActive = g_vrScopeActive;
+        adsFraction = g_vrScopeAdsFraction;
+        adsFovDegrees = g_vrScopeAdsFovDegrees;
+    }
+
+    if (!scopeActive ||
+        adsFraction <= 0.01f ||
+        adsFovDegrees <= 1.0f)
+    {
+        return;
+    }
+
+    XrVector3f controllerPosition = {};
+    XrQuaternionf controllerOrientation = {
+        0.0f,
+        0.0f,
+        0.0f,
+        1.0f,
+    };
+
+    float finalWeaponAxisCameraLocal[3][3] = {};
+    bool finalWeaponAxisCameraLocalValid = false;
+    float scopeOffsetWeaponLocal[3] = {};
+    bool scopeOffsetWeaponLocalValid = false;
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrWeaponControllerPoseMutex);
+
+        if (!g_vrRightControllerWeaponFilterValid)
+        {
+            return;
+        }
+
+        controllerPosition =
+            g_vrRightControllerFilteredGripPosition;
+
+        controllerOrientation =
+            g_vrRightControllerFilteredAimOrientation;
+
+        finalWeaponAxisCameraLocalValid =
+            g_vrRightControllerFinalWeaponAxisCameraLocalValid;
+
+        if (finalWeaponAxisCameraLocalValid)
+        {
+            std::memcpy(
+                finalWeaponAxisCameraLocal,
+                g_vrRightControllerFinalWeaponAxisCameraLocal,
+                sizeof(finalWeaponAxisCameraLocal));
+        }
+
+        scopeOffsetWeaponLocalValid =
+            g_vrPhysicalSniperScopeOffsetWeaponLocalValid;
+
+        if (scopeOffsetWeaponLocalValid)
+        {
+            std::memcpy(
+                scopeOffsetWeaponLocal,
+                g_vrPhysicalSniperScopeOffsetWeaponLocal,
+                sizeof(scopeOffsetWeaponLocal));
+        }
+    }
+
+    VrHeadVector scopeForward =
+        VR_RotateHeadVector(
+            controllerOrientation,
+            {0.0f, 0.0f, -1.0f});
+
+    VrHeadVector scopeRight =
+        VR_RotateHeadVector(
+            controllerOrientation,
+            {1.0f, 0.0f, 0.0f});
+
+    VrHeadVector scopeUp =
+        VR_RotateHeadVector(
+            controllerOrientation,
+            {0.0f, 1.0f, 0.0f});
+
+    if (finalWeaponAxisCameraLocalValid)
+    {
+        const XrQuaternionf headOrientation =
+            VR_NormalizeQuaternion(
+                g_vrViews[0].pose.orientation);
+
+        // Inverse of VR_OpenXrVectorToCod():
+        // CoD (+forward,+left,+up) -> OpenXR (-left,+up,-forward).
+        const VrHeadVector scopeForwardHeadLocal = {
+            -finalWeaponAxisCameraLocal[0][1],
+            finalWeaponAxisCameraLocal[0][2],
+            -finalWeaponAxisCameraLocal[0][0],
+        };
+
+        // Weapon axis row 1 is left; negate its OpenXR conversion for right.
+        const VrHeadVector scopeRightHeadLocal = {
+            finalWeaponAxisCameraLocal[1][1],
+            -finalWeaponAxisCameraLocal[1][2],
+            finalWeaponAxisCameraLocal[1][0],
+        };
+
+        const VrHeadVector scopeUpHeadLocal = {
+            -finalWeaponAxisCameraLocal[2][1],
+            finalWeaponAxisCameraLocal[2][2],
+            -finalWeaponAxisCameraLocal[2][0],
+        };
+
+        scopeForward =
+            VR_RotateHeadVector(
+                headOrientation,
+                scopeForwardHeadLocal);
+
+        scopeRight =
+            VR_RotateHeadVector(
+                headOrientation,
+                scopeRightHeadLocal);
+
+        scopeUp =
+            VR_RotateHeadVector(
+                headOrientation,
+                scopeUpHeadLocal);
+
+        static bool loggedFinalWeaponScopeAxis = false;
+
+        if (!loggedFinalWeaponScopeAxis)
+        {
+            Com_Printf(
+                0,
+                "[VR] Physical sniper scope now follows the final "
+                "rendered weapon axis.\n");
+
+            loggedFinalWeaponScopeAxis = true;
+        }
+    }
+
+    const float scopeForwardMeters =
+        scopeOffsetWeaponLocalValid
+            ? scopeOffsetWeaponLocal[0] /
+                kVrGameUnitsPerMeter
+            : 0.22f +
+                g_vrScopeForwardCalibrationMeters;
+
+    const float scopeLeftMeters =
+        scopeOffsetWeaponLocalValid
+            ? scopeOffsetWeaponLocal[1] /
+                kVrGameUnitsPerMeter
+            : g_vrScopeLeftCalibrationMeters;
+
+    const float scopeUpMeters =
+        scopeOffsetWeaponLocalValid
+            ? scopeOffsetWeaponLocal[2] /
+                kVrGameUnitsPerMeter
+            : 0.055f +
+                g_vrScopeUpCalibrationMeters;
+
+    XrVector3f lensCenter =
+        VR_ControllerAddScaled(
+            controllerPosition,
+            scopeForward,
+            scopeForwardMeters);
+
+    lensCenter =
+        VR_ControllerAddScaled(
+            lensCenter,
+            scopeRight,
+            -scopeLeftMeters);
+
+    lensCenter =
+        VR_ControllerAddScaled(
+            lensCenter,
+            scopeUp,
+            scopeUpMeters);
+
+    const XrVector3f lensRight =
+        VR_ControllerAddScaled(
+            lensCenter,
+            scopeRight,
+            g_vrScopeLensRadiusMeters);
+
+    const XrVector3f lensUp =
+        VR_ControllerAddScaled(
+            lensCenter,
+            scopeUp,
+            g_vrScopeLensRadiusMeters);
+
+    const XrVector3f aimPoint =
+        VR_ControllerAddScaled(
+            lensCenter,
+            scopeForward,
+            32.0f);
+
+    // The captured source is now rendered with a centered symmetric
+    // frustum.  Project its magnified sample through that same source
+    // frustum; the physical lens itself remains in the true asymmetric
+    // destination eye view.
+    XrView symmetricSourceView = sourceView;
+
+    const float sourceTanLeft =
+        std::tan(sourceView.fov.angleLeft);
+
+    const float sourceTanRight =
+        std::tan(sourceView.fov.angleRight);
+
+    const float sourceTanDown =
+        std::tan(sourceView.fov.angleDown);
+
+    const float sourceTanUp =
+        std::tan(sourceView.fov.angleUp);
+
+    const float sourceHalfFovX =
+        (std::max)(-sourceTanLeft, sourceTanRight);
+
+    const float sourceHalfFovY =
+        (std::max)(-sourceTanDown, sourceTanUp);
+
+    symmetricSourceView.fov.angleLeft =
+        std::atan(-sourceHalfFovX);
+
+    symmetricSourceView.fov.angleRight =
+        std::atan(sourceHalfFovX);
+
+    symmetricSourceView.fov.angleDown =
+        std::atan(-sourceHalfFovY);
+
+    symmetricSourceView.fov.angleUp =
+        std::atan(sourceHalfFovY);
+
+    float lensCenterX = 0.0f;
+    float lensCenterY = 0.0f;
+    float lensRightX = 0.0f;
+    float lensRightY = 0.0f;
+    float lensUpX = 0.0f;
+    float lensUpY = 0.0f;
+    float aimX = 0.0f;
+    float aimY = 0.0f;
+
+    if (!VR_ProjectAppSpacePointToEye(
+            lensCenter,
+            g_vrViews[eyeIndex],
+            &lensCenterX,
+            &lensCenterY) ||
+        !VR_ProjectAppSpacePointToEye(
+            lensRight,
+            g_vrViews[eyeIndex],
+            &lensRightX,
+            &lensRightY) ||
+        !VR_ProjectAppSpacePointToEye(
+            lensUp,
+            g_vrViews[eyeIndex],
+            &lensUpX,
+            &lensUpY) ||
+        !VR_ProjectAppSpacePointToEye(
+            aimPoint,
+            symmetricSourceView,
+            &aimX,
+            &aimY))
+    {
+        return;
+    }
+
+    const float lensCenterU =
+        0.5f * (lensCenterX + 1.0f);
+
+    const float lensCenterV =
+        0.5f * (1.0f - lensCenterY);
+
+    const float lensRightU =
+        0.5f * (lensRightX + 1.0f);
+
+    const float lensRightV =
+        0.5f * (1.0f - lensRightY);
+
+    const float lensUpU =
+        0.5f * (lensUpX + 1.0f);
+
+    const float lensUpV =
+        0.5f * (1.0f - lensUpY);
+
+    // KISAK_VR_RIFLE_ATTACHED_SCOPE_V1
+    // Preserve the optic's physical angular size.  The former 11.5 percent
+    // minimum made the lens look detached from the rifle whenever it was
+    // held farther from the eye.
+    float basisRightU =
+        lensRightU - lensCenterU;
+
+    float basisRightV =
+        lensRightV - lensCenterV;
+
+    float basisUpU =
+        lensUpU - lensCenterU;
+
+    float basisUpV =
+        lensUpV - lensCenterV;
+
+    const float rightBasisLength =
+        std::sqrt(
+            basisRightU * basisRightU +
+            basisRightV * basisRightV);
+
+    const float upBasisLength =
+        std::sqrt(
+            basisUpU * basisUpU +
+            basisUpV * basisUpV);
+
+    const float averageBasisLength =
+        0.5f *
+        (rightBasisLength + upBasisLength);
+
+    float basisScale = 1.0f;
+
+    if (averageBasisLength > 0.0001f)
+    {
+        if (averageBasisLength > 0.18f)
+        {
+            basisScale =
+                0.18f /
+                averageBasisLength;
+        }
+    }
+
+    basisRightU *= basisScale;
+    basisRightV *= basisScale;
+    basisUpU *= basisScale;
+    basisUpV *= basisScale;
+
+    const float determinant =
+        basisRightU * basisUpV -
+        basisUpU * basisRightV;
+
+    if (std::abs(determinant) < 0.00001f)
+    {
+        return;
+    }
+
+    constexpr float kPi =
+        3.14159265358979323846f;
+
+    const float sourceVerticalFov =
+        symmetricSourceView.fov.angleUp -
+        symmetricSourceView.fov.angleDown;
+
+    const float adsFovRadians =
+        adsFovDegrees *
+        (kPi / 180.0f);
+
+    float magnification =
+        std::tan(0.5f * sourceVerticalFov) /
+        std::tan(0.5f * adsFovRadians);
+
+    magnification =
+        (std::max)(
+            1.5f,
+            (std::min)(3.0f, magnification));
+
+    int mainStereoWidth = 0;
+    int scopePanelX = 0;
+    int scopePanelY = 0;
+    int scopePanelSize = 0;
+
+    const bool dedicatedScopeSource =
+        VR_GetPhysicalSniperScopeCaptureLayout(
+            static_cast<int>(
+                g_vrCapturedStereoWidth),
+            static_cast<int>(
+                g_vrCapturedStereoHeight),
+            &mainStereoWidth,
+            &scopePanelX,
+            &scopePanelY,
+            &scopePanelSize);
+
+    if (!dedicatedScopeSource &&
+        !g_vrLoggedDedicatedScopeLayoutMissing &&
+        g_vrEyeSwapchains.size() >=
+            kVrStereoEyeCount)
+    {
+        const int requiredWidth =
+            g_vrEyeSwapchains[0].width +
+            g_vrEyeSwapchains[1].width +
+            g_vrScopeCaptureSizePixels;
+
+        const int requiredHeight =
+            (std::max)(
+                g_vrScopeCaptureSizePixels,
+                (std::max)(
+                    g_vrEyeSwapchains[0].height,
+                    g_vrEyeSwapchains[1].height));
+
+        Com_PrintWarning(
+            0,
+            "[VR] Dedicated scope camera is inactive: "
+            "the %u x %u capture needs at least %d x %d "
+            "for native stereo plus the %d px scope panel. "
+            "Using the legacy eye-image crop.\n",
+            g_vrCapturedStereoWidth,
+            g_vrCapturedStereoHeight,
+            requiredWidth,
+            requiredHeight,
+            g_vrScopeCaptureSizePixels);
+
+        g_vrLoggedDedicatedScopeLayoutMissing =
+            true;
+    }
+
+    VrScopeConstants constants = {};
+
+    constants.lens[0] = lensCenterU;
+    constants.lens[1] = lensCenterV;
+    constants.lens[2] = adsFraction;
+    constants.lens[3] =
+        dedicatedScopeSource
+            ? 1.0f
+            : 0.0f;
+
+    constants.basis[0] = basisRightU;
+    constants.basis[1] = basisRightV;
+    constants.basis[2] = basisUpU;
+    constants.basis[3] = basisUpV;
+
+    if (dedicatedScopeSource)
+    {
+        const float inverseCaptureWidth =
+            1.0f /
+            static_cast<float>(
+                g_vrCapturedStereoWidth);
+
+        const float inverseCaptureHeight =
+            1.0f /
+            static_cast<float>(
+                g_vrCapturedStereoHeight);
+
+        const float sourceInsetPixels = 2.0f;
+
+        constants.sample[0] =
+            (static_cast<float>(scopePanelX) +
+             0.5f * static_cast<float>(scopePanelSize)) *
+            inverseCaptureWidth;
+
+        constants.sample[1] =
+            (static_cast<float>(scopePanelY) +
+             0.5f * static_cast<float>(scopePanelSize)) *
+            inverseCaptureHeight;
+
+        constants.sample[2] =
+            (0.5f * static_cast<float>(scopePanelSize) -
+             sourceInsetPixels) *
+            inverseCaptureWidth;
+
+        constants.sample[3] =
+            (0.5f * static_cast<float>(scopePanelSize) -
+             sourceInsetPixels) *
+            inverseCaptureHeight;
+
+        constants.bounds[0] =
+            (static_cast<float>(scopePanelX) +
+             sourceInsetPixels) *
+            inverseCaptureWidth;
+
+        constants.bounds[1] =
+            (static_cast<float>(
+                 scopePanelX + scopePanelSize) -
+             sourceInsetPixels) *
+            inverseCaptureWidth;
+
+        constants.bounds[2] =
+            (static_cast<float>(scopePanelY) +
+             sourceInsetPixels) *
+            inverseCaptureHeight;
+
+        constants.bounds[3] =
+            (static_cast<float>(
+                 scopePanelY + scopePanelSize) -
+             sourceInsetPixels) *
+            inverseCaptureHeight;
+
+        if (!g_vrLoggedDedicatedScopeSample)
+        {
+            Com_Printf(
+                0,
+                "[VR] Physical lens now samples the dedicated "
+                "%d x %d weapon-free scope camera.\n",
+                scopePanelSize,
+                scopePanelSize);
+
+            g_vrLoggedDedicatedScopeSample = true;
+        }
+    }
+    else
+    {
+        const float mainStereoFraction =
+            g_vrCapturedStereoWidth > 0u
+                ? static_cast<float>(
+                      VR_GetCapturedMainStereoWidth()) /
+                    static_cast<float>(
+                        g_vrCapturedStereoWidth)
+                : 1.0f;
+
+        constants.sample[0] =
+            mainStereoFraction *
+            (static_cast<float>(eyeIndex) * 0.5f +
+             0.25f * (aimX + 1.0f));
+
+        constants.sample[1] =
+            0.5f * (1.0f - aimY);
+
+        constants.sample[2] =
+            1.0f / magnification;
+
+        constants.bounds[0] =
+            mainStereoFraction *
+            (static_cast<float>(eyeIndex) * 0.5f +
+             0.001f);
+
+        constants.bounds[1] =
+            mainStereoFraction *
+            (static_cast<float>(eyeIndex + 1u) * 0.5f -
+             0.001f);
+
+        constants.bounds[2] = 0.001f;
+        constants.bounds[3] = 0.999f;
+    }
+
+    constants.viewport[0] =
+        1.0f /
+        static_cast<float>(viewportWidth);
+
+    constants.viewport[1] =
+        1.0f /
+        static_cast<float>(viewportHeight);
+
+    constants.viewport[2] =
+        1.0f /
+        static_cast<float>(
+            g_vrCapturedStereoWidth);
+
+    constants.viewport[3] =
+        1.0f /
+        static_cast<float>(
+            g_vrCapturedStereoHeight);
+
+    D3D11_MAPPED_SUBRESOURCE mapped = {};
+
+    const HRESULT mapResult =
+        g_vrD3dContext->Map(
+            g_vrScopeConstantBuffer.Get(),
+            0,
+            D3D11_MAP_WRITE_DISCARD,
+            0,
+            &mapped);
+
+    if (FAILED(mapResult) ||
+        mapped.pData == nullptr)
+    {
+        return;
+    }
+
+    std::memcpy(
+        mapped.pData,
+        &constants,
+        sizeof(constants));
+
+    g_vrD3dContext->Unmap(
+        g_vrScopeConstantBuffer.Get(),
+        0);
+
+    const UINT stride =
+        sizeof(VrBlitVertex);
+
+    const UINT offset = 0u;
+
+    ID3D11Buffer* vertexBuffer =
+        g_vrBlitVertexBuffers[eyeIndex].Get();
+
+    g_vrD3dContext->IASetInputLayout(
+        g_vrBlitInputLayout.Get());
+
+    g_vrD3dContext->IASetVertexBuffers(
+        0,
+        1,
+        &vertexBuffer,
+        &stride,
+        &offset);
+
+    g_vrD3dContext->IASetIndexBuffer(
+        nullptr,
+        DXGI_FORMAT_UNKNOWN,
+        0);
+
+    g_vrD3dContext->IASetPrimitiveTopology(
+        D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+
+    g_vrD3dContext->VSSetShader(
+        g_vrBlitVertexShader.Get(),
+        nullptr,
+        0);
+
+    g_vrD3dContext->PSSetShader(
+        g_vrScopePixelShader.Get(),
+        nullptr,
+        0);
+
+    ID3D11ShaderResourceView* capturedView =
+        g_vrCapturedStereoView.Get();
+
+    g_vrD3dContext->PSSetShaderResources(
+        0,
+        1,
+        &capturedView);
+
+    ID3D11SamplerState* sampler =
+        g_vrBlitSampler.Get();
+
+    g_vrD3dContext->PSSetSamplers(
+        0,
+        1,
+        &sampler);
+
+    ID3D11Buffer* constantBuffer =
+        g_vrScopeConstantBuffer.Get();
+
+    g_vrD3dContext->PSSetConstantBuffers(
+        0,
+        1,
+        &constantBuffer);
+
+    g_vrD3dContext->OMSetBlendState(
+        nullptr,
+        nullptr,
+        0xFFFFFFFFu);
+
+    g_vrD3dContext->Draw(4, 0);
+
+    ID3D11ShaderResourceView* nullView = nullptr;
+    ID3D11Buffer* nullBuffer = nullptr;
+
+    g_vrD3dContext->PSSetShaderResources(
+        0,
+        1,
+        &nullView);
+
+    g_vrD3dContext->PSSetConstantBuffers(
+        0,
+        1,
+        &nullBuffer);
+
+    if (!g_vrLoggedFirstPhysicalScopeDraw)
+    {
+        Com_Printf(
+            0,
+            "[VR] Rendered first rifle-attached physical scope.\n");
+
+        g_vrLoggedFirstPhysicalScopeDraw = true;
+    }
+}
+
 const char* VR_ControllerHandName(
     const std::uint32_t handIndex)
 {
@@ -2695,6 +6054,12 @@ void VR_DestroyControllerInput()
         g_vrHapticOutputAction = XR_NULL_HANDLE;
     }
 
+    if (g_vrMenuButtonAction != XR_NULL_HANDLE)
+    {
+        xrDestroyAction(g_vrMenuButtonAction);
+        g_vrMenuButtonAction = XR_NULL_HANDLE;
+    }
+
     if (g_vrNextWeaponButtonAction != XR_NULL_HANDLE)
     {
         xrDestroyAction(g_vrNextWeaponButtonAction);
@@ -2729,6 +6094,12 @@ void VR_DestroyControllerInput()
     {
         xrDestroyAction(g_vrJumpButtonAction);
         g_vrJumpButtonAction = XR_NULL_HANDLE;
+    }
+
+    if (g_vrRightThumbrestTouchAction != XR_NULL_HANDLE)
+    {
+        xrDestroyAction(g_vrRightThumbrestTouchAction);
+        g_vrRightThumbrestTouchAction = XR_NULL_HANDLE;
     }
 
     if (g_vrTurnThumbstickAction != XR_NULL_HANDLE)
@@ -2798,19 +6169,27 @@ void VR_DestroyControllerInput()
         g_vrLeftThumbstickValid = false;
 
         g_vrRightThumbstickX = 0.0f;
+        g_vrRightThumbstickY = 0.0f;
         g_vrRightThumbstickValid = false;
         g_vrSnapTurnArmed = true;
+        g_vrRightStickUtilityArmed = true;
+        g_vrRightThumbrestTouched = false;
+        g_vrModifierDpadArmed = true;
 
-        g_vrLeftTriggerAdsHeld = false;
+        g_vrPoseFocusAimHeld = false;
+        g_vrLeftTriggerReloadHeld = false;
         g_vrRightAJumpHeld = false;
-        g_vrLeftXUseReloadHeld = false;
+        g_vrLeftXUseHeld = false;
 
         g_vrLeftStickSprintHeld = false;
         g_vrRightStickMeleeHeld = false;
         g_vrRightBStanceHeld = false;
 
-        g_vrRightGripFragHeld = false;
+        g_vrRightGripOffhandHeld = false;
         g_vrLeftYNextWeaponHeld = false;
+
+        g_vrLeftMenuHeld = false;
+        g_vrLeftMenuWasHeld = false;
     }
 
     {
@@ -2820,7 +6199,11 @@ void VR_DestroyControllerInput()
         g_vrRightControllerWeaponPoseValid = false;
         g_vrRightControllerWeaponBaseValid = false;
         g_vrRightControllerWeaponFilterValid = false;
+        g_vrMountedWeaponCameraAxisWorldValid = false;
         g_vrRightControllerFinalWeaponAimValid = false;
+        g_vrRightControllerFinalWeaponAxisCameraLocalValid = false;
+        g_vrPhysicalSniperScopeOffsetWeaponLocalValid = false;
+        g_vrPhysicalSniperScopePoseWorldValid = false;
         g_vrRightControllerFinalWeaponMuzzleValid = false;
         g_vrRightControllerFinalWeaponMuzzleBlocked = false;
         g_vrRightControllerAttackPressed = false;
@@ -2853,6 +6236,36 @@ void VR_DestroyControllerInput()
             sizeof(g_vrRightControllerWeaponAxis));
 
         memset(
+            g_vrRightControllerFinalWeaponAxisCameraLocal,
+            0,
+            sizeof(
+                g_vrRightControllerFinalWeaponAxisCameraLocal));
+
+        memset(
+            g_vrPhysicalSniperScopeOffsetWeaponLocal,
+            0,
+            sizeof(
+                g_vrPhysicalSniperScopeOffsetWeaponLocal));
+
+        memset(
+            g_vrPhysicalSniperScopeOriginWorld,
+            0,
+            sizeof(g_vrPhysicalSniperScopeOriginWorld));
+
+        g_vrPhysicalSniperScopeForwardWorld[0] = 1.0f;
+        g_vrPhysicalSniperScopeForwardWorld[1] = 0.0f;
+        g_vrPhysicalSniperScopeForwardWorld[2] = 0.0f;
+
+        std::memset(
+            g_vrPhysicalSniperScopeAxisWorld,
+            0,
+            sizeof(g_vrPhysicalSniperScopeAxisWorld));
+
+        g_vrPhysicalSniperScopeAxisWorld[0][0] = 1.0f;
+        g_vrPhysicalSniperScopeAxisWorld[1][1] = 1.0f;
+        g_vrPhysicalSniperScopeAxisWorld[2][2] = 1.0f;
+
+        memset(
             g_vrRightControllerFinalWeaponMuzzleWorld,
             0,
             sizeof(g_vrRightControllerFinalWeaponMuzzleWorld));
@@ -2881,6 +6294,9 @@ void VR_DestroyControllerInput()
         g_vrLeftControllerForegripPressed = false;
         g_vrTwoHandWeaponBlend = 0.0f;
         g_vrTwoHandWeaponTargetActive = false;
+        g_vrPoseFocusAimPoseHeld = false;
+        g_vrPoseFocusAimEngageFrames = 0u;
+        g_vrPoseFocusAimReleaseFrames = 0u;
 
         memset(
             g_vrLeftControllerForegripPosition,
@@ -2958,9 +6374,9 @@ bool VR_SuggestControllerBindings()
         return false;
     }
 
-    std::array<XrPath, 18> touchBindingPaths = {};
+    std::array<XrPath, 20> touchBindingPaths = {};
 
-    const std::array<const char*, 18>
+    const std::array<const char*, 20>
         touchBindingStrings = {
             "/user/hand/left/input/grip/pose",
             "/user/hand/right/input/grip/pose",
@@ -2980,6 +6396,8 @@ bool VR_SuggestControllerBindings()
             "/user/hand/right/input/thumbstick/click",
             "/user/hand/right/input/b/click",
             "/user/hand/left/input/y/click",
+            "/user/hand/left/input/menu/click",
+            "/user/hand/right/input/thumbrest/touch",
         };
 
     for (std::uint32_t bindingIndex = 0u;
@@ -2994,7 +6412,7 @@ bool VR_SuggestControllerBindings()
         }
     }
 
-    const std::array<XrActionSuggestedBinding, 18>
+    const std::array<XrActionSuggestedBinding, 20>
         touchBindings = {{
             {
                 g_vrGripPoseAction,
@@ -3067,6 +6485,14 @@ bool VR_SuggestControllerBindings()
             {
                 g_vrNextWeaponButtonAction,
                 touchBindingPaths[17],
+            },
+            {
+                g_vrMenuButtonAction,
+                touchBindingPaths[18],
+            },
+            {
+                g_vrRightThumbrestTouchAction,
+                touchBindingPaths[19],
             },
         }};
 
@@ -3293,6 +6719,11 @@ bool VR_CreateControllerActions()
             &g_vrTurnThumbstickAction) ||
         !VR_CreateControllerAction(
             XR_ACTION_TYPE_BOOLEAN_INPUT,
+            "thumbrest_modifier",
+            "Right Thumbrest Modifier",
+            &g_vrRightThumbrestTouchAction) ||
+        !VR_CreateControllerAction(
+            XR_ACTION_TYPE_BOOLEAN_INPUT,
             "jump_button",
             "Jump Button",
             &g_vrJumpButtonAction) ||
@@ -3321,6 +6752,11 @@ bool VR_CreateControllerActions()
             "next_weapon_button",
             "Next Weapon Button",
             &g_vrNextWeaponButtonAction) ||
+        !VR_CreateControllerAction(
+            XR_ACTION_TYPE_BOOLEAN_INPUT,
+            "menu_button",
+            "Menu Button",
+            &g_vrMenuButtonAction) ||
         !VR_CreateControllerAction(
             XR_ACTION_TYPE_VIBRATION_OUTPUT,
             "haptic_output",
@@ -4008,6 +7444,264 @@ void VR_PublishRightControllerWeaponPose(
     g_vrRightControllerWeaponPoseValid = true;
 }
 
+void VR_UpdatePoseFocusAimFromControllers()
+{
+    bool previousHeld = false;
+    bool currentHeld = false;
+    bool poseAvailable = false;
+
+    float headAlignment = -1.0f;
+    float eyeLineDistance = 999.0f;
+    float rightHandForward = 0.0f;
+    float rightHandHeight = 0.0f;
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrWeaponControllerPoseMutex);
+
+        previousHeld =
+            g_vrPoseFocusAimPoseHeld;
+
+        poseAvailable =
+            g_vrTwoHandWeaponTargetActive &&
+            g_vrLeftControllerForegripPoseValid &&
+            g_vrLeftControllerForegripPressed &&
+            g_vrRightControllerWeaponPoseValid;
+
+        bool engagePose = false;
+        bool retainPose = false;
+
+        if (poseAvailable)
+        {
+            float weaponForward[3] = {
+                g_vrLeftControllerForegripPosition[0] -
+                    g_vrRightControllerWeaponPosition[0],
+                g_vrLeftControllerForegripPosition[1] -
+                    g_vrRightControllerWeaponPosition[1],
+                g_vrLeftControllerForegripPosition[2] -
+                    g_vrRightControllerWeaponPosition[2],
+            };
+
+            const float weaponForwardLength =
+                std::sqrt(
+                    weaponForward[0] * weaponForward[0] +
+                    weaponForward[1] * weaponForward[1] +
+                    weaponForward[2] * weaponForward[2]);
+
+            if (weaponForwardLength <= 0.0001f)
+            {
+                poseAvailable = false;
+            }
+            else
+            {
+                weaponForward[0] /= weaponForwardLength;
+                weaponForward[1] /= weaponForwardLength;
+                weaponForward[2] /= weaponForwardLength;
+
+                // Controller positions are HMD-local CoD coordinates:
+                // +X is gaze-forward, +Y is left, and +Z is up.  The
+                // normalized hand-to-hand vector is the same forward axis
+                // used by the existing two-hand weapon stabilization.
+                headAlignment =
+                    weaponForward[0];
+
+                rightHandForward =
+                    g_vrRightControllerWeaponPosition[0];
+
+                rightHandHeight =
+                    g_vrRightControllerWeaponPosition[2];
+
+                const float positionAlongWeapon =
+                    g_vrRightControllerWeaponPosition[0] *
+                        weaponForward[0] +
+                    g_vrRightControllerWeaponPosition[1] *
+                        weaponForward[1] +
+                    g_vrRightControllerWeaponPosition[2] *
+                        weaponForward[2];
+
+                const float perpendicularToEye[3] = {
+                    g_vrRightControllerWeaponPosition[0] -
+                        positionAlongWeapon *
+                            weaponForward[0],
+                    g_vrRightControllerWeaponPosition[1] -
+                        positionAlongWeapon *
+                            weaponForward[1],
+                    g_vrRightControllerWeaponPosition[2] -
+                        positionAlongWeapon *
+                            weaponForward[2],
+                };
+
+                // This is the distance from the HMD center to the infinite
+                // line through both hands.  It rejects hip/chest poses while
+                // allowing the normal vertical offset between the hands and
+                // a rifle's optic.
+                eyeLineDistance =
+                    std::sqrt(
+                        perpendicularToEye[0] *
+                            perpendicularToEye[0] +
+                        perpendicularToEye[1] *
+                            perpendicularToEye[1] +
+                        perpendicularToEye[2] *
+                            perpendicularToEye[2]);
+
+                // Game units are inches.  Engage inside the tighter window;
+                // once active, the wider window prevents boundary flicker.
+                engagePose =
+                    headAlignment >= 0.80f &&
+                    eyeLineDistance <= 15.0f &&
+                    rightHandForward >= 0.0f &&
+                    rightHandForward <= 32.0f &&
+                    rightHandHeight >= -17.0f &&
+                    rightHandHeight <= 10.0f;
+
+                retainPose =
+                    headAlignment >= 0.68f &&
+                    eyeLineDistance <= 20.0f &&
+                    rightHandForward >= -4.0f &&
+                    rightHandForward <= 38.0f &&
+                    rightHandHeight >= -22.0f &&
+                    rightHandHeight <= 14.0f;
+            }
+        }
+
+        if (!poseAvailable)
+        {
+            // Releasing the left middle-finger grip should lower ADS
+            // immediately; only pose-boundary exits are debounced.
+            g_vrPoseFocusAimPoseHeld = false;
+            g_vrPoseFocusAimEngageFrames = 0u;
+            g_vrPoseFocusAimReleaseFrames = 0u;
+        }
+        else if (!g_vrPoseFocusAimPoseHeld)
+        {
+            g_vrPoseFocusAimReleaseFrames = 0u;
+
+            if (engagePose)
+            {
+                if (g_vrPoseFocusAimEngageFrames < 3u)
+                {
+                    ++g_vrPoseFocusAimEngageFrames;
+                }
+
+                if (g_vrPoseFocusAimEngageFrames >= 3u)
+                {
+                    g_vrPoseFocusAimPoseHeld = true;
+                    g_vrPoseFocusAimEngageFrames = 0u;
+                }
+            }
+            else
+            {
+                g_vrPoseFocusAimEngageFrames = 0u;
+            }
+        }
+        else
+        {
+            g_vrPoseFocusAimEngageFrames = 0u;
+
+            if (retainPose)
+            {
+                g_vrPoseFocusAimReleaseFrames = 0u;
+            }
+            else
+            {
+                if (g_vrPoseFocusAimReleaseFrames < 5u)
+                {
+                    ++g_vrPoseFocusAimReleaseFrames;
+                }
+
+                if (g_vrPoseFocusAimReleaseFrames >= 5u)
+                {
+                    g_vrPoseFocusAimPoseHeld = false;
+                    g_vrPoseFocusAimReleaseFrames = 0u;
+                }
+            }
+        }
+
+        currentHeld =
+            g_vrPoseFocusAimPoseHeld;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrHeadOrientationMutex);
+
+        g_vrPoseFocusAimHeld =
+            currentHeld;
+    }
+
+    static bool previousPoseAvailable = false;
+
+    const bool poseJustBecameAvailable =
+        poseAvailable &&
+        !previousPoseAvailable;
+
+    previousPoseAvailable =
+        poseAvailable;
+
+    static bool loggedConfiguration = false;
+
+    if (!loggedConfiguration)
+    {
+        Com_Printf(
+            0,
+            "[VR][FOCUS] Pose ADS enabled: hold the left squeeze "
+            "and shoulder the two-handed weapon near the HMD sight "
+            "line.  The left index trigger is reserved for reload.\n");
+
+        loggedConfiguration = true;
+    }
+
+    if (poseJustBecameAvailable &&
+        !currentHeld)
+    {
+        Com_Printf(
+            0,
+            "[VR][FOCUS] Evaluated a new two-hand grip: "
+            "alignment %.3f, eye-line %.2f, right grip forward "
+            "%.2f, height %.2f.\n",
+            headAlignment,
+            eyeLineDistance,
+            rightHandForward,
+            rightHandHeight);
+    }
+
+    if (currentHeld &&
+        !previousHeld)
+    {
+        Com_Printf(
+            0,
+            "[VR][FOCUS] Engaged pose ADS: alignment %.3f, "
+            "eye-line %.2f, right grip forward %.2f, height %.2f.\n",
+            headAlignment,
+            eyeLineDistance,
+            rightHandForward,
+            rightHandHeight);
+    }
+    else if (!currentHeld &&
+             previousHeld)
+    {
+        if (!poseAvailable)
+        {
+            Com_Printf(
+                0,
+                "[VR][FOCUS] Released pose ADS because the left "
+                "foregrip squeeze or tracked two-hand pose ended.\n");
+        }
+        else
+        {
+            Com_Printf(
+                0,
+                "[VR][FOCUS] Released pose ADS after leaving the "
+                "eye-level window: alignment %.3f, eye-line %.2f, "
+                "right grip forward %.2f, height %.2f.\n",
+                headAlignment,
+                eyeLineDistance,
+                rightHandForward,
+                rightHandHeight);
+        }
+    }
+}
+
 void VR_UpdateControllerActions(
     const XrTime displayTime)
 {
@@ -4207,6 +7901,16 @@ void VR_UpdateControllerActions(
                     &thumbstickValue,
                     &thumbstickActive);
 
+            bool thumbrestTouched = false;
+            bool thumbrestActive = false;
+
+            const bool thumbrestStateValid =
+                VR_GetControllerBooleanState(
+                    g_vrRightThumbrestTouchAction,
+                    handPath,
+                    &thumbrestTouched,
+                    &thumbrestActive);
+
             std::lock_guard<std::mutex> lock(
                 g_vrHeadOrientationMutex);
 
@@ -4218,6 +7922,16 @@ void VR_UpdateControllerActions(
                 g_vrRightThumbstickValid
                     ? thumbstickValue.x
                     : 0.0f;
+
+            g_vrRightThumbstickY =
+                g_vrRightThumbstickValid
+                    ? thumbstickValue.y
+                    : 0.0f;
+
+            g_vrRightThumbrestTouched =
+                thumbrestStateValid &&
+                thumbrestActive &&
+                thumbrestTouched;
         }
 
         const bool triggerPressed =
@@ -4263,14 +7977,14 @@ void VR_UpdateControllerActions(
                 gripValid,
                 squeezePressed);
 
-            bool useReloadPressed = false;
-            bool useReloadActive = false;
+            bool usePressed = false;
+            bool useActive = false;
 
             VR_GetControllerBooleanState(
                 g_vrUseReloadButtonAction,
                 handPath,
-                &useReloadPressed,
-                &useReloadActive);
+                &usePressed,
+                &useActive);
 
             bool sprintPressed = false;
             bool sprintActive = false;
@@ -4290,16 +8004,28 @@ void VR_UpdateControllerActions(
                 &nextWeaponPressed,
                 &nextWeaponActive);
 
+            bool menuPressed = false;
+            bool menuActive = false;
+
+            VR_GetControllerBooleanState(
+                g_vrMenuButtonAction,
+                handPath,
+                &menuPressed,
+                &menuActive);
+
             std::lock_guard<std::mutex> lock(
                 g_vrHeadOrientationMutex);
 
-            g_vrLeftTriggerAdsHeld =
+            // VR_UpdatePoseFocusAimFromControllers publishes ADS after both
+            // tracked hand poses have been evaluated.  The independent left
+            // index trigger now requests reload instead.
+            g_vrLeftTriggerReloadHeld =
                 triggerActive &&
                 triggerValue >= 0.55f;
 
-            g_vrLeftXUseReloadHeld =
-                useReloadActive &&
-                useReloadPressed;
+            g_vrLeftXUseHeld =
+                useActive &&
+                usePressed;
 
             g_vrLeftStickSprintHeld =
                 sprintActive &&
@@ -4308,6 +8034,48 @@ void VR_UpdateControllerActions(
             g_vrLeftYNextWeaponHeld =
                 nextWeaponActive &&
                 nextWeaponPressed;
+
+            g_vrLeftMenuHeld =
+                menuActive &&
+                menuPressed;
+        }
+
+        if (handIndex == VR_CONTROLLER_LEFT)
+        {
+            if (g_vrLeftMenuHeld &&
+                !g_vrLeftMenuWasHeld)
+            {
+                const std::uint32_t eventTime =
+                    static_cast<std::uint32_t>(
+                        Sys_Milliseconds());
+
+                CL_KeyEvent(
+                    0,
+                    27,
+                    1,
+                    eventTime);
+
+                CL_KeyEvent(
+                    0,
+                    27,
+                    0,
+                    eventTime);
+
+                static bool loggedVrMenuButton = false;
+
+                if (!loggedVrMenuButton)
+                {
+                    Com_Printf(
+                        0,
+                        "[VR] Bound the left Touch menu button "
+                        "to Escape.\n");
+
+                    loggedVrMenuButton = true;
+                }
+            }
+
+            g_vrLeftMenuWasHeld =
+                g_vrLeftMenuHeld;
         }
 
         if (handIndex == VR_CONTROLLER_RIGHT)
@@ -4355,7 +8123,7 @@ void VR_UpdateControllerActions(
                     stanceActive &&
                     stancePressed;
 
-                g_vrRightGripFragHeld =
+                g_vrRightGripOffhandHeld =
                     squeezePressed;
             }
 
@@ -4398,6 +8166,157 @@ void VR_UpdateControllerActions(
                 aimLocation,
                 triggerValue,
                 squeezeValue);
+        }
+    }
+
+    int modifierDpadKey = 0;
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrHeadOrientationMutex);
+
+        constexpr float engageThreshold = 0.75f;
+        constexpr float releaseThreshold = 0.35f;
+        constexpr float dominanceMargin = 0.12f;
+
+        const float absoluteX =
+            std::abs(g_vrLeftThumbstick[0]);
+
+        const float absoluteY =
+            std::abs(g_vrLeftThumbstick[1]);
+
+        if (!g_vrRightThumbrestTouched ||
+            !g_vrLeftThumbstickValid ||
+            (absoluteX <= releaseThreshold &&
+             absoluteY <= releaseThreshold))
+        {
+            g_vrModifierDpadArmed = true;
+        }
+        else if (g_vrModifierDpadArmed)
+        {
+            if (absoluteY >= engageThreshold &&
+                absoluteY >= absoluteX + dominanceMargin)
+            {
+                modifierDpadKey =
+                    g_vrLeftThumbstick[1] > 0.0f
+                        ? '5'
+                        : 'n';
+            }
+            else if (absoluteX >= engageThreshold &&
+                     absoluteX >= absoluteY + dominanceMargin)
+            {
+                modifierDpadKey =
+                    g_vrLeftThumbstick[0] < 0.0f
+                        ? '6'
+                        : '7';
+            }
+
+            if (modifierDpadKey != 0)
+            {
+                g_vrModifierDpadArmed = false;
+            }
+        }
+    }
+
+    if (modifierDpadKey != 0 &&
+        !Key_IsCatcherActive(0, 0x10))
+    {
+        const std::uint32_t eventTime =
+            static_cast<std::uint32_t>(
+                Sys_Milliseconds());
+
+        CL_KeyEvent(
+            0,
+            modifierDpadKey,
+            1,
+            eventTime);
+
+        CL_KeyEvent(
+            0,
+            modifierDpadKey,
+            0,
+            eventTime);
+
+        static bool loggedModifierDpad = false;
+
+        if (!loggedModifierDpad)
+        {
+            Com_Printf(
+                0,
+                "[VR] Right thumbrest + left stick D-pad: "
+                "up 5, down N, left 6 (airstrike), "
+                "right 7 (C4).\n");
+
+            loggedModifierDpad = true;
+        }
+    }
+
+    int rightStickUtilityKey = 0;
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrHeadOrientationMutex);
+
+        constexpr float engageThreshold = 0.80f;
+        constexpr float releaseThreshold = 0.35f;
+        constexpr float dominanceMargin = 0.15f;
+
+        const float absoluteX =
+            std::abs(g_vrRightThumbstickX);
+
+        const float absoluteY =
+            std::abs(g_vrRightThumbstickY);
+
+        if (!g_vrRightThumbstickValid ||
+            absoluteY <= releaseThreshold)
+        {
+            g_vrRightStickUtilityArmed = true;
+        }
+        else if (g_vrRightStickUtilityArmed &&
+                 absoluteY >= engageThreshold &&
+                 absoluteY >=
+                     absoluteX + dominanceMargin)
+        {
+            // OpenXR Touch thumbstick positive Y is forward/up.
+            // ASCII key numbers match the engine's normal keyboard path.
+            rightStickUtilityKey =
+                g_vrRightThumbstickY > 0.0f
+                    ? '5'
+                    : 'n';
+
+            g_vrRightStickUtilityArmed = false;
+        }
+    }
+
+    if (rightStickUtilityKey != 0 &&
+        !Key_IsCatcherActive(0, 0x10))
+    {
+        const std::uint32_t eventTime =
+            static_cast<std::uint32_t>(
+                Sys_Milliseconds());
+
+        CL_KeyEvent(
+            0,
+            rightStickUtilityKey,
+            1,
+            eventTime);
+
+        CL_KeyEvent(
+            0,
+            rightStickUtilityKey,
+            0,
+            eventTime);
+
+        static bool loggedRightStickUtilities = false;
+
+        if (!loggedRightStickUtilities)
+        {
+            Com_Printf(
+                0,
+                "[VR] Bound right-stick up to rifle grenade launcher "
+                "(5) and down to night vision (N).\n");
+
+            loggedRightStickUtilities = true;
         }
     }
 
@@ -4494,6 +8413,8 @@ void VR_UpdateControllerActions(
             g_vrTwoHandWeaponBlend = 1.0f;
         }
     }
+
+    VR_UpdatePoseFocusAimFromControllers();
 
     if (logTwoHandEngaged)
     {
@@ -4777,25 +8698,69 @@ bool VR_CreateSwapchains()
         VrEyeSwapchain& eyeSwapchain =
             g_vrEyeSwapchains[eyeIndex];
 
-        // Low-memory diagnostic for the 32-bit CoD4 process.
-        // The Quest runtime recommends roughly 2496 pixels per eye, but
-        // allocating six full-size color images plus six matching depth
-        // images consumes hundreds of megabytes before a map is loaded.
-        constexpr uint32_t diagnosticEyeSize = 768u;
+        // Preserve the runtime's rectangular per-eye shape.  Scale only
+        // pixel density; OpenXR projection FOV remains unchanged.
+        static const float outputScale = []() -> float
+        {
+            constexpr float defaultOutputScale = 1.00f;
+            constexpr float minimumOutputScale = 0.50f;
+            constexpr float maximumOutputScale = 1.00f;
+
+            const char* requestedOutputScale =
+                std::getenv(
+                    "KISAK_VR_OUTPUT_SCALE");
+
+            if (requestedOutputScale == nullptr ||
+                requestedOutputScale[0] == '\0')
+            {
+                return defaultOutputScale;
+            }
+
+            char* parseEnd = nullptr;
+
+            const float parsedOutputScale =
+                std::strtof(
+                    requestedOutputScale,
+                    &parseEnd);
+
+            if (parseEnd == requestedOutputScale ||
+                parseEnd == nullptr ||
+                parseEnd[0] != '\0' ||
+                !std::isfinite(parsedOutputScale) ||
+                parsedOutputScale < minimumOutputScale ||
+                parsedOutputScale > maximumOutputScale)
+            {
+                Com_PrintWarning(
+                    0,
+                    "[VR] Ignoring invalid "
+                    "KISAK_VR_OUTPUT_SCALE='%s'; using %.2f. "
+                    "Valid range is %.2f through %.2f.\n",
+                    requestedOutputScale,
+                    defaultOutputScale,
+                    minimumOutputScale,
+                    maximumOutputScale);
+
+                return defaultOutputScale;
+            }
+
+            return parsedOutputScale;
+        }();
+
+        g_vrOutputScale = outputScale;
 
         eyeSwapchain.width =
             static_cast<int32_t>(
-                viewConfig.recommendedImageRectWidth >
-                        diagnosticEyeSize
-                    ? diagnosticEyeSize
-                    : viewConfig.recommendedImageRectWidth);
+                static_cast<float>(
+                    viewConfig.recommendedImageRectWidth) *
+                    outputScale +
+                0.5f);
 
         eyeSwapchain.height =
             static_cast<int32_t>(
-                viewConfig.recommendedImageRectHeight >
-                        diagnosticEyeSize
-                    ? diagnosticEyeSize
-                    : viewConfig.recommendedImageRectHeight);
+                static_cast<float>(
+                    viewConfig.recommendedImageRectHeight) *
+                    outputScale +
+                0.5f);
 
         XrSwapchainCreateInfo swapchainCreateInfo{
             XR_TYPE_SWAPCHAIN_CREATE_INFO
@@ -4806,8 +8771,10 @@ bool VR_CreateSwapchains()
             XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
 
         swapchainCreateInfo.format = selectedFormat;
-        swapchainCreateInfo.sampleCount =
-            viewConfig.recommendedSwapchainSampleCount;
+
+        // The captured D3D9 frame has already resolved r_aaSamples.
+        // Multisampling this full-screen copy wastes swapchain memory.
+        swapchainCreateInfo.sampleCount = 1u;
         swapchainCreateInfo.width =
             static_cast<uint32_t>(
                 eyeSwapchain.width);
@@ -4877,8 +8844,6 @@ bool VR_CreateSwapchains()
         }
 
         eyeSwapchain.renderTargetViews.resize(imageCount);
-        eyeSwapchain.depthTextures.resize(imageCount);
-        eyeSwapchain.depthStencilViews.resize(imageCount);
 
         for (uint32_t imageIndex = 0;
              imageIndex < imageCount;
@@ -4975,67 +8940,41 @@ bool VR_CreateSwapchains()
                 return false;
             }
 
-            D3D11_TEXTURE2D_DESC depthTextureDescription = {};
-            depthTextureDescription.Width =
-                textureDescription.Width;
-            depthTextureDescription.Height =
-                textureDescription.Height;
-            depthTextureDescription.MipLevels = 1;
-            depthTextureDescription.ArraySize = 1;
-            depthTextureDescription.Format =
-                DXGI_FORMAT_D24_UNORM_S8_UINT;
-            depthTextureDescription.SampleDesc =
-                textureDescription.SampleDesc;
-            depthTextureDescription.Usage =
-                D3D11_USAGE_DEFAULT;
-            depthTextureDescription.BindFlags =
-                D3D11_BIND_DEPTH_STENCIL;
-
-            HRESULT depthHr =
-                g_vrD3dDevice->CreateTexture2D(
-                    &depthTextureDescription,
-                    nullptr,
-                    eyeSwapchain
-                        .depthTextures[imageIndex]
-                        .GetAddressOf());
-
-            if (FAILED(depthHr))
-            {
-                VR_LogHrFailure(
-                    "CreateTexture2D(depth)",
-                    depthHr);
-
-                return false;
-            }
-
-            depthHr =
-                g_vrD3dDevice->CreateDepthStencilView(
-                    eyeSwapchain
-                        .depthTextures[imageIndex]
-                        .Get(),
-                    nullptr,
-                    eyeSwapchain
-                        .depthStencilViews[imageIndex]
-                        .GetAddressOf());
-
-            if (FAILED(depthHr))
-            {
-                VR_LogHrFailure(
-                    "CreateDepthStencilView",
-                    depthHr);
-
-                return false;
-            }
+            // FSR output uses no per-swapchain depth image.
         }
 
         Com_Printf(
             0,
-            "[VR] OpenXR low-memory swapchain diagnostic: "
-            "eye %u uses %d x %d with %u images.\n",
+            "[VR] OpenXR eye %u swapchain: %d x %d with %u images; "
+            "runtime recommended %u x %u.\n",
             eyeIndex,
             eyeSwapchain.width,
             eyeSwapchain.height,
-            imageCount);
+            imageCount,
+            viewConfig.recommendedImageRectWidth,
+            viewConfig.recommendedImageRectHeight);
+
+        if (eyeIndex == 0u)
+        {
+            Com_Printf(
+                0,
+                "[VR] OpenXR rectangular output scale is %.2f; "
+                "swapchain copies use one sample because D3D9 MSAA "
+                "is already resolved.\n",
+                g_vrOutputScale);
+
+            const char* legacyEyeSize =
+                std::getenv("KISAK_VR_EYE_SIZE");
+
+            if (legacyEyeSize != nullptr &&
+                legacyEyeSize[0] != '\0')
+            {
+                Com_PrintWarning(
+                    0,
+                    "[VR] KISAK_VR_EYE_SIZE is obsolete and ignored. "
+                    "Use KISAK_VR_OUTPUT_SCALE=0.50..1.00.\n");
+            }
+        }
     }
 
     Com_Printf(
@@ -5158,6 +9097,290 @@ void VR_PollEvents()
     }
 }
 
+int VR_MenuKeyNumber(
+    const char* keyName,
+    const int fallback)
+{
+    const int keyNumber =
+        Key_StringToKeynum(
+            keyName);
+
+    return keyNumber >= 0
+        ? keyNumber
+        : fallback;
+}
+
+void VR_SendMenuKeyTap(
+    const int keyNumber)
+{
+    const std::uint32_t eventTime =
+        static_cast<std::uint32_t>(
+            Sys_Milliseconds());
+
+    CL_KeyEvent(
+        0,
+        keyNumber,
+        1,
+        eventTime);
+
+    CL_KeyEvent(
+        0,
+        keyNumber,
+        0,
+        eventTime);
+}
+
+void VR_UpdateMenuControllerNavigation()
+{
+    static bool menuWasActive = false;
+    static bool confirmWasHeld = false;
+    static bool backWasHeld = false;
+    static bool loggedMenuCursor = false;
+
+    static float cursorX = 0.0f;
+    static float cursorY = 0.0f;
+    static std::uint32_t lastUpdateTime = 0u;
+
+    const bool menuActive =
+        Key_IsCatcherActive(
+            0,
+            0x10);
+
+    const std::uint32_t currentTime =
+        static_cast<std::uint32_t>(
+            Sys_Milliseconds());
+
+    if (!menuActive)
+    {
+        menuWasActive = false;
+        confirmWasHeld = false;
+        backWasHeld = false;
+        lastUpdateTime = currentTime;
+        return;
+    }
+
+    float stickX = 0.0f;
+    float stickY = 0.0f;
+    bool stickValid = false;
+    bool confirmHeld = false;
+    bool backHeld = false;
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrHeadOrientationMutex);
+
+        stickValid =
+            g_vrLeftThumbstickValid;
+
+        if (stickValid)
+        {
+            stickX =
+                g_vrLeftThumbstick[0];
+
+            stickY =
+                g_vrLeftThumbstick[1];
+        }
+
+        confirmHeld =
+            g_vrRightAJumpHeld;
+
+        backHeld =
+            g_vrRightBStanceHeld;
+    }
+
+    const bool activeGameplayMenu =
+        clientUIActives[0].connectionState ==
+            CA_ACTIVE;
+
+    const std::uint32_t capturedWidth =
+        g_vrCapturedStereoWidth > 0u
+            ? VR_GetCapturedMainStereoWidth()
+            : 640u;
+
+    const std::uint32_t cursorWidth =
+        activeGameplayMenu &&
+        capturedWidth >= 2u
+            ? capturedWidth / 2u
+            : capturedWidth;
+
+    // UI_MouseEvent consumes coordinates in the complete D3D9
+    // backbuffer. The active pause UI is painted into the right
+    // half of the side-by-side frame, so retain an eye-local
+    // controller cursor but add the right-eye viewport origin
+    // before passing it into CoD's UI hit-testing path.
+    const std::uint32_t cursorOriginX =
+        activeGameplayMenu &&
+        capturedWidth >= 2u
+            ? capturedWidth / 2u
+            : 0u;
+
+    const std::uint32_t cursorHeight =
+        g_vrCapturedStereoHeight > 0u
+            ? g_vrCapturedStereoHeight
+            : 480u;
+
+    static bool loggedActivePauseCursorOffset = false;
+
+    if (activeGameplayMenu &&
+        !loggedActivePauseCursorOffset)
+    {
+        Com_Printf(
+            0,
+            "[VR] Offset the active pause cursor into the right "
+            "stereo viewport for UI hit testing.\n");
+
+        loggedActivePauseCursorOffset = true;
+    }
+
+    if (!menuWasActive)
+    {
+        cursorX =
+            (activeGameplayMenu
+                ? 0.25f
+                : 0.5f) *
+            static_cast<float>(
+                cursorWidth);
+
+        cursorY =
+            (activeGameplayMenu
+                ? 0.26f
+                : 0.5f) *
+            static_cast<float>(
+                cursorHeight);
+
+        UI_MouseEvent(
+            0,
+            static_cast<int>(
+                cursorOriginX) +
+                static_cast<int>(
+                    cursorX),
+            static_cast<int>(cursorY));
+
+        menuWasActive = true;
+        lastUpdateTime = currentTime;
+    }
+
+    std::uint32_t elapsedMilliseconds =
+        currentTime - lastUpdateTime;
+
+    if (elapsedMilliseconds > 50u)
+    {
+        elapsedMilliseconds = 50u;
+    }
+
+    lastUpdateTime = currentTime;
+
+    constexpr float deadzone = 0.20f;
+    constexpr float cursorSpeedPixelsPerSecond =
+        1100.0f;
+
+    bool cursorMoved = false;
+
+    if (stickValid)
+    {
+        if (std::fabs(stickX) < deadzone)
+        {
+            stickX = 0.0f;
+        }
+
+        if (std::fabs(stickY) < deadzone)
+        {
+            stickY = 0.0f;
+        }
+
+        if (stickX != 0.0f ||
+            stickY != 0.0f)
+        {
+            const float elapsedSeconds =
+                static_cast<float>(
+                    elapsedMilliseconds) /
+                1000.0f;
+
+            cursorX +=
+                stickX *
+                cursorSpeedPixelsPerSecond *
+                elapsedSeconds;
+
+            // OpenXR stick +Y is up; desktop cursor +Y is down.
+            cursorY -=
+                stickY *
+                cursorSpeedPixelsPerSecond *
+                elapsedSeconds;
+
+            const float maximumX =
+                static_cast<float>(
+                    cursorWidth - 1u);
+
+            const float maximumY =
+                static_cast<float>(
+                    cursorHeight - 1u);
+
+            if (cursorX < 0.0f)
+            {
+                cursorX = 0.0f;
+            }
+            else if (cursorX > maximumX)
+            {
+                cursorX = maximumX;
+            }
+
+            if (cursorY < 0.0f)
+            {
+                cursorY = 0.0f;
+            }
+            else if (cursorY > maximumY)
+            {
+                cursorY = maximumY;
+            }
+
+            cursorMoved = true;
+        }
+    }
+
+    if (cursorMoved)
+    {
+        UI_MouseEvent(
+            0,
+            static_cast<int>(
+                cursorOriginX) +
+                static_cast<int>(
+                    cursorX),
+            static_cast<int>(cursorY));
+    }
+
+    if (confirmHeld &&
+        !confirmWasHeld)
+    {
+        // K_MOUSE1. The normal UI path activates the item beneath
+        // the virtual cursor and preserves menu scripts and sounds.
+        VR_SendMenuKeyTap(
+            200);
+    }
+
+    if (backHeld &&
+        !backWasHeld)
+    {
+        VR_SendMenuKeyTap(
+            27);
+    }
+
+    confirmWasHeld =
+        confirmHeld;
+
+    backWasHeld =
+        backHeld;
+
+    if (!loggedMenuCursor)
+    {
+        Com_Printf(
+            0,
+            "[VR] Enabled Touch menu cursor: "
+            "left stick move, A click, B back.\n");
+
+        loggedMenuCursor = true;
+    }
+}
+
 bool VR_RenderSolidColorFrame(
     const XrFrameState& frameState,
     XrCompositionLayerProjection& projectionLayer,
@@ -5217,6 +9440,8 @@ bool VR_RenderSolidColorFrame(
 
     VR_UpdateControllerActions(
         frameState.predictedDisplayTime);
+
+    VR_UpdateMenuControllerNavigation();
 
     projectionViews.resize(locatedViewCount);
 
@@ -5296,13 +9521,56 @@ bool VR_RenderSolidColorFrame(
         }
     }
 
+    VR_UpdateCapturedStereoTexture();
+
+    std::array<XrView, kVrStereoEyeCount>
+        submissionViews = {};
+
+    bool submissionViewsValid = false;
+
+    if (g_vrCapturedStereoViewsValid)
+    {
+        submissionViews =
+            g_vrCapturedStereoViews;
+
+        submissionViewsValid =
+            true;
+    }
+    else if (locatedViewCount >=
+             kVrStereoEyeCount)
+    {
+        for (std::uint32_t eyeIndex = 0u;
+             eyeIndex < kVrStereoEyeCount;
+             ++eyeIndex)
+        {
+            submissionViews[eyeIndex] =
+                g_vrViews[eyeIndex];
+        }
+
+        submissionViewsValid =
+            true;
+    }
+
     if (locatedViewCount > 0)
     {
         VR_PublishHeadOrientation(
             g_vrViews[0].pose.orientation);
     }
 
-    VR_UpdateCapturedStereoTexture();
+    if (locatedViewCount >=
+        kVrStereoEyeCount)
+    {
+        for (std::uint32_t eyeIndex = 0u;
+             eyeIndex < kVrStereoEyeCount;
+             ++eyeIndex)
+        {
+            g_vrPublishedRenderViews[eyeIndex] =
+                g_vrViews[eyeIndex];
+        }
+
+        g_vrPublishedRenderViewsValid =
+            true;
+    }
 
     constexpr float clearColor[4] = {
         0.03f,
@@ -5310,6 +9578,124 @@ bool VR_RenderSolidColorFrame(
         0.20f,
         1.0f,
     };
+
+    const bool menuComfortMode =
+        Key_IsCatcherActive(
+            0,
+            0x10);
+
+    const bool activePauseComfortMode =
+        menuComfortMode &&
+        clientUIActives[0].connectionState ==
+            CA_ACTIVE;
+
+    XrPosef menuComfortPose = {};
+    XrFovf menuComfortFov = {};
+    bool menuComfortProjectionValid = false;
+
+    if (menuComfortMode &&
+        locatedViewCount >=
+            kVrStereoEyeCount)
+    {
+        std::array<
+            XrView,
+            kVrStereoEyeCount>
+            menuSourceViews = {};
+
+        if (submissionViewsValid)
+        {
+            menuSourceViews =
+                submissionViews;
+        }
+        else if (g_vrPublishedRenderViewsValid)
+        {
+            menuSourceViews =
+                g_vrPublishedRenderViews;
+        }
+        else
+        {
+            for (std::uint32_t eyeIndex = 0u;
+                 eyeIndex < kVrStereoEyeCount;
+                 ++eyeIndex)
+            {
+                menuSourceViews[eyeIndex] =
+                    g_vrViews[eyeIndex];
+            }
+        }
+
+        menuComfortPose =
+            menuSourceViews[0].pose;
+
+        menuComfortPose.position.x =
+            0.5f *
+            (menuSourceViews[0].pose.position.x +
+             menuSourceViews[1].pose.position.x);
+
+        menuComfortPose.position.y =
+            0.5f *
+            (menuSourceViews[0].pose.position.y +
+             menuSourceViews[1].pose.position.y);
+
+        menuComfortPose.position.z =
+            0.5f *
+            (menuSourceViews[0].pose.position.z +
+             menuSourceViews[1].pose.position.z);
+
+        // Give both eyes exactly the same centered optical frustum.
+        // This creates zero binocular disparity for the copied 2D menu
+        // and also keeps it smaller than the full gameplay FOV.
+        menuComfortFov.angleLeft =
+            -0.62f;
+
+        menuComfortFov.angleRight =
+            0.62f;
+
+        menuComfortFov.angleUp =
+            0.38f;
+
+        menuComfortFov.angleDown =
+            -0.38f;
+
+        menuComfortProjectionValid =
+            true;
+    }
+
+    if (menuComfortMode &&
+        !g_vrLoggedMenuComfortScreen)
+    {
+        Com_Printf(
+            0,
+            "[VR] Presented the active menu as a monoscopic "
+            "comfort screen.\n");
+
+        g_vrLoggedMenuComfortScreen = true;
+    }
+
+    static bool loggedActivePauseCrop = false;
+
+    if (activePauseComfortMode &&
+        !loggedActivePauseCrop)
+    {
+        Com_Printf(
+            0,
+            "[VR] Cropped the active pause menu from the right "
+            "stereo eye and presented it to both eyes.\n");
+
+        loggedActivePauseCrop = true;
+    }
+
+    static bool loggedConvergedMenuProjection = false;
+
+    if (menuComfortProjectionValid &&
+        !loggedConvergedMenuProjection)
+    {
+        Com_Printf(
+            0,
+            "[VR] Applied converged monoscopic menu projection "
+            "to both eyes.\n");
+
+        loggedConvergedMenuProjection = true;
+    }
 
     for (uint32_t eyeIndex = 0;
          eyeIndex < locatedViewCount;
@@ -5372,26 +9758,14 @@ bool VR_RenderSolidColorFrame(
                 .renderTargetViews[imageIndex]
                 .Get();
 
-        ID3D11DepthStencilView* depthStencilView =
-            eyeSwapchain
-                .depthStencilViews[imageIndex]
-                .Get();
-
         g_vrD3dContext->OMSetRenderTargets(
             1,
             &renderTarget,
-            depthStencilView);
+            nullptr);
 
         g_vrD3dContext->ClearRenderTargetView(
             renderTarget,
             clearColor);
-
-        g_vrD3dContext->ClearDepthStencilView(
-            depthStencilView,
-            D3D11_CLEAR_DEPTH |
-                D3D11_CLEAR_STENCIL,
-            1.0f,
-            0);
 
         D3D11_VIEWPORT viewport = {};
         viewport.Width =
@@ -5400,6 +9774,72 @@ bool VR_RenderSolidColorFrame(
             static_cast<float>(eyeSwapchain.height);
         viewport.MinDepth = 0.0f;
         viewport.MaxDepth = 1.0f;
+
+        if (menuComfortMode &&
+            g_vrCapturedStereoWidth > 0u &&
+            g_vrCapturedStereoHeight > 0u)
+        {
+            const std::uint32_t menuSourceWidth =
+                activePauseComfortMode
+                    ? VR_GetCapturedMainStereoWidth() / 2u
+                    : VR_GetCapturedMainStereoWidth();
+
+            const float sourceAspect =
+                static_cast<float>(
+                    menuSourceWidth) /
+                static_cast<float>(
+                    g_vrCapturedStereoHeight);
+
+            const float targetAspect =
+                static_cast<float>(
+                    eyeSwapchain.width) /
+                static_cast<float>(
+                    eyeSwapchain.height);
+
+            if (sourceAspect > targetAspect)
+            {
+                viewport.Height =
+                    viewport.Width /
+                    sourceAspect;
+
+                viewport.TopLeftY =
+                    0.5f *
+                    (static_cast<float>(
+                         eyeSwapchain.height) -
+                     viewport.Height);
+            }
+            else
+            {
+                viewport.Width =
+                    viewport.Height *
+                    sourceAspect;
+
+                viewport.TopLeftX =
+                    0.5f *
+                    (static_cast<float>(
+                         eyeSwapchain.width) -
+                     viewport.Width);
+            }
+        }
+
+        if (!menuComfortMode &&
+            submissionViewsValid &&
+            eyeIndex < submissionViews.size())
+        {
+            VR_ConfigureHudConvergedCaptureViewport(
+                submissionViews[eyeIndex].fov,
+                eyeSwapchain.width,
+                eyeSwapchain.height,
+                &viewport);
+        }
+
+        // KISAK_SP_VR_FIXED_SCOPE_BINOCULAR_RETICLE_FIX_V2
+        // The constant buffer must be refreshed after this eye's asymmetric
+        // viewport is known and before either the direct or FSR blit.
+        VR_UpdateCompositorConstantsForEye(
+            viewport,
+            eyeSwapchain.width,
+            eyeSwapchain.height);
 
         g_vrD3dContext->RSSetViewports(1, &viewport);
         g_vrD3dContext->RSSetState(
@@ -5412,7 +9852,23 @@ bool VR_RenderSolidColorFrame(
         ID3D11ShaderResourceView* capturedView =
             g_vrCapturedStereoView.Get();
 
-        if (capturedView != nullptr)
+        bool fsrRendered = false;
+
+        if (capturedView != nullptr &&
+            !menuComfortMode)
+        {
+            fsrRendered =
+                VR_RenderFsrUpscaledEye(
+                    eyeIndex,
+                    eyeSwapchain.width,
+                    eyeSwapchain.height,
+                    capturedView,
+                    renderTarget,
+                    viewport);
+        }
+
+        if (capturedView != nullptr &&
+            !fsrRendered)
         {
             g_vrD3dContext->OMSetRenderTargets(
                 1,
@@ -5432,11 +9888,16 @@ bool VR_RenderSolidColorFrame(
             const UINT offset = 0;
 
             ID3D11Buffer* vertexBuffer =
-                eyeIndex <
-                    g_vrBlitVertexBuffers.size()
-                    ? g_vrBlitVertexBuffers[eyeIndex]
-                        .Get()
-                    : nullptr;
+                activePauseComfortMode
+                    ? g_vrPauseMenuBlitVertexBuffer.Get()
+                    : menuComfortMode
+                        ? g_vrMenuBlitVertexBuffer.Get()
+                        : (
+                            eyeIndex <
+                                g_vrBlitVertexBuffers.size()
+                                ? g_vrBlitVertexBuffers[eyeIndex]
+                                    .Get()
+                                : nullptr);
 
             g_vrD3dContext->IASetVertexBuffers(
                 0,
@@ -5463,6 +9924,14 @@ bool VR_RenderSolidColorFrame(
                 nullptr,
                 0);
 
+            ID3D11Buffer* compositorConstantBuffer =
+                g_vrCompositorConstantBuffer.Get();
+
+            g_vrD3dContext->PSSetConstantBuffers(
+                1,
+                1,
+                &compositorConstantBuffer);
+
             g_vrD3dContext->PSSetShaderResources(
                 0,
                 1,
@@ -5484,12 +9953,57 @@ bool VR_RenderSolidColorFrame(
                 0,
                 1,
                 &nullView);
+
+            // The captured frame used an oversized/offset viewport for the
+            // symmetric-to-asymmetric projection mapping.  Direct OpenXR
+            // overlays already project in destination-eye space.
+            VR_SetFullEyeViewport(
+                eyeSwapchain.width,
+                eyeSwapchain.height);
+
+            if (!menuComfortMode &&
+                submissionViewsValid &&
+                eyeIndex < submissionViews.size())
+            {
+                VR_RenderPhysicalSniperScope(
+                    eyeIndex,
+                    eyeSwapchain.width,
+                    eyeSwapchain.height,
+                    submissionViews[eyeIndex]);
+            }
         }
 
-        VR_RenderControllerProxies(
-            eyeIndex,
-            eyeSwapchain.width,
-            eyeSwapchain.height);
+        if (capturedView != nullptr &&
+            fsrRendered)
+        {
+            VR_SetFullEyeViewport(
+                eyeSwapchain.width,
+                eyeSwapchain.height);
+
+            if (submissionViewsValid &&
+                eyeIndex < submissionViews.size())
+            {
+                VR_RenderPhysicalSniperScope(
+                    eyeIndex,
+                    eyeSwapchain.width,
+                    eyeSwapchain.height,
+                    submissionViews[eyeIndex]);
+            }
+        }
+
+        if (!menuComfortMode)
+        {
+            // Also restore the direct-eye viewport when no captured texture
+            // was available for this frame.
+            VR_SetFullEyeViewport(
+                eyeSwapchain.width,
+                eyeSwapchain.height);
+
+            VR_RenderControllerProxies(
+                eyeIndex,
+                eyeSwapchain.width,
+                eyeSwapchain.height);
+        }
 
         g_vrD3dContext->Flush();
 
@@ -5519,8 +10033,31 @@ bool VR_RenderSolidColorFrame(
                 XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW
             };
 
-        projectionView.pose = g_vrViews[eyeIndex].pose;
-        projectionView.fov = g_vrViews[eyeIndex].fov;
+        if (menuComfortProjectionValid)
+        {
+            projectionView.pose =
+                menuComfortPose;
+
+            projectionView.fov =
+                menuComfortFov;
+        }
+        else if (submissionViewsValid &&
+                 eyeIndex < kVrStereoEyeCount)
+        {
+            projectionView.pose =
+                submissionViews[eyeIndex].pose;
+
+            projectionView.fov =
+                submissionViews[eyeIndex].fov;
+        }
+        else
+        {
+            projectionView.pose =
+                g_vrViews[eyeIndex].pose;
+
+            projectionView.fov =
+                g_vrViews[eyeIndex].fov;
+        }
 
         projectionView.subImage.swapchain =
             eyeSwapchain.handle;
@@ -5568,6 +10105,23 @@ void VR_ResetState()
     g_vrInitialized = false;
     g_vrSessionRunning = false;
     g_vrExitRequested = false;
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrScopeStateMutex);
+
+        g_vrScopeActive = false;
+        g_vrScopeAdsFraction = 0.0f;
+        g_vrScopeAdsFovDegrees = 65.0f;
+        g_vrFixedScopedTurretActive = false;
+        g_vrLoggedFixedScopedTurretCompositor = false;
+
+        // KISAK_SP_VR_FIXED_SCOPED_TURRET_RUNTIME_V4
+        g_vrFixedScopedTurretZoomFovDegrees = 20.0f;
+        g_vrFixedScopedTurretMaximumZoomFovDegrees = 20.0f;
+        g_vrLoggedFixedScopedTurretVisibleZoom = false;
+        g_vrLoggedFixedScopedTurretFsrBypass = false;
+    }
 }
 }
 
@@ -6136,6 +10690,8 @@ bool VR_ApplyRightControllerToWeaponPlacement(
                 cameraAxis[2][worldComponent];
     }
 
+    float finalWeaponAxisCameraLocal[3][3] = {};
+
     for (int weaponAxisRow = 0;
          weaponAxisRow < 3;
          ++weaponAxisRow)
@@ -6154,6 +10710,11 @@ bool VR_ApplyRightControllerToWeaponPlacement(
                 attachmentAxis[weaponAxisRow][2] *
                     currentAxis[2][cameraComponent];
         }
+
+        std::memcpy(
+            finalWeaponAxisCameraLocal[weaponAxisRow],
+            weaponRowCameraLocal,
+            sizeof(weaponRowCameraLocal));
 
         for (int worldComponent = 0;
              worldComponent < 3;
@@ -6189,6 +10750,12 @@ bool VR_ApplyRightControllerToWeaponPlacement(
         g_vrRightControllerFinalWeaponForward[2] =
             weaponAxis[0][2] / forwardLength;
 
+        std::memcpy(
+            g_vrRightControllerFinalWeaponAxisCameraLocal,
+            finalWeaponAxisCameraLocal,
+            sizeof(finalWeaponAxisCameraLocal));
+
+        g_vrRightControllerFinalWeaponAxisCameraLocalValid = true;
         g_vrRightControllerFinalWeaponAimValid = true;
     }
 
@@ -6381,11 +10948,13 @@ bool VR_ApplyRightControllerWeaponHaptic(
 bool VR_GetBasicGameplayButtons(
     bool* adsHeld,
     bool* jumpHeld,
-    bool* useReloadHeld)
+    bool* useHeld,
+    bool* reloadHeld)
 {
     if (adsHeld == nullptr ||
         jumpHeld == nullptr ||
-        useReloadHeld == nullptr)
+        useHeld == nullptr ||
+        reloadHeld == nullptr)
     {
         return false;
     }
@@ -6394,18 +10963,22 @@ bool VR_GetBasicGameplayButtons(
         g_vrHeadOrientationMutex);
 
     *adsHeld =
-        g_vrLeftTriggerAdsHeld;
+        g_vrPoseFocusAimHeld;
 
     *jumpHeld =
         g_vrRightAJumpHeld;
 
-    *useReloadHeld =
-        g_vrLeftXUseReloadHeld;
+    *useHeld =
+        g_vrLeftXUseHeld;
+
+    *reloadHeld =
+        g_vrLeftTriggerReloadHeld;
 
     return
         *adsHeld ||
         *jumpHeld ||
-        *useReloadHeld;
+        *useHeld ||
+        *reloadHeld;
 }
 
 bool VR_GetLocomotionCombatButtons(
@@ -6436,11 +11009,11 @@ bool VR_GetLocomotionCombatButtons(
 }
 
 bool VR_GetWeaponUtilityButtons(
-    bool* fragHeld,
-    bool* nextWeaponHeld)
+    bool* rightGripHeld,
+    bool* leftYHeld)
 {
-    if (fragHeld == nullptr ||
-        nextWeaponHeld == nullptr)
+    if (rightGripHeld == nullptr ||
+        leftYHeld == nullptr)
     {
         return false;
     }
@@ -6448,10 +11021,10 @@ bool VR_GetWeaponUtilityButtons(
     std::lock_guard<std::mutex> lock(
         g_vrHeadOrientationMutex);
 
-    *fragHeld =
-        g_vrRightGripFragHeld;
+    *rightGripHeld =
+        g_vrRightGripOffhandHeld;
 
-    *nextWeaponHeld =
+    *leftYHeld =
         g_vrLeftYNextWeaponHeld;
 
     return true;
@@ -6489,6 +11062,14 @@ bool VR_ConsumeSnapTurn(
         return false;
     }
 
+    // A vertically dominant gesture belongs to the utility mapping,
+    // not snap turn. Require a small horizontal dominance margin.
+    if (std::abs(g_vrRightThumbstickX) <
+        std::abs(g_vrRightThumbstickY) + 0.15f)
+    {
+        return false;
+    }
+
     if (!g_vrSnapTurnArmed)
     {
         return false;
@@ -6518,6 +11099,144 @@ bool VR_ConsumeSnapTurn(
     return false;
 }
 
+bool VR_TransferHmdYawToBody(
+    float* bodyYawDeltaDegrees)
+{
+    if (bodyYawDeltaDegrees == nullptr)
+    {
+        return false;
+    }
+
+    *bodyYawDeltaDegrees = 0.0f;
+
+    std::lock_guard<std::mutex> lock(
+        g_vrHeadOrientationMutex);
+
+    if (!g_vrHeadOrientationValid)
+    {
+        return false;
+    }
+
+    const float horizontalForward =
+        g_vrHeadOrientationAxis[0][0];
+
+    const float horizontalLeft =
+        g_vrHeadOrientationAxis[0][1];
+
+    const float horizontalLength =
+        std::sqrt(
+            horizontalForward *
+                horizontalForward +
+            horizontalLeft *
+                horizontalLeft);
+
+    if (horizontalLength <= 0.0001f)
+    {
+        return false;
+    }
+
+    constexpr float radiansToDegrees =
+        57.295779513082320876f;
+
+    const float yawDeltaDegrees =
+        std::atan2(
+            horizontalLeft,
+            horizontalForward) *
+        radiansToDegrees;
+
+    // Ignore sub-degree tracking noise, but transfer meaningful physical
+    // turns continuously while sprint is held.
+    if (std::fabs(yawDeltaDegrees) < 0.25f)
+    {
+        return false;
+    }
+
+    g_vrTransferredBodyYawDegrees +=
+        yawDeltaDegrees;
+
+    while (g_vrTransferredBodyYawDegrees >=
+           180.0f)
+    {
+        g_vrTransferredBodyYawDegrees -=
+            360.0f;
+    }
+
+    while (g_vrTransferredBodyYawDegrees <
+           -180.0f)
+    {
+        g_vrTransferredBodyYawDegrees +=
+            360.0f;
+    }
+
+    constexpr float degreesToRadians =
+        0.01745329251994329577f;
+
+    const float yawDeltaRadians =
+        yawDeltaDegrees *
+        degreesToRadians;
+
+    const float yawCos =
+        std::cos(
+            yawDeltaRadians);
+
+    const float yawSin =
+        std::sin(
+            yawDeltaRadians);
+
+    for (int axisIndex = 0;
+         axisIndex < 3;
+         ++axisIndex)
+    {
+        const float originalForward =
+            g_vrHeadOrientationAxis[
+                axisIndex][0];
+
+        const float originalLeft =
+            g_vrHeadOrientationAxis[
+                axisIndex][1];
+
+        g_vrHeadOrientationAxis[
+            axisIndex][0] =
+                yawCos *
+                    originalForward +
+                yawSin *
+                    originalLeft;
+
+        g_vrHeadOrientationAxis[
+            axisIndex][1] =
+                -yawSin *
+                    originalForward +
+                yawCos *
+                    originalLeft;
+    }
+
+    if (g_vrHeadPositionValid)
+    {
+        const float originalForward =
+            g_vrHeadPositionLocal[0];
+
+        const float originalLeft =
+            g_vrHeadPositionLocal[1];
+
+        g_vrHeadPositionLocal[0] =
+            yawCos *
+                originalForward +
+            yawSin *
+                originalLeft;
+
+        g_vrHeadPositionLocal[1] =
+            -yawSin *
+                originalForward +
+            yawCos *
+                originalLeft;
+    }
+
+    *bodyYawDeltaDegrees =
+        yawDeltaDegrees;
+
+    return true;
+}
+
 bool VR_GetHmdOrientedMovement(
     float* forward,
     float* right)
@@ -6541,7 +11260,8 @@ bool VR_GetHmdOrientedMovement(
             g_vrHeadOrientationMutex);
 
         if (!g_vrLeftThumbstickValid ||
-            !g_vrHeadOrientationValid)
+            !g_vrHeadOrientationValid ||
+            g_vrRightThumbrestTouched)
         {
             return false;
         }
@@ -6612,6 +11332,269 @@ bool VR_GetHmdOrientedMovement(
         stickY * headLeft;
 
     return true;
+}
+
+// KISAK_SP_VR_FIXED_SCOPED_TURRET_CONTROLS_V3_OPENXR
+bool VR_GetFixedScopedTurretAim(
+    float* gunPitch,
+    float* gunYaw)
+{
+    if (gunPitch == nullptr ||
+        gunYaw == nullptr)
+    {
+        return false;
+    }
+
+    float forwardWorld[3] = {};
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrWeaponControllerPoseMutex);
+
+        if (!g_vrMountedWeaponCameraAxisWorldValid)
+        {
+            return false;
+        }
+
+        memcpy(
+            forwardWorld,
+            g_vrMountedWeaponCameraAxisWorld[0],
+            sizeof(forwardWorld));
+    }
+
+    const float forwardLength =
+        std::sqrt(
+            forwardWorld[0] * forwardWorld[0] +
+            forwardWorld[1] * forwardWorld[1] +
+            forwardWorld[2] * forwardWorld[2]);
+
+    if (forwardLength <= 0.0001f)
+    {
+        return false;
+    }
+
+    forwardWorld[0] /= forwardLength;
+    forwardWorld[1] /= forwardLength;
+    forwardWorld[2] /= forwardLength;
+
+    constexpr float radiansToDegrees =
+        57.29577951308232f;
+
+    const float horizontalLength =
+        std::sqrt(
+            forwardWorld[0] * forwardWorld[0] +
+            forwardWorld[1] * forwardWorld[1]);
+
+    float pitch =
+        std::atan2(
+            -forwardWorld[2],
+            horizontalLength) *
+        radiansToDegrees;
+
+    float yaw =
+        std::atan2(
+            forwardWorld[1],
+            forwardWorld[0]) *
+        radiansToDegrees;
+
+    pitch = std::fmod(pitch, 360.0f);
+    yaw = std::fmod(yaw, 360.0f);
+
+    if (pitch < 0.0f)
+    {
+        pitch += 360.0f;
+    }
+
+    if (yaw < 0.0f)
+    {
+        yaw += 360.0f;
+    }
+
+    *gunPitch = pitch;
+    *gunYaw = yaw;
+
+    return true;
+}
+
+bool VR_GetFixedScopedTurretZoomAxis(
+    float* zoomAxis)
+{
+    if (zoomAxis == nullptr)
+    {
+        return false;
+    }
+
+    *zoomAxis = 0.0f;
+
+    float rawZoomAxis = 0.0f;
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrHeadOrientationMutex);
+
+        if (!g_vrLeftThumbstickValid)
+        {
+            return false;
+        }
+
+        rawZoomAxis =
+            g_vrLeftThumbstick[1];
+    }
+
+    constexpr float deadzone = 0.18f;
+
+    const float absoluteAxis =
+        std::abs(rawZoomAxis);
+
+    // Returning true here is intentional.  It prevents HMD-oriented
+    // locomotion from becoming a false zoom input while the raw stick is
+    // available but vertically centered.
+    if (absoluteAxis <= deadzone)
+    {
+        return true;
+    }
+
+    const float clampedAxis =
+        absoluteAxis < 1.0f
+            ? absoluteAxis
+            : 1.0f;
+
+    const float remappedAxis =
+        (clampedAxis - deadzone) /
+        (1.0f - deadzone);
+
+    *zoomAxis =
+        rawZoomAxis < 0.0f
+            ? -remappedAxis
+            : remappedAxis;
+
+    return true;
+}
+
+bool VR_GetRightControllerMountedWeaponAim(
+    float* gunPitch,
+    float* gunYaw)
+{
+    if (gunPitch == nullptr ||
+        gunYaw == nullptr)
+    {
+        return false;
+    }
+
+    float controllerForwardCameraLocal[3] = {};
+    float cameraAxisWorld[3][3] = {};
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrWeaponControllerPoseMutex);
+
+        if (!g_vrRightControllerWeaponPoseValid ||
+            !g_vrMountedWeaponCameraAxisWorldValid)
+        {
+            return false;
+        }
+
+        memcpy(
+            controllerForwardCameraLocal,
+            g_vrRightControllerWeaponAxis[0],
+            sizeof(controllerForwardCameraLocal));
+
+        memcpy(
+            cameraAxisWorld,
+            g_vrMountedWeaponCameraAxisWorld,
+            sizeof(cameraAxisWorld));
+    }
+
+    float forwardWorld[3] = {};
+
+    for (int worldComponent = 0;
+         worldComponent < 3;
+         ++worldComponent)
+    {
+        forwardWorld[worldComponent] =
+            controllerForwardCameraLocal[0] *
+                cameraAxisWorld[0][worldComponent] +
+            controllerForwardCameraLocal[1] *
+                cameraAxisWorld[1][worldComponent] +
+            controllerForwardCameraLocal[2] *
+                cameraAxisWorld[2][worldComponent];
+    }
+
+    const float forwardLength =
+        std::sqrt(
+            forwardWorld[0] * forwardWorld[0] +
+            forwardWorld[1] * forwardWorld[1] +
+            forwardWorld[2] * forwardWorld[2]);
+
+    if (forwardLength <= 0.0001f)
+    {
+        return false;
+    }
+
+    forwardWorld[0] /= forwardLength;
+    forwardWorld[1] /= forwardLength;
+    forwardWorld[2] /= forwardLength;
+
+    constexpr float radiansToDegrees =
+        57.29577951308232f;
+
+    const float horizontalLength =
+        std::sqrt(
+            forwardWorld[0] * forwardWorld[0] +
+            forwardWorld[1] * forwardWorld[1]);
+
+    float pitch =
+        std::atan2(
+            -forwardWorld[2],
+            horizontalLength) *
+        radiansToDegrees;
+
+    float yaw =
+        std::atan2(
+            forwardWorld[1],
+            forwardWorld[0]) *
+        radiansToDegrees;
+
+    pitch = std::fmod(pitch, 360.0f);
+    yaw = std::fmod(yaw, 360.0f);
+
+    if (pitch < 0.0f)
+    {
+        pitch += 360.0f;
+    }
+
+    if (yaw < 0.0f)
+    {
+        yaw += 360.0f;
+    }
+
+    *gunPitch = pitch;
+    *gunYaw = yaw;
+
+    return true;
+}
+
+// KISAK_SP_VR_MOUNTED_WEAPON_TRIGGER_BOOTSTRAP_V1
+bool VR_GetRightControllerMountedWeaponTrigger(
+    bool* attackPressed)
+{
+    if (attackPressed == nullptr)
+    {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(
+        g_vrWeaponControllerPoseMutex);
+
+    const bool mountedWeaponPoseAvailable =
+        g_vrRightControllerWeaponPoseValid &&
+        g_vrMountedWeaponCameraAxisWorldValid;
+
+    *attackPressed =
+        mountedWeaponPoseAvailable &&
+        g_vrRightControllerAttackPressed;
+
+    return mountedWeaponPoseAvailable;
 }
 
 bool VR_GetRightControllerWeaponCommand(
@@ -6893,17 +11876,34 @@ bool VR_GetCurrentRenderEyeProjection(
             g_vrEyeProjectionTangents[eyeIndex];
     }
 
-    *tanLeft = tangents.left;
-    *tanRight = tangents.right;
-    *tanDown = tangents.down;
-    *tanUp = tangents.up;
+    // KISAK_SP_VR_HUD_CONVERGENCE_V1
+    // The captured D3D9 source must be centered so that the one shared 2D
+    // HUD command list lands on the same visual ray in both eyes.  The
+    // OpenXR compositor remaps this symmetric source back into the runtime's
+    // exact asymmetric frustum before submission.
+    const float symmetricHorizontal =
+        (std::max)(-tangents.left, tangents.right);
+
+    const float symmetricVertical =
+        (std::max)(-tangents.down, tangents.up);
+
+    if (symmetricHorizontal <= 0.0f ||
+        symmetricVertical <= 0.0f)
+    {
+        return false;
+    }
+
+    *tanLeft = -symmetricHorizontal;
+    *tanRight = symmetricHorizontal;
+    *tanDown = -symmetricVertical;
+    *tanUp = symmetricVertical;
 
     if (!g_vrLoggedProjectionApply[eyeIndex])
     {
         Com_Printf(
             0,
-            "[VR] Supplying OpenXR asymmetric "
-            "projection for eye %u.\n",
+            "[VR] Supplying centered capture projection "
+            "for HUD-converged eye %u.\n",
             eyeIndex);
 
         g_vrLoggedProjectionApply[eyeIndex] = true;
@@ -7034,6 +12034,18 @@ bool VR_ApplyHeadOrientation(
         }
     }
 
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrWeaponControllerPoseMutex);
+
+        memcpy(
+            g_vrMountedWeaponCameraAxisWorld,
+            viewAxis,
+            sizeof(g_vrMountedWeaponCameraAxisWorld));
+
+        g_vrMountedWeaponCameraAxisWorldValid = true;
+    }
+
     if (!g_vrLoggedFirstCameraApply)
     {
         Com_Printf(
@@ -7045,6 +12057,96 @@ bool VR_ApplyHeadOrientation(
     }
 
     return true;
+}
+
+// KISAK_SP_VR_PACKED_UI_SCREEN_PLACEMENT_FIX_V1
+void VR_UpdatePackedUiScreenPlacement()
+{
+#ifdef KISAK_SP
+    const int displayWidth =
+        cls.vidConfig.displayWidth;
+
+    const int displayHeight =
+        cls.vidConfig.displayHeight;
+
+    if (displayWidth <= 0 ||
+        displayHeight <= 0)
+    {
+        return;
+    }
+
+    int mainStereoWidth = 0;
+
+    if (!VR_GetPhysicalSniperScopeCaptureLayout(
+            displayWidth,
+            displayHeight,
+            &mainStereoWidth,
+            nullptr,
+            nullptr,
+            nullptr) ||
+        mainStereoWidth <= 0 ||
+        mainStereoWidth >= displayWidth)
+    {
+        return;
+    }
+
+    const float uiWidth =
+        static_cast<float>(
+            mainStereoWidth);
+
+    const float uiHeight =
+        static_cast<float>(
+            displayHeight);
+
+    const bool alreadyConfigured =
+        scrPlaceFull.realViewportSize[0] ==
+            uiWidth &&
+        scrPlaceFull.realViewportSize[1] ==
+            uiHeight &&
+        scrPlaceFullUnsafe.realViewportSize[0] ==
+            uiWidth &&
+        scrPlaceFullUnsafe.realViewportSize[1] ==
+            uiHeight &&
+        scrPlaceView[0].realViewportSize[0] ==
+            uiWidth &&
+        scrPlaceView[0].realViewportSize[1] ==
+            uiHeight;
+
+    if (alreadyConfigured)
+    {
+        return;
+    }
+
+    ScrPlace_SetupUnsafeViewport(
+        &scrPlaceFullUnsafe,
+        0,
+        0,
+        mainStereoWidth,
+        displayHeight);
+
+    ScrPlace_SetupViewport(
+        &scrPlaceFull,
+        0,
+        0,
+        mainStereoWidth,
+        displayHeight);
+
+    ScrPlace_SetupViewport(
+        &scrPlaceView[0],
+        0,
+        0,
+        mainStereoWidth,
+        displayHeight);
+
+    Com_Printf(
+        0,
+        "[VR][UI] Constrained 2D screen placement to the "
+        "%d x %d stereo region; the %d px dedicated scope "
+        "panel remains outside UI layout.\n",
+        mainStereoWidth,
+        displayHeight,
+        displayWidth - mainStereoWidth);
+#endif
 }
 
 bool VR_Init()
@@ -7062,6 +12164,12 @@ bool VR_Init()
     g_vrCurrentRenderEye = -1;
     g_vrLoggedProjectionApply.fill(false);
     g_vrLoggedProjectionPublish = false;
+
+    g_vrPublishedRenderViews = {};
+    g_vrCapturedStereoViews = {};
+    g_vrPublishedRenderViewsValid = false;
+    g_vrCapturedStereoViewsValid = false;
+    g_vrLoggedCapturedPoseMatch = false;
     if (g_vrInitialized)
     {
         return true;
@@ -7236,6 +12344,8 @@ bool VR_Init()
 
     g_vrInitialized = true;
 
+    VR_UpdatePackedUiScreenPlacement();
+
     Com_Printf(
         0,
         "[VR] OpenXR D3D11 session and swapchains are ready.\n");
@@ -7252,6 +12362,10 @@ void VR_Frame()
         return;
     }
 
+    // CL_InitRenderer rebuilds ScreenPlacement during a vid_restart.
+    // Reassert the stereo-only UI width before the next game frame.
+    VR_UpdatePackedUiScreenPlacement();
+
     VR_PollEvents();
 
     if (!g_vrSessionRunning ||
@@ -7259,6 +12373,34 @@ void VR_Frame()
     {
         return;
     }
+
+    // KISAK_SP_VR_PERFORMANCE_DIAGNOSTICS_V1
+    using VrPerfClock =
+        std::chrono::steady_clock;
+
+    const auto vrPerfFrameStart =
+        VrPerfClock::now();
+
+    static bool vrPerfPreviousFrameValid = false;
+    static VrPerfClock::time_point
+        vrPerfPreviousFrameStart = {};
+
+    const bool vrPerfHasInterval =
+        vrPerfPreviousFrameValid;
+
+    const double vrPerfIntervalMilliseconds =
+        vrPerfHasInterval
+            ? std::chrono::duration<double, std::milli>(
+                  vrPerfFrameStart -
+                  vrPerfPreviousFrameStart).count()
+            : 0.0;
+
+    vrPerfPreviousFrameStart =
+        vrPerfFrameStart;
+    vrPerfPreviousFrameValid = true;
+
+    const auto vrPerfWaitStart =
+        VrPerfClock::now();
 
     XrFrameWaitInfo waitInfo{XR_TYPE_FRAME_WAIT_INFO};
     XrFrameState frameState{XR_TYPE_FRAME_STATE};
@@ -7274,6 +12416,9 @@ void VR_Frame()
         VR_LogXrFailure("xrWaitFrame", result);
         return;
     }
+
+    const auto vrPerfWaitEnd =
+        VrPerfClock::now();
 
     XrFrameBeginInfo beginInfo{XR_TYPE_FRAME_BEGIN_INFO};
 
@@ -7295,6 +12440,12 @@ void VR_Frame()
 
     bool submittedProjectionLayer = false;
 
+    const std::uint64_t vrPerfCaptureSerialBefore =
+        g_vrUploadedStereoSerial;
+
+    const auto vrPerfRenderStart =
+        VrPerfClock::now();
+
     if (frameState.shouldRender)
     {
         submittedProjectionLayer =
@@ -7303,6 +12454,14 @@ void VR_Frame()
                 projectionLayer,
                 projectionViews);
     }
+
+    const auto vrPerfRenderEnd =
+        VrPerfClock::now();
+
+    const bool vrPerfFreshCapture =
+        frameState.shouldRender &&
+        g_vrUploadedStereoSerial !=
+            vrPerfCaptureSerialBefore;
 
     const XrCompositionLayerBaseHeader* layers[1] = {};
 
@@ -7329,12 +12488,206 @@ void VR_Frame()
             ? layers
             : nullptr;
 
+    const auto vrPerfEndStart =
+        VrPerfClock::now();
+
     result =
         xrEndFrame(g_vrSession, &endInfo);
+
+    const auto vrPerfEndEnd =
+        VrPerfClock::now();
 
     if (XR_FAILED(result))
     {
         VR_LogXrFailure("xrEndFrame", result);
+    }
+
+    const double vrPerfWaitMilliseconds =
+        std::chrono::duration<double, std::milli>(
+            vrPerfWaitEnd -
+            vrPerfWaitStart).count();
+
+    const double vrPerfRenderMilliseconds =
+        std::chrono::duration<double, std::milli>(
+            vrPerfRenderEnd -
+            vrPerfRenderStart).count();
+
+    const double vrPerfEndMilliseconds =
+        std::chrono::duration<double, std::milli>(
+            vrPerfEndEnd -
+            vrPerfEndStart).count();
+
+    const double vrPerfCallMilliseconds =
+        std::chrono::duration<double, std::milli>(
+            vrPerfEndEnd -
+            vrPerfFrameStart).count();
+
+    static unsigned int vrPerfSampleCount = 0u;
+    static unsigned int vrPerfIntervalSampleCount = 0u;
+    static unsigned int vrPerfFreshCaptureCount = 0u;
+    static unsigned int vrPerfReusedCaptureCount = 0u;
+    static unsigned int vrPerfNoRenderCount = 0u;
+
+    static double vrPerfIntervalTotal = 0.0;
+    static double vrPerfWaitTotal = 0.0;
+    static double vrPerfRenderTotal = 0.0;
+    static double vrPerfEndTotal = 0.0;
+    static double vrPerfCallTotal = 0.0;
+
+    static double vrPerfIntervalMaximum = 0.0;
+    static double vrPerfWaitMaximum = 0.0;
+    static double vrPerfRenderMaximum = 0.0;
+    static double vrPerfEndMaximum = 0.0;
+    static double vrPerfCallMaximum = 0.0;
+
+    ++vrPerfSampleCount;
+
+    if (vrPerfHasInterval)
+    {
+        ++vrPerfIntervalSampleCount;
+        vrPerfIntervalTotal +=
+            vrPerfIntervalMilliseconds;
+
+        if (vrPerfIntervalMilliseconds >
+            vrPerfIntervalMaximum)
+        {
+            vrPerfIntervalMaximum =
+                vrPerfIntervalMilliseconds;
+        }
+    }
+
+    vrPerfWaitTotal +=
+        vrPerfWaitMilliseconds;
+    vrPerfRenderTotal +=
+        vrPerfRenderMilliseconds;
+    vrPerfEndTotal +=
+        vrPerfEndMilliseconds;
+    vrPerfCallTotal +=
+        vrPerfCallMilliseconds;
+
+    if (vrPerfWaitMilliseconds >
+        vrPerfWaitMaximum)
+    {
+        vrPerfWaitMaximum =
+            vrPerfWaitMilliseconds;
+    }
+
+    if (vrPerfRenderMilliseconds >
+        vrPerfRenderMaximum)
+    {
+        vrPerfRenderMaximum =
+            vrPerfRenderMilliseconds;
+    }
+
+    if (vrPerfEndMilliseconds >
+        vrPerfEndMaximum)
+    {
+        vrPerfEndMaximum =
+            vrPerfEndMilliseconds;
+    }
+
+    if (vrPerfCallMilliseconds >
+        vrPerfCallMaximum)
+    {
+        vrPerfCallMaximum =
+            vrPerfCallMilliseconds;
+    }
+
+    if (!frameState.shouldRender)
+    {
+        ++vrPerfNoRenderCount;
+    }
+    else if (vrPerfFreshCapture)
+    {
+        ++vrPerfFreshCaptureCount;
+    }
+    else
+    {
+        ++vrPerfReusedCaptureCount;
+    }
+
+    if (vrPerfSampleCount >= 120u)
+    {
+        const double vrPerfSampleScale =
+            1.0 /
+            static_cast<double>(
+                vrPerfSampleCount);
+
+        const double vrPerfAverageInterval =
+            vrPerfIntervalSampleCount > 0u
+                ? vrPerfIntervalTotal /
+                      static_cast<double>(
+                          vrPerfIntervalSampleCount)
+                : 0.0;
+
+        const double vrPerfFramesPerSecond =
+            vrPerfAverageInterval > 0.0
+                ? 1000.0 /
+                      vrPerfAverageInterval
+                : 0.0;
+
+        const unsigned int vrPerfRenderedSampleCount =
+            vrPerfFreshCaptureCount +
+            vrPerfReusedCaptureCount;
+
+        const double vrPerfFreshCaptureFramesPerSecond =
+            vrPerfRenderedSampleCount > 0u
+                ? vrPerfFramesPerSecond *
+                      static_cast<double>(
+                          vrPerfFreshCaptureCount) /
+                      static_cast<double>(
+                          vrPerfRenderedSampleCount)
+                : 0.0;
+
+        Com_Printf(
+            0,
+            "[VR][PERF] OpenXR loop: %.1f FPS; "
+            "fresh capture %.1f FPS; "
+            "interval %.2f avg / %.2f max ms; "
+            "wait %.2f / %.2f; "
+            "render %.2f / %.2f; "
+            "end %.2f / %.2f; "
+            "call %.2f / %.2f; "
+            "capture fresh %u, reused %u, "
+            "no-render %u of %u.\n",
+            vrPerfFramesPerSecond,
+            vrPerfFreshCaptureFramesPerSecond,
+            vrPerfAverageInterval,
+            vrPerfIntervalMaximum,
+            vrPerfWaitTotal *
+                vrPerfSampleScale,
+            vrPerfWaitMaximum,
+            vrPerfRenderTotal *
+                vrPerfSampleScale,
+            vrPerfRenderMaximum,
+            vrPerfEndTotal *
+                vrPerfSampleScale,
+            vrPerfEndMaximum,
+            vrPerfCallTotal *
+                vrPerfSampleScale,
+            vrPerfCallMaximum,
+            vrPerfFreshCaptureCount,
+            vrPerfReusedCaptureCount,
+            vrPerfNoRenderCount,
+            vrPerfSampleCount);
+
+        vrPerfSampleCount = 0u;
+        vrPerfIntervalSampleCount = 0u;
+        vrPerfFreshCaptureCount = 0u;
+        vrPerfReusedCaptureCount = 0u;
+        vrPerfNoRenderCount = 0u;
+
+        vrPerfIntervalTotal = 0.0;
+        vrPerfWaitTotal = 0.0;
+        vrPerfRenderTotal = 0.0;
+        vrPerfEndTotal = 0.0;
+        vrPerfCallTotal = 0.0;
+
+        vrPerfIntervalMaximum = 0.0;
+        vrPerfWaitMaximum = 0.0;
+        vrPerfRenderMaximum = 0.0;
+        vrPerfEndMaximum = 0.0;
+        vrPerfCallMaximum = 0.0;
     }
 }
 
@@ -7361,8 +12714,6 @@ void VR_Shutdown()
     for (VrEyeSwapchain& eyeSwapchain :
          g_vrEyeSwapchains)
     {
-        eyeSwapchain.depthStencilViews.clear();
-        eyeSwapchain.depthTextures.clear();
         eyeSwapchain.renderTargetViews.clear();
         eyeSwapchain.images.clear();
 
@@ -7398,7 +12749,21 @@ void VR_Shutdown()
     g_vrCapturedStereoView.Reset();
     g_vrCapturedStereoTexture.Reset();
 
+    for (VrRetiredSharedFrame& retired :
+         g_vrRetiredSharedFrames)
+    {
+        retired.active = false;
+        retired.slotIndex = 0u;
+        retired.serial = 0u;
+        retired.completionQuery.Reset();
+        retired.view.Reset();
+        retired.texture.Reset();
+    }
+
     g_vrBlitSampler.Reset();
+    g_vrMenuBlitVertexBuffer.Reset();
+    g_vrPauseMenuBlitVertexBuffer.Reset();
+    g_vrLoggedMenuComfortScreen = false;
 
     for (auto& vertexBuffer :
          g_vrBlitVertexBuffers)
@@ -7407,13 +12772,40 @@ void VR_Shutdown()
     }
 
     g_vrBlitInputLayout.Reset();
+    g_vrFsrIntermediateView.Reset();
+    g_vrFsrIntermediateTarget.Reset();
+    g_vrFsrIntermediateTexture.Reset();
+    g_vrFsrConstantBuffer.Reset();
+    g_vrFsrRcasPixelShader.Reset();
+    g_vrFsrEasuPixelShader.Reset();
+    g_vrCompositorConstantBuffer.Reset();
+    g_vrCompositorBrightness = 1.0f;
+    g_vrFsrEnabled = true;
+    g_vrFsrShadersAvailable = false;
+    g_vrFsrSharpness = 0.60f;
+    g_vrOutputScale = 1.0f;
+    g_vrLoggedFirstFsrFrame = false;
+    g_vrLoggedFsrFallback = false;
+    g_vrScopeConstantBuffer.Reset();
+    g_vrScopePixelShader.Reset();
     g_vrBlitPixelShader.Reset();
     g_vrBlitVertexShader.Reset();
+    g_vrLoggedFirstPhysicalScopeDraw = false;
+    g_vrLoggedDedicatedScopeLayout = false;
+    g_vrLoggedDedicatedScopeLayoutMissing = false;
+    g_vrLoggedDedicatedScopeSample = false;
+    g_vrScopeCaptureSizePixels = 1024;
 
     g_vrCapturedStereoWidth = 0u;
     g_vrCapturedStereoHeight = 0u;
     g_vrUploadedStereoSerial = 0u;
     g_vrLoggedFirstStereoUpload = false;
+    g_vrCurrentSharedFrameActive = false;
+    g_vrCurrentSharedSlot = 0u;
+    g_vrCurrentSharedGeneration = 0u;
+    g_vrCurrentSharedSerial = 0u;
+    g_vrLoggedFirstSharedFrameOpen = false;
+    g_vrLoggedSharedConsumerFailure = false;
 
     g_vrControllerProxyVertexBuffer.Reset();
     g_vrControllerProxyInputLayout.Reset();
@@ -7452,4 +12844,461 @@ void VR_Shutdown()
 bool VR_IsInitialized()
 {
     return g_vrInitialized;
+}
+
+void VR_SetFixedScopedTurretState(
+    const bool active)
+{
+    std::lock_guard<std::mutex> lock(
+        g_vrScopeStateMutex);
+
+    g_vrFixedScopedTurretActive =
+        g_vrInitialized &&
+        active;
+}
+
+// KISAK_SP_VR_FIXED_SCOPED_TURRET_RUNTIME_V4
+void VR_SetFixedScopedTurretZoomFov(
+    const float currentFovDegrees,
+    const float maximumFovDegrees)
+{
+    if (!std::isfinite(currentFovDegrees) ||
+        !std::isfinite(maximumFovDegrees) ||
+        currentFovDegrees <= 0.01f ||
+        maximumFovDegrees <= 0.01f)
+    {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(
+        g_vrScopeStateMutex);
+
+    g_vrFixedScopedTurretZoomFovDegrees =
+        (std::min)(
+            currentFovDegrees,
+            maximumFovDegrees);
+
+    g_vrFixedScopedTurretMaximumZoomFovDegrees =
+        maximumFovDegrees;
+}
+
+void VR_SetPhysicalSniperScopeState(
+    const bool active,
+    const float adsFraction,
+    const float adsFovDegrees)
+{
+    std::lock_guard<std::mutex> lock(
+        g_vrScopeStateMutex);
+
+    g_vrScopeActive =
+        active &&
+        adsFraction > 0.01f &&
+        adsFovDegrees > 1.0f;
+
+    g_vrScopeAdsFraction =
+        (std::max)(
+            0.0f,
+            (std::min)(1.0f, adsFraction));
+
+    g_vrScopeAdsFovDegrees =
+        (std::max)(
+            1.0f,
+            (std::min)(120.0f, adsFovDegrees));
+}
+
+bool VR_IsPhysicalSniperScopeAimActive()
+{
+    std::lock_guard<std::mutex> lock(
+        g_vrScopeStateMutex);
+
+    return g_vrScopeActive;
+}
+
+bool VR_GetPhysicalSniperScopeCaptureLayout(
+    const int backbufferWidth,
+    const int backbufferHeight,
+    int* mainStereoWidth,
+    int* scopePanelX,
+    int* scopePanelY,
+    int* scopePanelSize)
+{
+    if (backbufferWidth < 2 ||
+        backbufferHeight < 1 ||
+        g_vrEyeSwapchains.size() <
+            kVrStereoEyeCount)
+    {
+        return false;
+    }
+
+    const int leftEyeWidth =
+        g_vrEyeSwapchains[0].width;
+
+    const int rightEyeWidth =
+        g_vrEyeSwapchains[1].width;
+
+    if (leftEyeWidth <= 0 ||
+        rightEyeWidth <= 0)
+    {
+        return false;
+    }
+
+    const int requestedScopeSize =
+        (std::max)(
+            512,
+            (std::min)(
+                g_vrScopeCaptureSizePixels,
+                backbufferHeight));
+
+    const int requiredMainStereoWidth =
+        leftEyeWidth +
+        rightEyeWidth;
+
+    if (requestedScopeSize > backbufferHeight ||
+        requiredMainStereoWidth >
+            backbufferWidth - requestedScopeSize)
+    {
+        return false;
+    }
+
+    if (mainStereoWidth != nullptr)
+    {
+        *mainStereoWidth =
+            requiredMainStereoWidth;
+    }
+
+    if (scopePanelX != nullptr)
+    {
+        *scopePanelX =
+            requiredMainStereoWidth;
+    }
+
+    if (scopePanelY != nullptr)
+    {
+        *scopePanelY = 0;
+    }
+
+    if (scopePanelSize != nullptr)
+    {
+        *scopePanelSize =
+            requestedScopeSize;
+    }
+
+    if (!g_vrLoggedDedicatedScopeLayout)
+    {
+        Com_Printf(
+            0,
+            "[VR] Packed dedicated scope layout active: "
+            "%d px stereo region plus %d x %d scope source "
+            "inside the %d x %d backbuffer.\n",
+            requiredMainStereoWidth,
+            requestedScopeSize,
+            requestedScopeSize,
+            backbufferWidth,
+            backbufferHeight);
+
+        g_vrLoggedDedicatedScopeLayout = true;
+    }
+
+    return true;
+}
+
+bool VR_GetPhysicalSniperScopeRenderView(
+    float scopeOrigin[3],
+    float scopeAxis[3][3],
+    float* tanHalfFovX,
+    float* tanHalfFovY)
+{
+    if (scopeOrigin == nullptr ||
+        scopeAxis == nullptr ||
+        tanHalfFovX == nullptr ||
+        tanHalfFovY == nullptr)
+    {
+        return false;
+    }
+
+    bool scopeActive = false;
+    float currentAdsFraction = 0.0f;
+    float adsFovDegrees = 65.0f;
+
+    // KISAK_SP_VR_FIXED_SCOPE_SHARP_VIEW_AND_TRACER_V5
+    bool fixedScopedTurretActive = false;
+    float fixedScopedTurretFovDegrees = 20.0f;
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrScopeStateMutex);
+
+        scopeActive =
+            g_vrScopeActive;
+
+        currentAdsFraction =
+            g_vrScopeAdsFraction;
+
+        adsFovDegrees =
+            g_vrScopeAdsFovDegrees;
+
+        fixedScopedTurretActive =
+            g_vrFixedScopedTurretActive;
+
+        fixedScopedTurretFovDegrees =
+            g_vrFixedScopedTurretZoomFovDegrees;
+    }
+
+    if (fixedScopedTurretActive)
+    {
+        // The caller initialized scopeOrigin from the current refdef, which
+        // is the correct fixed-rifle eye position. Replace only its axis with
+        // the same fused HMD-center basis used by the authoritative shot.
+        {
+            std::lock_guard<std::mutex> lock(
+                g_vrWeaponControllerPoseMutex);
+
+            if (!g_vrMountedWeaponCameraAxisWorldValid)
+            {
+                return false;
+            }
+
+            std::memcpy(
+                scopeAxis,
+                g_vrMountedWeaponCameraAxisWorld,
+                sizeof(g_vrMountedWeaponCameraAxisWorld));
+        }
+
+        adsFovDegrees =
+            fixedScopedTurretFovDegrees;
+    }
+    else
+    {
+        if (!scopeActive ||
+            currentAdsFraction <= 0.01f)
+        {
+            return false;
+        }
+
+        std::lock_guard<std::mutex> lock(
+            g_vrWeaponControllerPoseMutex);
+
+        if (!g_vrPhysicalSniperScopePoseWorldValid)
+        {
+            return false;
+        }
+
+        std::memcpy(
+            scopeOrigin,
+            g_vrPhysicalSniperScopeOriginWorld,
+            sizeof(g_vrPhysicalSniperScopeOriginWorld));
+
+        std::memcpy(
+            scopeAxis,
+            g_vrPhysicalSniperScopeAxisWorld,
+            sizeof(g_vrPhysicalSniperScopeAxisWorld));
+    }
+
+    constexpr float kPi =
+        3.14159265358979323846f;
+
+    const float squareScopeTanHalfFov =
+        std::tan(
+            0.5f *
+            adsFovDegrees *
+            (kPi / 180.0f)) *
+        0.75f;
+
+    if (!std::isfinite(squareScopeTanHalfFov) ||
+        squareScopeTanHalfFov <= 0.0001f)
+    {
+        return false;
+    }
+
+    *tanHalfFovX =
+        squareScopeTanHalfFov;
+
+    *tanHalfFovY =
+        squareScopeTanHalfFov;
+
+    return true;
+}
+
+void VR_PublishPhysicalSniperScopePoseWorld(
+    const float scopeOrigin[3],
+    const float scopeAxis[3][3],
+    const float cameraOrigin[3],
+    const float cameraAxis[3][3])
+{
+    if (scopeOrigin == nullptr ||
+        scopeAxis == nullptr ||
+        cameraOrigin == nullptr ||
+        cameraAxis == nullptr)
+    {
+        return;
+    }
+
+    const float calibratedScopeOrigin[3] = {
+        scopeOrigin[0] +
+            scopeAxis[0][0] *
+                g_vrScopeForwardCalibrationMeters *
+                kVrGameUnitsPerMeter +
+            scopeAxis[1][0] *
+                g_vrScopeLeftCalibrationMeters *
+                kVrGameUnitsPerMeter +
+            scopeAxis[2][0] *
+                g_vrScopeUpCalibrationMeters *
+                kVrGameUnitsPerMeter,
+        scopeOrigin[1] +
+            scopeAxis[0][1] *
+                g_vrScopeForwardCalibrationMeters *
+                kVrGameUnitsPerMeter +
+            scopeAxis[1][1] *
+                g_vrScopeLeftCalibrationMeters *
+                kVrGameUnitsPerMeter +
+            scopeAxis[2][1] *
+                g_vrScopeUpCalibrationMeters *
+                kVrGameUnitsPerMeter,
+        scopeOrigin[2] +
+            scopeAxis[0][2] *
+                g_vrScopeForwardCalibrationMeters *
+                kVrGameUnitsPerMeter +
+            scopeAxis[1][2] *
+                g_vrScopeLeftCalibrationMeters *
+                kVrGameUnitsPerMeter +
+            scopeAxis[2][2] *
+                g_vrScopeUpCalibrationMeters *
+                kVrGameUnitsPerMeter,
+    };
+
+    const float forwardLength =
+        std::sqrt(
+            scopeAxis[0][0] * scopeAxis[0][0] +
+            scopeAxis[0][1] * scopeAxis[0][1] +
+            scopeAxis[0][2] * scopeAxis[0][2]);
+
+    if (forwardLength <= 0.0001f)
+    {
+        return;
+    }
+
+    const float scopeForwardWorld[3] = {
+        scopeAxis[0][0] / forwardLength,
+        scopeAxis[0][1] / forwardLength,
+        scopeAxis[0][2] / forwardLength,
+    };
+
+    const float originDeltaWorld[3] = {
+        calibratedScopeOrigin[0] - cameraOrigin[0],
+        calibratedScopeOrigin[1] - cameraOrigin[1],
+        calibratedScopeOrigin[2] - cameraOrigin[2],
+    };
+
+    float scopeOriginCameraLocal[3] = {};
+    float scopeAxisCameraLocal[3][3] = {};
+
+    for (int cameraComponent = 0;
+         cameraComponent < 3;
+         ++cameraComponent)
+    {
+        scopeOriginCameraLocal[cameraComponent] =
+            originDeltaWorld[0] *
+                cameraAxis[cameraComponent][0] +
+            originDeltaWorld[1] *
+                cameraAxis[cameraComponent][1] +
+            originDeltaWorld[2] *
+                cameraAxis[cameraComponent][2];
+
+        for (int scopeAxisRow = 0;
+             scopeAxisRow < 3;
+             ++scopeAxisRow)
+        {
+            scopeAxisCameraLocal[
+                scopeAxisRow][cameraComponent] =
+                scopeAxis[scopeAxisRow][0] *
+                    cameraAxis[cameraComponent][0] +
+                scopeAxis[scopeAxisRow][1] *
+                    cameraAxis[cameraComponent][1] +
+                scopeAxis[scopeAxisRow][2] *
+                    cameraAxis[cameraComponent][2];
+        }
+    }
+
+    std::lock_guard<std::mutex> lock(
+        g_vrWeaponControllerPoseMutex);
+
+    std::memcpy(
+        g_vrPhysicalSniperScopeOriginWorld,
+        calibratedScopeOrigin,
+        sizeof(calibratedScopeOrigin));
+
+    std::memcpy(
+        g_vrPhysicalSniperScopeForwardWorld,
+        scopeForwardWorld,
+        sizeof(scopeForwardWorld));
+
+    std::memcpy(
+        g_vrPhysicalSniperScopeAxisWorld,
+        scopeAxis,
+        sizeof(g_vrPhysicalSniperScopeAxisWorld));
+
+    g_vrPhysicalSniperScopePoseWorldValid = true;
+
+    if (!g_vrRightControllerWeaponPoseValid)
+    {
+        g_vrPhysicalSniperScopeOffsetWeaponLocalValid = false;
+        return;
+    }
+
+    const float controllerToScopeCameraLocal[3] = {
+        scopeOriginCameraLocal[0] -
+            g_vrRightControllerWeaponPosition[0],
+        scopeOriginCameraLocal[1] -
+            g_vrRightControllerWeaponPosition[1],
+        scopeOriginCameraLocal[2] -
+            g_vrRightControllerWeaponPosition[2],
+    };
+
+    for (int scopeAxisRow = 0;
+         scopeAxisRow < 3;
+         ++scopeAxisRow)
+    {
+        g_vrPhysicalSniperScopeOffsetWeaponLocal[
+            scopeAxisRow] =
+            controllerToScopeCameraLocal[0] *
+                scopeAxisCameraLocal[scopeAxisRow][0] +
+            controllerToScopeCameraLocal[1] *
+                scopeAxisCameraLocal[scopeAxisRow][1] +
+            controllerToScopeCameraLocal[2] *
+                scopeAxisCameraLocal[scopeAxisRow][2];
+    }
+
+    g_vrPhysicalSniperScopeOffsetWeaponLocalValid = true;
+}
+
+bool VR_GetPhysicalSniperScopeAimWorld(
+    float scopeOrigin[3],
+    float scopeForward[3])
+{
+    if (scopeOrigin == nullptr ||
+        scopeForward == nullptr ||
+        !VR_IsPhysicalSniperScopeAimActive())
+    {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(
+        g_vrWeaponControllerPoseMutex);
+
+    if (!g_vrPhysicalSniperScopePoseWorldValid)
+    {
+        return false;
+    }
+
+    std::memcpy(
+        scopeOrigin,
+        g_vrPhysicalSniperScopeOriginWorld,
+        sizeof(g_vrPhysicalSniperScopeOriginWorld));
+
+    std::memcpy(
+        scopeForward,
+        g_vrPhysicalSniperScopeForwardWorld,
+        sizeof(g_vrPhysicalSniperScopeForwardWorld));
+
+    return true;
 }

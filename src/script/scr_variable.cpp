@@ -2422,6 +2422,89 @@ void Scr_DumpScriptThreads(void)
 					pInfo->posSize = info.posSize--;
 					for (j = 0; j < pInfo->posSize; ++j)
 						pInfo->pos[j] = info.pos[info.posSize - j];
+
+#ifdef KISAK_SP
+					// Keep scriptUsage's normal grouped report, but also expose the
+					// exact function, owner, and wait state for the scoutsniper
+					// threads being diagnosed.  The stock report only prints a source
+					// line, whose original fastfile line numbers do not match public
+					// decompiled sources.
+					if (scrVarPub.developer)
+					{
+						bool isScoutsniperThread = false;
+						for (j = 0; j < pInfo->posSize; ++j)
+						{
+							if (Scr_PrevCodePosFileNameMatches(
+								(char*)pInfo->pos[j], "maps/scoutsniper"))
+							{
+								isScoutsniperThread = true;
+								break;
+							}
+						}
+
+						if (isScoutsniperThread)
+						{
+							const uint32_t localId = stackBuf->localId;
+							const uint32_t startLocalId = GetStartLocalId(localId);
+							const uint32_t waitType = GetObjectType(startLocalId);
+							const uint32_t selfId = Scr_GetSelf(startLocalId);
+							const uint32_t selfType = GetObjectType(selfId);
+
+							if (selfType == VAR_ENTITY)
+							{
+								const scr_entref_t selfRef = Scr_GetEntityIdRef(selfId);
+								Com_Printf(23,
+									"[VR][SCRIPT][THREAD] local %u start %u "
+									"waitType %u self entity %u class %u.\n",
+									localId,
+									startLocalId,
+									waitType,
+									(unsigned int)selfRef.entnum,
+									(unsigned int)selfRef.classnum);
+							}
+							else
+							{
+								Com_Printf(23,
+									"[VR][SCRIPT][THREAD] local %u start %u "
+									"waitType %u self object %u type %u.\n",
+									localId,
+									startLocalId,
+									waitType,
+									selfId,
+									selfType);
+							}
+
+							if (waitType == VAR_NOTIFY_THREAD)
+							{
+								const uint32_t notifyName =
+									Scr_GetThreadNotifyName(startLocalId);
+								Com_Printf(23,
+									"[VR][SCRIPT][THREAD] notify '%s'.\n",
+									notifyName
+										? SL_ConvertToString(notifyName)
+										: "<none>");
+							}
+							else if (waitType == VAR_TIME_THREAD)
+							{
+								Com_Printf(23,
+									"[VR][SCRIPT][THREAD] wakeTime %u currentTime %u.\n",
+									Scr_GetThreadWaitTime(startLocalId),
+									scrVarPub.time);
+							}
+
+							for (j = 0; j < pInfo->posSize; ++j)
+							{
+								Com_Printf(23,
+									"[VR][SCRIPT][THREAD] frame %d function: %s\n",
+									j,
+									Scr_PrevCodePosFunctionName(
+										(char*)pInfo->pos[j]));
+								Scr_PrintPrevCodePos(
+									23, (char*)pInfo->pos[j], 0);
+							}
+						}
+					}
+#endif
 				}
 			}
 			qsort(infoArray, num, 0x8Cu, (int(*)(const void*, const void*))ThreadInfoCompare);

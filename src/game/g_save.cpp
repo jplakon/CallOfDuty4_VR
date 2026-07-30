@@ -33,6 +33,31 @@
 #include "savedevice.h"
 
 bool g_useDevSaveArea;
+static int g_saveLoadStateTraceEndTime = -1;
+static int g_saveLoadStateTraceNextTime = -1;
+
+void G_SaveLoadStateDiagnosticFrame()
+{
+    if (g_saveLoadStateTraceEndTime < 0
+        || level.time < g_saveLoadStateTraceNextTime)
+    {
+        return;
+    }
+
+    Com_Printf(10,
+        "[VR][SAVE][STATE] post-load levelTime %d: entity %.2f %.2f %.2f; ps %.2f %.2f %.2f.\n",
+        level.time,
+        g_entities[0].r.currentOrigin[0],
+        g_entities[0].r.currentOrigin[1],
+        g_entities[0].r.currentOrigin[2],
+        level.clients[0].ps.origin[0],
+        level.clients[0].ps.origin[1],
+        level.clients[0].ps.origin[2]);
+
+    g_saveLoadStateTraceNextTime = level.time + 250;
+    if (level.time >= g_saveLoadStateTraceEndTime)
+        g_saveLoadStateTraceEndTime = -1;
+}
 
 gclient_s tempClient;
 
@@ -2163,6 +2188,17 @@ int __cdecl G_WriteGame(const PendingSave *pendingSave, int checksum, SaveGame *
     if (pendingSave == (const PendingSave *)-320)
         MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_save.cpp", 2434, 0, "%s", "pendingSave->screenShotName");
     Com_Printf(10, "G_WriteGame '%s' '%s'\n", pendingSave->filename, pendingSave->description);
+    Com_Printf(10,
+        "[VR][SAVE][STATE] capture id %d '%s': levelTime %d; entity %.2f %.2f %.2f; ps %.2f %.2f %.2f.\n",
+        pendingSave->saveId,
+        pendingSave->filename,
+        level.time,
+        g_entities[0].r.currentOrigin[0],
+        g_entities[0].r.currentOrigin[1],
+        g_entities[0].r.currentOrigin[2],
+        level.clients[0].ps.origin[0],
+        level.clients[0].ps.origin[1],
+        level.clients[0].ps.origin[2]);
     if (!save)
         MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_save.cpp", 2438, 0, "%s", "save");
     SaveMemory_InitializeGameSave(save);
@@ -2265,6 +2301,17 @@ int __cdecl G_SaveGame(const PendingSave *pendingSave, int checksum)
 
     if (!pendingSave)
         MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_save.cpp", 2581, 0, "%s", "pendingSave");
+
+    if (pendingSave->saveType == SAVE_TYPE_AUTOSAVE
+        && !I_stricmp(pendingSave->description, "AUTOSAVE_LEVELSTART")
+        && SaveMemory_HasLoadedGameSinceLastSave())
+    {
+        Com_Printf(10,
+            "[VR][SAVE] Suppressed level-start autosave after Resume ('%s').\n",
+            pendingSave->filename);
+        return 0;
+    }
+
     if (pendingSave->saveType == SAVE_TYPE_INTERNAL || (v4 = 0, g_entities[0].health > 0))
         v4 = 1;
     if (!v4)
@@ -2706,6 +2753,18 @@ void __cdecl G_LoadGame(int /*checksum*/, SaveGame *save)
         G_SaveError(ERR_DROP, SAVE_ERROR_CORRUPT_SAVE, "The save file has become corrupted.");
     }
     G_LoadMainState(save);
+    Com_Printf(10,
+        "[VR][SAVE][STATE] restore id %d: levelTime %d; entity %.2f %.2f %.2f; ps %.2f %.2f %.2f.\n",
+        header->saveId,
+        level.time,
+        g_entities[0].r.currentOrigin[0],
+        g_entities[0].r.currentOrigin[1],
+        g_entities[0].r.currentOrigin[2],
+        level.clients[0].ps.origin[0],
+        level.clients[0].ps.origin[1],
+        level.clients[0].ps.origin[2]);
+    g_saveLoadStateTraceNextTime = level.time;
+    g_saveLoadStateTraceEndTime = level.time + 5000;
     SaveMemory_FinalizeLoad(save);
     RandomSeed = G_GetRandomSeed();
     level.demoplaying = SV_InitDemo((int *)&RandomSeed);

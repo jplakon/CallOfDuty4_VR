@@ -360,10 +360,35 @@ void __cdecl RB_StandardDrawCommands(const GfxViewInfo *viewInfo)
     data = backEndData;
 
 #if defined(XR_USE_GRAPHICS_API_D3D11)
+    // KISAK_VR_DEDICATED_SCOPE_CAMERA_V2_PACKED_CLEAR_FIX
+    // R_ClearScreen clears the complete render target when no rectangle is
+    // supplied. The historical variable name now covers every packed view
+    // after view 0: right eye in the two-view layout, and both normal eyes
+    // after the scope camera in the three-view layout.
     const bool vrSecondaryStereoView =
         VR_D3D9IsSameFrameStereoEnabled() &&
-        data->viewInfoCount == 2u &&
-        viewInfo == &data->viewInfo[1];
+        (data->viewInfoCount == 2u ||
+         data->viewInfoCount == 3u) &&
+        viewInfo != &data->viewInfo[0];
+
+    if (vrSecondaryStereoView)
+    {
+        static bool loggedVrPackedClearPreservation[3] = {};
+        const uint32_t viewInfoIndex = data->viewInfoIndex;
+
+        if (viewInfoIndex < 3u &&
+            !loggedVrPackedClearPreservation[viewInfoIndex])
+        {
+            Com_Printf(
+                0,
+                "[VR] Preserved the packed render target for same-frame "
+                "view %u of %u; only view 0 performs the full clear.\n",
+                viewInfoIndex,
+                data->viewInfoCount);
+
+            loggedVrPackedClearPreservation[viewInfoIndex] = true;
+        }
+    }
 #else
     const bool vrSecondaryStereoView = false;
 #endif

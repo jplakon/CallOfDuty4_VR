@@ -28,6 +28,246 @@
 #include "r_draw_method.h"
 #include "r_model.h"
 
+#if defined(KISAK_SP) && defined(KISAK_OPENXR_ENABLED)
+// KISAK_SP_VR_GPU_SHARED_BRIDGE_V1
+namespace
+{
+using Direct3DCreate9ExFn =
+    HRESULT (WINAPI*)(
+        UINT sdkVersion,
+        IDirect3D9Ex** direct3D9Ex);
+
+bool g_spVrD3D9ExInterfaceActive = false;
+
+bool R_SpVrGpuBridgeRequested()
+{
+    char setting[2] = {};
+
+    const DWORD settingLength =
+        GetEnvironmentVariableA(
+            "KISAK_VR_GPU_BRIDGE",
+            setting,
+            sizeof(setting));
+
+    return
+        settingLength == 1u &&
+        setting[0] == '1';
+}
+
+IDirect3D9* R_SpVrCreateDirect3D9Interface()
+{
+    g_spVrD3D9ExInterfaceActive = false;
+
+    if (R_SpVrGpuBridgeRequested())
+    {
+        HMODULE d3d9Module =
+            GetModuleHandleA("d3d9.dll");
+
+        const auto createDirect3D9Ex =
+            d3d9Module != nullptr
+                ? reinterpret_cast<Direct3DCreate9ExFn>(
+                    GetProcAddress(
+                        d3d9Module,
+                        "Direct3DCreate9Ex"))
+                : nullptr;
+
+        if (createDirect3D9Ex != nullptr)
+        {
+            IDirect3D9Ex* direct3D9Ex = nullptr;
+
+            const HRESULT hr =
+                createDirect3D9Ex(
+                    D3D_SDK_VERSION,
+                    &direct3D9Ex);
+
+            if (SUCCEEDED(hr) &&
+                direct3D9Ex != nullptr)
+            {
+                g_spVrD3D9ExInterfaceActive = true;
+
+                Com_Printf(
+                    8,
+                    "[VR] KISAK_VR_GPU_BRIDGE=1 selected "
+                    "a D3D9Ex game interface.\n");
+
+                return direct3D9Ex;
+            }
+
+            if (direct3D9Ex != nullptr)
+            {
+                direct3D9Ex->Release();
+            }
+
+            Com_PrintWarning(
+                8,
+                "[VR] Direct3DCreate9Ex failed: "
+                "0x%08lX; using the CPU bridge.\n",
+                static_cast<unsigned long>(hr));
+        }
+        else
+        {
+            Com_PrintWarning(
+                8,
+                "[VR] Direct3DCreate9Ex is unavailable; "
+                "using the CPU bridge.\n");
+        }
+    }
+
+    return Direct3DCreate9(D3D_SDK_VERSION);
+}
+
+HRESULT R_SpVrCreateDirect3DDevice(
+    HWND hwnd,
+    const D3DDEVTYPE deviceType,
+    const DWORD behavior,
+    D3DPRESENT_PARAMETERS* present)
+{
+    if (g_spVrD3D9ExInterfaceActive)
+    {
+        IDirect3D9Ex* direct3D9Ex = nullptr;
+
+        HRESULT hr =
+            dx.d3d9->QueryInterface(
+                __uuidof(IDirect3D9Ex),
+                reinterpret_cast<void**>(
+                    &direct3D9Ex));
+
+        if (SUCCEEDED(hr) &&
+            direct3D9Ex != nullptr)
+        {
+            IDirect3DDevice9Ex* device9Ex =
+                nullptr;
+
+            hr =
+                direct3D9Ex->CreateDeviceEx(
+                    dx.adapterIndex,
+                    deviceType,
+                    hwnd,
+                    behavior,
+                    present,
+                    nullptr,
+                    &device9Ex);
+
+            direct3D9Ex->Release();
+
+            if (SUCCEEDED(hr) &&
+                device9Ex != nullptr)
+            {
+                dx.device = device9Ex;
+
+                Com_Printf(
+                    8,
+                    "[VR] Created the game renderer as "
+                    "IDirect3DDevice9Ex.\n");
+
+                return hr;
+            }
+
+            if (device9Ex != nullptr)
+            {
+                device9Ex->Release();
+            }
+
+            Com_PrintWarning(
+                8,
+                "[VR] IDirect3D9Ex::CreateDeviceEx failed: "
+                "0x%08lX; trying the legacy D3D9 device.\n",
+                static_cast<unsigned long>(hr));
+        }
+
+        g_spVrD3D9ExInterfaceActive = false;
+    }
+
+    const HRESULT legacyResult =
+        dx.d3d9->CreateDevice(
+            dx.adapterIndex,
+            deviceType,
+            hwnd,
+            behavior,
+            present,
+            &dx.device);
+
+    if (SUCCEEDED(legacyResult) &&
+        dx.device != nullptr)
+    {
+        IDirect3DDevice9Ex* device9Ex =
+            nullptr;
+
+        const HRESULT queryResult =
+            dx.device->QueryInterface(
+                __uuidof(IDirect3DDevice9Ex),
+                reinterpret_cast<void**>(
+                    &device9Ex));
+
+        if (SUCCEEDED(queryResult) &&
+            device9Ex != nullptr)
+        {
+            g_spVrD3D9ExInterfaceActive = true;
+            device9Ex->Release();
+        }
+    }
+
+    return legacyResult;
+}
+
+HRESULT R_SpVrResetDirect3DDevice(
+    D3DPRESENT_PARAMETERS* present)
+{
+    IDirect3DDevice9Ex* device9Ex = nullptr;
+
+    const HRESULT queryResult =
+        dx.device->QueryInterface(
+            __uuidof(IDirect3DDevice9Ex),
+            reinterpret_cast<void**>(
+                &device9Ex));
+
+    if (SUCCEEDED(queryResult) &&
+        device9Ex != nullptr)
+    {
+        D3DDISPLAYMODEEX fullscreenMode = {};
+        D3DDISPLAYMODEEX* fullscreenModePointer =
+            nullptr;
+
+        if (!present->Windowed)
+        {
+            fullscreenMode.Size =
+                sizeof(fullscreenMode);
+            fullscreenMode.Width =
+                present->BackBufferWidth;
+            fullscreenMode.Height =
+                present->BackBufferHeight;
+            fullscreenMode.RefreshRate =
+                present->FullScreen_RefreshRateInHz;
+            fullscreenMode.Format =
+                present->BackBufferFormat;
+            fullscreenMode.ScanLineOrdering =
+                D3DSCANLINEORDERING_PROGRESSIVE;
+
+            fullscreenModePointer =
+                &fullscreenMode;
+        }
+
+        const HRESULT resetResult =
+            device9Ex->ResetEx(
+                present,
+                fullscreenModePointer);
+
+        device9Ex->Release();
+        return resetResult;
+    }
+
+    return dx.device->Reset(present);
+}
+}
+
+bool R_SpVrD3D9ExDeviceActive()
+{
+    return
+        g_spVrD3D9ExInterfaceActive &&
+        dx.device != nullptr;
+}
+#endif
+
 #ifdef KISAK_MP
 #include <game_mp/g_public_mp.h>
 #endif
@@ -3194,7 +3434,11 @@ char __cdecl R_PreCreateWindow()
     else
     {
         Com_Printf(8, "Getting Direct3D 9 interface...\n");
+#if defined(KISAK_SP) && defined(KISAK_OPENXR_ENABLED)
+        dx.d3d9 = R_SpVrCreateDirect3D9Interface();
+#else
         dx.d3d9 = Direct3DCreate9(0x20u);
+#endif
         if (!dx.d3d9)
         {
             Com_Printf(8, "Direct3D 9 failed to initialize\n");
@@ -4026,7 +4270,16 @@ HRESULT __cdecl R_CreateDeviceInternal(HWND__ *hwnd, uint32_t behavior, _D3DPRES
     {
         dx.adapterNativeIsValid = R_GetMonitorDimensions(&dx.adapterNativeWidth, &dx.adapterNativeHeight);
         DeviceType = (_D3DDEVTYPE)R_GetDeviceType();
+#if defined(KISAK_SP) && defined(KISAK_OPENXR_ENABLED)
+        hr =
+            R_SpVrCreateDirect3DDevice(
+                hwnd,
+                DeviceType,
+                behavior,
+                d3dpp);
+#else
         hr = dx.d3d9->CreateDevice(dx.adapterIndex, DeviceType, hwnd, behavior, d3dpp, &dx.device);
+#endif
         if (hr >= 0)
             break;
         Sleep(100);
@@ -4076,8 +4329,64 @@ bool __cdecl R_SetCustomResolution(GfxWindowParms *wndParms)
 
     if (sscanf(r_customMode->current.string, "%ix%i", &wndParms->displayWidth, &wndParms->displayHeight) != 2)
         return 0;
-    return !R_GetMonitorDimensions(&monitorWidth, &monitorHeight)
-        || wndParms->displayWidth <= monitorWidth && wndParms->displayHeight <= monitorHeight;
+
+    if (wndParms->displayWidth <= 0 || wndParms->displayHeight <= 0)
+        return 0;
+
+    const bool monitorDimensionsKnown =
+        R_GetMonitorDimensions(&monitorWidth, &monitorHeight);
+
+    if (!monitorDimensionsKnown ||
+        (wndParms->displayWidth <= monitorWidth &&
+         wndParms->displayHeight <= monitorHeight))
+    {
+        return 1;
+    }
+
+    // KISAK_SP_VR_OVERSIZED_CUSTOM_RESOLUTION_V1
+    char allowOversizedWindow[2] = {};
+
+    const unsigned long allowValueLength =
+        GetEnvironmentVariableA(
+            "KISAK_VR_ALLOW_OVERSIZED_WINDOW",
+            allowOversizedWindow,
+            sizeof(allowOversizedWindow));
+
+    if (allowValueLength != 1u ||
+        allowOversizedWindow[0] != '1')
+    {
+        return 0;
+    }
+
+    const int maximumDimension =
+        vidConfig.maxTextureSize > 0
+            ? vidConfig.maxTextureSize
+            : 4096;
+
+    if (wndParms->displayWidth > maximumDimension ||
+        wndParms->displayHeight > maximumDimension)
+    {
+        Com_PrintWarning(
+            8,
+            "[VR] Rejected oversized custom resolution %i x %i; "
+            "the D3D9 device limit is %i pixels per dimension.\n",
+            wndParms->displayWidth,
+            wndParms->displayHeight,
+            maximumDimension);
+
+        return 0;
+    }
+
+    Com_Printf(
+        8,
+        "[VR] Allowing oversized windowed custom resolution "
+        "%i x %i on a %i x %i monitor.\n",
+        wndParms->displayWidth,
+        wndParms->displayHeight,
+        monitorWidth,
+        monitorHeight);
+
+    return 1;
 }
 
 const char *__cdecl R_ClosestRefreshRateForMode(uint32_t width, uint32_t height, int refreshRate)
@@ -4338,8 +4647,12 @@ void R_ResetDevice()
     wndParms.aaSamples = r_aaSamples->current.integer;
     R_SetD3DPresentParameters(&d3dpp, &wndParms);
     R_ReleaseForShutdownOrReset();
+#if defined(KISAK_SP) && defined(KISAK_OPENXR_ENABLED)
+    hr = R_SpVrResetDirect3DDevice(&d3dpp);
+#else
     //hr = dx.device->Reset(dx.device, &d3dpp);
     hr = dx.device->Reset(&d3dpp);
+#endif
     if (hr < 0)
     {
         v0 = R_ErrorDescription(hr);

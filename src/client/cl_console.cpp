@@ -14,8 +14,11 @@
 #elif KISAK_SP
 #include <cgame/cg_main.h>
 #include "cl_scrn.h"
+#include "vr/vr_openxr.h"
 #endif
 #include <sound/snd_public.h>
+
+#include <cstdlib>
 
 enum {
     COLOR_FIRST = 48,
@@ -1706,6 +1709,60 @@ void __cdecl Con_AllowAutoCompleteCycling(bool isAllowed)
     conDrawInputGlob.mayAutoComplete = isAllowed;
 }
 
+// KISAK_SP_VR_GAME_MESSAGE_POSITION_V1
+#ifdef KISAK_SP
+static int32_t VR_GetGameMessageYOffset()
+{
+    static const int32_t yOffset = []() -> int32_t
+    {
+        constexpr int32_t defaultOffset = 72;
+        constexpr long minimumOffset = 0;
+        constexpr long maximumOffset = 200;
+
+        const char *requestedOffset =
+            std::getenv(
+                "KISAK_VR_GAME_MESSAGE_Y_OFFSET");
+
+        if (requestedOffset == nullptr ||
+            requestedOffset[0] == '\0')
+        {
+            return defaultOffset;
+        }
+
+        char *parseEnd = nullptr;
+
+        const long parsedOffset =
+            std::strtol(
+                requestedOffset,
+                &parseEnd,
+                10);
+
+        if (parseEnd == requestedOffset ||
+            parseEnd == nullptr ||
+            parseEnd[0] != '\0' ||
+            parsedOffset < minimumOffset ||
+            parsedOffset > maximumOffset)
+        {
+            Com_PrintWarning(
+                0,
+                "[VR][HUD] Ignoring invalid "
+                "KISAK_VR_GAME_MESSAGE_Y_OFFSET='%s'; "
+                "using %d. Valid range is %ld through %ld.\n",
+                requestedOffset,
+                defaultOffset,
+                minimumOffset,
+                maximumOffset);
+
+            return defaultOffset;
+        }
+
+        return static_cast<int32_t>(parsedOffset);
+    }();
+
+    return yOffset;
+}
+#endif
+
 void __cdecl Con_DrawGameMessageWindow(
     int32_t localClientNum,
     uint32_t windowIndex,
@@ -1721,6 +1778,30 @@ void __cdecl Con_DrawGameMessageWindow(
     msgwnd_mode_t mode)
 {
     float v12; // [esp+Ch] [ebp-18h]
+
+#ifdef KISAK_SP
+    if (VR_IsInitialized() &&
+        windowIndex == 0u)
+    {
+        const int32_t yOffset =
+            VR_GetGameMessageYOffset();
+
+        yPos += yOffset;
+
+        static bool loggedVrGameMessageOffset = false;
+
+        if (!loggedVrGameMessageOffset)
+        {
+            Com_Printf(
+                0,
+                "[VR][HUD] Game notifications moved down by "
+                "%d virtual pixels.\n",
+                yOffset);
+
+            loggedVrGameMessageOffset = true;
+        }
+    }
+#endif
 
     if (!cg_paused->current.integer)
     {

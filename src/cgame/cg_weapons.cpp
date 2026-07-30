@@ -3,7 +3,7 @@
 
 #include "cg_local.h"
 #include "cg_public.h"
-#include <script/scr_stringlist.h>\n
+#include <script/scr_stringlist.h>
 
 #include <xanim/dobj.h>
 #include <DynEntity/DynEntity_client.h>
@@ -44,6 +44,28 @@ const float MYLERP_END = 0.1f;
 
 int32_t removeMeWhenMPStopsCrashingInHere;
 
+// KISAK_SP_JAVELIN_DIAGNOSTICS
+// Keep this temporary trace deliberately limited to the Bog Javelin index
+// reported by CG_SelectWeaponIndex so normal weapons do not flood console.log.
+static uint32_t s_vrJavelinDiagnosticSequence = 0;
+
+static void VR_JavelinDiagnostic(
+    const char *stage,
+    uint32_t weaponNum,
+    const void *object = nullptr)
+{
+    if (weaponNum != 7)
+        return;
+
+    Com_Printf(
+        0,
+        "[VR][JAVELIN] %u: %s (weapon %u, object %p).\n",
+        ++s_vrJavelinDiagnosticSequence,
+        stage,
+        weaponNum,
+        object);
+}
+
 int32_t g_animRateOffsets[33] =
 {
   -1,
@@ -81,6 +103,7 @@ int32_t g_animRateOffsets[33] =
   -1
 }; // idb
 
+// KISAK_SP_JAVELIN_MENU_DIAGNOSTICS_WEAPON
 bool __cdecl CG_JavelinADS(int32_t localClientNum)
 {
     int32_t weapIdx; // [esp+4h] [ebp-Ch]
@@ -88,12 +111,25 @@ bool __cdecl CG_JavelinADS(int32_t localClientNum)
 
     cgameGlob = CG_GetLocalClientGlobals(localClientNum);
     weapIdx = BG_GetViewmodelWeaponIndex(&cgameGlob->predictedPlayerState);
+    VR_JavelinDiagnostic(
+        "ADS query: weapon index resolved",
+        weapIdx,
+        cgameGlob);
 
-    if (weapIdx <= 0)
-        return 0;
-    if (cgameGlob->predictedPlayerState.fWeaponPosFrac == 1.0)
-        return BG_GetWeaponDef(weapIdx)->overlayInterface == WEAPOVERLAYINTERFACE_JAVELIN;
-    return 0;
+    if (weapIdx <= 0 || weapIdx >= (int32_t)BG_GetNumWeapons())
+        return false;
+
+    if (cgameGlob->predictedPlayerState.fWeaponPosFrac != 1.0f)
+        return false;
+
+    WeaponDef *weapDef = BG_GetWeaponDef(weapIdx);
+    VR_JavelinDiagnostic(
+        "ADS query: weapon definition resolved",
+        weapIdx,
+        weapDef);
+
+    return weapDef != nullptr &&
+        weapDef->overlayInterface == WEAPOVERLAYINTERFACE_JAVELIN;
 }
 
 int32_t __cdecl CG_WeaponDObjHandle(int32_t weaponNum)
@@ -116,6 +152,7 @@ void __cdecl CG_RegisterWeapon(int32_t localClientNum, uint32_t weaponNum)
     DObjModel_s dobjModels[2]; // [esp+30h] [ebp-10h] BYREF
 
     removeMeWhenMPStopsCrashingInHere = weaponNum;
+    VR_JavelinDiagnostic("register: enter", weaponNum);
     if (weaponNum)
     {
         iassert(weaponNum < BG_GetNumWeapons());
@@ -124,9 +161,12 @@ void __cdecl CG_RegisterWeapon(int32_t localClientNum, uint32_t weaponNum)
 
         weapInfo = &cg_weaponsArray[0][weaponNum]; // KISAKTODO :refactor to CG_GetLocalClientWeaponInfo();
         weapDef = BG_GetWeaponDef(weaponNum);
+        VR_JavelinDiagnostic("register: weapon definition resolved", weaponNum, weapDef);
         if (!weapInfo->registered)
         {
+            VR_JavelinDiagnostic("register: new registration", weaponNum, weapInfo);
             SCR_UpdateLoadScreen();
+            VR_JavelinDiagnostic("register: load-screen update complete", weaponNum, weapInfo);
             memset(weapInfo, 0, sizeof(weaponInfo_s));
             weapInfo->registered = 1;
             weapInfo->item = &bg_itemlist[weaponNum];
@@ -140,11 +180,15 @@ void __cdecl CG_RegisterWeapon(int32_t localClientNum, uint32_t weaponNum)
                 dobjModels[0].model = weapDef->handXModel;
                 dobjModels[1].model = weapDef->gunXModel[0];
                 iassert(!weapInfo->tree);
+                VR_JavelinDiagnostic("register: before animation-tree creation", weaponNum, weapDef);
                 weapInfo->tree = CG_CreateWeaponViewModelXAnim(weapDef);
+                VR_JavelinDiagnostic("register: animation-tree creation complete", weaponNum, weapInfo->tree);
                 iassert(dobjModels[0].model);
                 iassert(dobjModels[1].model);
                 dobjHandle = CG_WeaponDObjHandle(weaponNum);
+                VR_JavelinDiagnostic("register: before DObj creation", weaponNum, weapInfo->tree);
                 obj = Com_ClientDObjCreate(dobjModels, 2u, weapInfo->tree, dobjHandle, localClientNum);
+                VR_JavelinDiagnostic("register: DObj creation complete", weaponNum, obj);
                 weapInfo->viewModelDObj = obj;
                 weapInfo->handModel = weapDef->handXModel;
                 weapInfo->weapModelIdx = 0;
@@ -169,12 +213,25 @@ void __cdecl CG_RegisterWeapon(int32_t localClientNum, uint32_t weaponNum)
                     }
                 }
                 DObjSetHidePartBits(obj, weapInfo->partBits);
+                VR_JavelinDiagnostic("register: hide-part setup complete", weaponNum, obj);
                 DObjUpdateClientInfo(weapInfo->viewModelDObj, 0.05f, 0);
+                VR_JavelinDiagnostic("register: initial DObj update complete", weaponNum, obj);
             }
-            if (weapDef->hudIcon)
-                cgMedia.stanceMaterials[weaponNum - 129] = weapDef->hudIcon;
-            else
-                cgMedia.stanceMaterials[weaponNum - 129] = 0;
+            // KISAK_SP_JAVELIN_PICKUP_FIX
+            // stanceMaterials immediately follows hintMaterials in cgMedia_t.
+            // The recovered negative index reached backward into that array,
+            // which is undefined C++ and corrupted memory when a newly seen
+            // weapon such as the Bog Javelin was registered.
+            const uint32_t hintMaterialIndex =
+                weaponNum + WEAPON_HINT_OFFSET;
+
+            iassert(
+                hintMaterialIndex >= FIRST_WEAPON_HINT &&
+                hintMaterialIndex <= LAST_WEAPON_HINT);
+
+            cgMedia.hintMaterials[hintMaterialIndex] =
+                weapDef->hudIcon;
+            VR_JavelinDiagnostic("register: HUD material stored", weaponNum, weapDef->hudIcon);
             weapInfo->translatedDisplayName = SEH_StringEd_GetString(weapDef->szDisplayName);
             if (!weapInfo->translatedDisplayName)
             {
@@ -235,7 +292,13 @@ void __cdecl CG_RegisterWeapon(int32_t localClientNum, uint32_t weaponNum)
                 }
                 weapInfo->translatedAIOverlayDescription = weapDef->szOverlayName;
             }
+            VR_JavelinDiagnostic("register: translations complete", weaponNum, weapInfo->viewModelDObj);
         }
+        else
+        {
+            VR_JavelinDiagnostic("register: already registered", weaponNum, weapInfo->viewModelDObj);
+        }
+        VR_JavelinDiagnostic("register: exit", weaponNum, weapInfo->viewModelDObj);
     }
 }
 
@@ -311,6 +374,7 @@ void __cdecl ChangeViewmodelDobj(
     XAnimTree_s *pAnimTree; // [esp+18h] [ebp-24h]
     DObjModel_s dobjModels[4]; // [esp+1Ch] [ebp-20h] BYREF
 
+    VR_JavelinDiagnostic("change DObj: enter", weaponNum, newHands);
     if (weaponNum)
     {
         bcassert(weaponNum, BG_GetNumWeapons());
@@ -318,6 +382,7 @@ void __cdecl ChangeViewmodelDobj(
         iassert(localClientNum == 0);
         weapInfo = &cg_weaponsArray[0][weaponNum]; // KISAKTODO: refactor to CG_GetLocalClientWeaponInfo()
         weapDef = BG_GetWeaponDef(weaponNum);
+        VR_JavelinDiagnostic("change DObj: weapon definition resolved", weaponNum, weapDef);
         if (weapDef->gunXModel[weaponModel])
         {
             weapInfo->handModel = newHands;
@@ -371,10 +436,16 @@ void __cdecl ChangeViewmodelDobj(
                 mdlIdx++;
             }
             iassert(mdlIdx <= MYMODELCOUNT);
+            VR_JavelinDiagnostic("change DObj: before DObj creation", weaponNum, pAnimTree);
             weapInfo->viewModelDObj = Com_ClientDObjCreate(dobjModels, mdlIdx, pAnimTree, dobjHandle, localClientNum);
+            VR_JavelinDiagnostic("change DObj: DObj creation complete", weaponNum, weapInfo->viewModelDObj);
             DObjSetHidePartBits(weapInfo->viewModelDObj, weapInfo->partBits);
+            VR_JavelinDiagnostic("change DObj: hide-part setup complete", weaponNum, weapInfo->viewModelDObj);
             if (updateClientInfo)
+            {
                 DObjUpdateClientInfo(weapInfo->viewModelDObj, 0.05f, 0);
+                VR_JavelinDiagnostic("change DObj: client update complete", weaponNum, weapInfo->viewModelDObj);
+            }
         }
     }
 }
@@ -551,6 +622,12 @@ bool VR_GetRightControllerWeaponGripWorld(
     float gripWorld[3]);
 #endif
 
+#ifdef KISAK_SP
+// KISAK_VR_DEDICATED_SCOPE_CAMERA_V2
+static bool
+    s_vrPhysicalScopeViewWeaponDeferred = false;
+#endif
+
 void __cdecl CG_AddPlayerWeapon(
     int32_t localClientNum,
     const GfxScaledPlacement* placement,
@@ -569,6 +646,34 @@ void __cdecl CG_AddPlayerWeapon(
     const WeaponDef* weapDef; // [esp+50h] [ebp-4h]
 
     cg_s *cgameGlob = CG_GetLocalClientGlobals(localClientNum);
+
+#ifdef KISAK_SP
+    bool deferPhysicalScopeViewWeapon = false;
+
+    if (ps != nullptr)
+    {
+        s_vrPhysicalScopeViewWeaponDeferred =
+            false;
+
+        if (bDrawGun &&
+            VR_IsPhysicalSniperScopeAimActive())
+        {
+            deferPhysicalScopeViewWeapon =
+                VR_GetPhysicalSniperScopeCaptureLayout(
+                    static_cast<int>(
+                        cgameGlob->refdef.width),
+                    static_cast<int>(
+                        cgameGlob->refdef.height),
+                    nullptr,
+                    nullptr,
+                    nullptr,
+                    nullptr);
+
+            s_vrPhysicalScopeViewWeaponDeferred =
+                deferPhysicalScopeViewWeapon;
+        }
+    }
+#endif
 
     nextSnap = cgameGlob->nextSnap;
 #ifdef KISAK_MP
@@ -590,6 +695,7 @@ void __cdecl CG_AddPlayerWeapon(
     {
         iassert(localClientNum == 0);
         weapInfo = &cg_weaponsArray[0][weaponNum];
+        VR_JavelinDiagnostic("render: enter", weaponNum, weapInfo->viewModelDObj);
         iassert(weapInfo->viewModelDObj);
         if (ps)
         {
@@ -598,6 +704,7 @@ void __cdecl CG_AddPlayerWeapon(
             cgameGlob->viewModelAxis[3][1] = placement->base.origin[1];
             cgameGlob->viewModelAxis[3][2] = placement->base.origin[2];
             CG_UpdateViewModelPose(weapInfo->viewModelDObj, localClientNum);
+            VR_JavelinDiagnostic("render: initial pose update complete", weaponNum, weapInfo->viewModelDObj);
 
 #if defined(KISAK_MP) || defined(KISAK_SP)
 #if defined(KISAK_MP)
@@ -776,17 +883,143 @@ void __cdecl CG_AddPlayerWeapon(
                         loggedVrMuzzlePublication = true;
                     }
                 }
+
+#ifdef KISAK_SP
+                if (VR_IsPhysicalSniperScopeAimActive())
+                {
+                    const char* scopeTagCandidates[] = {
+                        "tag_scope_rear",
+                        "tag_scope_rear_lid_animate",
+                        "tag_scope",
+                        "tag_scope_animate",
+                        "tag_sights",
+                        "tag_sight",
+                        "tag_reticle",
+                    };
+
+                    float vrScopeOriginWorld[3] = {};
+                    const char* selectedScopeAnchor = nullptr;
+
+                    for (const char* scopeTagName :
+                         scopeTagCandidates)
+                    {
+                        const uint32_t scopeTag =
+                            SL_FindString(
+                                scopeTagName);
+
+                        if (scopeTag != 0 &&
+                            CG_DObjGetWorldTagPos(
+                                &cgameGlob->viewModelPose,
+                                weapInfo->viewModelDObj,
+                                scopeTag,
+                                vrScopeOriginWorld))
+                        {
+                            selectedScopeAnchor =
+                                scopeTagName;
+
+                            break;
+                        }
+                    }
+
+                    if (selectedScopeAnchor == nullptr)
+                    {
+                        float vrTrackedGripWorld[3] = {};
+
+                        if (VR_GetRightControllerWeaponGripWorld(
+                                cgameGlob->refdef.vieworg,
+                                cgameGlob->refdef.viewaxis,
+                                vrTrackedGripWorld))
+                        {
+                            constexpr float
+                                kScopeFallbackForwardGameUnits =
+                                    0.20f *
+                                    39.37007874015748f;
+
+                            constexpr float
+                                kScopeFallbackUpGameUnits =
+                                    0.055f *
+                                    39.37007874015748f;
+
+                            for (int worldComponent = 0;
+                                 worldComponent < 3;
+                                 ++worldComponent)
+                            {
+                                vrScopeOriginWorld[worldComponent] =
+                                    vrTrackedGripWorld[worldComponent] +
+                                    cgameGlob->viewModelAxis[
+                                        0][worldComponent] *
+                                        kScopeFallbackForwardGameUnits +
+                                    cgameGlob->viewModelAxis[
+                                        2][worldComponent] *
+                                        kScopeFallbackUpGameUnits;
+                            }
+
+                            selectedScopeAnchor =
+                                "grip-relative fallback";
+                        }
+                    }
+
+                    if (selectedScopeAnchor != nullptr)
+                    {
+                        VR_PublishPhysicalSniperScopePoseWorld(
+                            vrScopeOriginWorld,
+                            cgameGlob->viewModelAxis,
+                            cgameGlob->refdef.vieworg,
+                            cgameGlob->refdef.viewaxis);
+
+                        static bool
+                            loggedVrScopeAnchorPublication =
+                                false;
+
+                        if (!loggedVrScopeAnchorPublication)
+                        {
+                            Com_Printf(
+                                0,
+                                "[VR] Attached the physical sniper scope "
+                                "to viewmodel anchor '%s'.\n",
+                                selectedScopeAnchor);
+
+                            loggedVrScopeAnchorPublication =
+                                true;
+                        }
+                    }
+                    else
+                    {
+                        static bool
+                            loggedVrScopeAnchorFailure =
+                                false;
+
+                        if (!loggedVrScopeAnchorFailure)
+                        {
+                            Com_PrintWarning(
+                                0,
+                                "[VR] Could not publish a physical "
+                                "sniper-scope anchor.\n");
+
+                            loggedVrScopeAnchorFailure =
+                                true;
+                        }
+                    }
+                }
+#endif
             }
 #endif
 
-            if (bDrawGun)
+            VR_JavelinDiagnostic("render: VR grip and muzzle stages complete", weaponNum, weapInfo->viewModelDObj);
+            if (bDrawGun
+#ifdef KISAK_SP
+                && !deferPhysicalScopeViewWeapon
+#endif
+                )
             {
                 lightingOrigin[0] = ps->origin[0];
                 lightingOrigin[1] = ps->origin[1];
                 lightingOrigin[2] = ps->origin[2];
                 lightingOrigin[2] = lightingOrigin[2] + ps->viewHeightCurrent;
                 AddLeanToPosition(lightingOrigin, ps->viewangles[1], ps->leanf, 16.0, 20.0);
+                VR_JavelinDiagnostic("render: before scene submission", weaponNum, weapInfo->viewModelDObj);
                 R_AddDObjToScene(weapInfo->viewModelDObj, &cgameGlob->viewModelPose, ENTITYNUM_NONE, 3u, lightingOrigin, 0.0);
+                VR_JavelinDiagnostic("render: scene submission complete", weaponNum, weapInfo->viewModelDObj);
                 weapDef = BG_GetWeaponDef(weaponNum);
                 iassert(weapDef);
                 v7 = CG_LookingThroughNightVision(localClientNum) && weapDef->laserSightDuringNightvision;
@@ -800,6 +1033,24 @@ void __cdecl CG_AddPlayerWeapon(
                 cgameGlob->refdef.dof.viewModelStart = (weapDef->adsDofStart - ps->dofViewmodelStart) * ps->fWeaponPosFrac + ps->dofViewmodelStart;
                 cgameGlob->refdef.dof.viewModelEnd = (weapDef->adsDofEnd - ps->dofViewmodelEnd) * ps->fWeaponPosFrac + ps->dofViewmodelEnd;
             }
+#ifdef KISAK_SP
+            else if (deferPhysicalScopeViewWeapon)
+            {
+                static bool
+                    loggedDeferredScopeViewWeapon = false;
+
+                if (!loggedDeferredScopeViewWeapon)
+                {
+                    Com_Printf(
+                        0,
+                        "[VR] Deferred the scoped rifle until after "
+                        "the weapon-free scope-camera render.\n");
+
+                    loggedDeferredScopeViewWeapon =
+                        true;
+                }
+            }
+#endif
             HoldBreathUpdate(localClientNum);
         }
         if (cent->bMuzzleFlash 
@@ -824,6 +1075,117 @@ void __cdecl CG_AddPlayerWeapon(
         }
     }
 }
+
+#ifdef KISAK_SP
+void __cdecl
+CG_AddDeferredPhysicalSniperViewWeaponToScene(
+    const int32_t localClientNum)
+{
+    if (!s_vrPhysicalScopeViewWeaponDeferred)
+    {
+        return;
+    }
+
+    s_vrPhysicalScopeViewWeaponDeferred =
+        false;
+
+    cg_s* cgameGlob =
+        CG_GetLocalClientGlobals(
+            localClientNum);
+
+    playerState_s* ps =
+        &cgameGlob->predictedPlayerState;
+
+    const int32_t weaponNum =
+        BG_GetViewmodelWeaponIndex(ps);
+
+    if (weaponNum <= 0 ||
+        (cgameGlob->predictedPlayerEntity
+             .nextState.lerp.eFlags &
+         0x20300) != 0)
+    {
+        return;
+    }
+
+    const weaponInfo_s* weapInfo =
+        &cg_weaponsArray[0][weaponNum];
+
+    if (weapInfo->viewModelDObj == nullptr)
+    {
+        return;
+    }
+
+    float lightingOrigin[3] = {
+        ps->origin[0],
+        ps->origin[1],
+        ps->origin[2] +
+            ps->viewHeightCurrent,
+    };
+
+    AddLeanToPosition(
+        lightingOrigin,
+        ps->viewangles[1],
+        ps->leanf,
+        16.0f,
+        20.0f);
+
+    R_AddDObjToScene(
+        weapInfo->viewModelDObj,
+        &cgameGlob->viewModelPose,
+        ENTITYNUM_NONE,
+        3u,
+        lightingOrigin,
+        0.0f);
+
+    const WeaponDef* weapDef =
+        BG_GetWeaponDef(weaponNum);
+
+    if (weapDef != nullptr)
+    {
+        const bool nightVisionLaser =
+            CG_LookingThroughNightVision(
+                localClientNum) &&
+            weapDef->laserSightDuringNightvision;
+
+        if (cg_laserForceOn->current.enabled ||
+            nightVisionLaser)
+        {
+            CG_Laser_Add(
+                &cgameGlob->predictedPlayerEntity,
+                weapInfo->viewModelDObj,
+                &cgameGlob->viewModelPose,
+                cgameGlob->refdef.viewOffset,
+                LASER_OWNER_PLAYER);
+        }
+
+        cgameGlob->refdef.dof.viewModelStart =
+            (weapDef->adsDofStart -
+             ps->dofViewmodelStart) *
+                ps->fWeaponPosFrac +
+            ps->dofViewmodelStart;
+
+        cgameGlob->refdef.dof.viewModelEnd =
+            (weapDef->adsDofEnd -
+             ps->dofViewmodelEnd) *
+                ps->fWeaponPosFrac +
+            ps->dofViewmodelEnd;
+    }
+
+    static bool loggedDeferredScopeViewWeaponAdded =
+        false;
+
+    if (!loggedDeferredScopeViewWeaponAdded)
+    {
+        Com_Printf(
+            0,
+            "[VR] Added the scoped rifle after the dedicated "
+            "scope-camera view; the main eyes retain the weapon.\n");
+
+        loggedDeferredScopeViewWeaponAdded =
+            true;
+    }
+}
+#endif
 
 void __cdecl WeaponFlash(
     int32_t localClientNum,
@@ -942,15 +1304,22 @@ void __cdecl CG_UpdateViewWeaponAnim(int32_t localClientNum)
         weaponIndex = BG_GetViewmodelWeaponIndex(ps);
         if (weaponIndex > 0)
         {
+            VR_JavelinDiagnostic("animation: frame begin", weaponIndex);
             CG_RegisterWeapon(localClientNum, weaponIndex);
+            VR_JavelinDiagnostic("animation: registration complete", weaponIndex);
             iassert(localClientNum == 0);
             weapInfo = &cg_weaponsArray[0][weaponIndex];
             iassert(weapInfo->viewModelDObj);
+            VR_JavelinDiagnostic("animation: before attachment update", weaponIndex, weapInfo->viewModelDObj);
             UpdateViewmodelAttachments(localClientNum, weaponIndex, ps->weaponmodels[weaponIndex], weapInfo);
+            VR_JavelinDiagnostic("animation: attachment update complete", weaponIndex, weapInfo->viewModelDObj);
             WeaponRunXModelAnims(localClientNum, ps, weapInfo);
+            VR_JavelinDiagnostic("animation: model animations complete", weaponIndex, weapInfo->viewModelDObj);
             dtime = (float)cgameGlob->frametime * EQUAL_EPSILON;
             DObjUpdateClientInfo(weapInfo->viewModelDObj, dtime, 1);
+            VR_JavelinDiagnostic("animation: DObj client update complete", weaponIndex, weapInfo->viewModelDObj);
             ProcessWeaponNoteTracks(localClientNum, ps);
+            VR_JavelinDiagnostic("animation: note tracks complete", weaponIndex, weapInfo->viewModelDObj);
         }
     }
     else
@@ -1278,6 +1647,7 @@ char __cdecl UpdateViewmodelAttachments(
     newKnife = 0;
 	newGoggles = 0;
     weapDef = BG_GetWeaponDef(weaponNum);
+    VR_JavelinDiagnostic("attachments: enter", weaponNum, weapInfoa->viewModelDObj);
 
 #ifdef KISAK_SP
     if (CG_NVGViewModelShouldBeAttached(localClientNum))
@@ -1294,8 +1664,13 @@ char __cdecl UpdateViewmodelAttachments(
     if (ViewmodelKnifeShouldBeAttached(localClientNum, weapDef))
         newKnife = weapDef->knifeModel;
     if (newGoggles == weapInfoa->gogglesModel && newRocket == weapInfoa->rocketModel && newKnife == weapInfoa->knifeModel)
+    {
+        VR_JavelinDiagnostic("attachments: unchanged", weaponNum, weapInfoa->viewModelDObj);
         return 0;
+    }
+    VR_JavelinDiagnostic("attachments: before DObj change", weaponNum, weapInfoa->viewModelDObj);
     ChangeViewmodelDobj(localClientNum, weaponNum, weaponModel, weapInfoa->handModel, newGoggles, newRocket, newKnife, 0);
+    VR_JavelinDiagnostic("attachments: DObj change complete", weaponNum, weapInfoa->viewModelDObj);
     return 1;
 }
 
@@ -1737,6 +2112,7 @@ static void CalculateWeaponAxis(cg_s *cgameGlob, float (*axis)[3])
 }
 #endif // KISAK_SP
 
+
 // KISAKTODO: would like to have this function more like blops, it's cleaner
 void __cdecl CG_AddViewWeapon(int32_t localClientNum)
 {
@@ -1772,8 +2148,37 @@ void __cdecl CG_AddViewWeapon(int32_t localClientNum)
     if (ps->pm_type != PM_UFO && ps->pm_type != PM_NOCLIP && ps->pm_type != PM_DEAD)
 #endif
     {
-        if (cgameGlob->cubemapShot || !cg_drawGun->current.enabled || CG_GetWeapReticleZoom(cgameGlob, &fZoom))
+        bool hideGunForReticleZoom =
+            CG_GetWeapReticleZoom(
+                cgameGlob,
+                &fZoom);
+
+#ifdef KISAK_SP
+        if (hideGunForReticleZoom &&
+            VR_IsPhysicalSniperScopeAimActive())
+        {
+            hideGunForReticleZoom = false;
+
+            static bool loggedVrScopedRifleVisible = false;
+
+            if (!loggedVrScopedRifleVisible)
+            {
+                Com_Printf(
+                    0,
+                    "[VR] Keeping the rendered sniper rifle visible "
+                    "behind the physical scope.\n");
+
+                loggedVrScopedRifleVisible = true;
+            }
+        }
+#endif
+
+        if (cgameGlob->cubemapShot ||
+            !cg_drawGun->current.enabled ||
+            hideGunForReticleZoom)
+        {
             drawgun = 0;
+        }
 #ifdef KISAK_SP
         if (cgameGlob->hideViewModel)
             drawgun = 0;
@@ -4190,11 +4595,38 @@ bool __cdecl ShouldSpawnTracer(int32_t localClientNum, int32_t sourceEntityNum)
     cg_s *cgameGlob;
 
     cgameGlob = CG_GetLocalClientGlobals(localClientNum);
+    nextSnap = cgameGlob->nextSnap;
+
+    // KISAK_SP_VR_FIXED_SCOPE_SHARP_VIEW_AND_TRACER_V5
+    // CoD4 deliberately hides tracers from its flat-screen scoped turret.
+    // In VR that makes a valid hitscan shot look like sound-only firing, so
+    // force one visible trajectory whenever its impact event reaches cgame.
+    const bool vrFixedScopedTurretShot =
+        VR_IsInitialized() &&
+        CG_PlayerUsingScopedTurret(
+            localClientNum) &&
+        cgameGlob->predictedPlayerState.viewlocked_entNum ==
+            sourceEntityNum;
+
+    if (vrFixedScopedTurretShot)
+    {
+        static bool loggedVrFixedScopeTracer = false;
+
+        if (!loggedVrFixedScopeTracer)
+        {
+            Com_Printf(
+                0,
+                "[VR][FIXED SCOPE] Enabled a visible tracer for "
+                "the fixed rifle's hitscan impact event.\n");
+
+            loggedVrFixedScopeTracer = true;
+        }
+
+        return 1;
+    }
 
     if (cg_tracerChance->current.value <= 0.0)
         return 0;
-
-    nextSnap = cgameGlob->nextSnap;
 
     // KISAKFIX: MP `(otherFlags & 6) != 0 && ...` → SP IDA just `sourceEntityNum == clientNum`.
     if (sourceEntityNum == nextSnap->ps.clientNum)
@@ -4602,4 +5034,3 @@ void CG_ArchiveWeaponInfo(MemoryFile *memFile)
 }
 
 #endif // KISAK_SP
-

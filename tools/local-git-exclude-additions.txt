@@ -1,0 +1,14 @@
+# BEGIN KISAKCOD VR LOCAL DEVELOPMENT ARTIFACTS
+/apply_sp_*.py
+/extract_sp_*.py
+/*-context.txt
+/*-investigation.txt
+/*-locations.txt
+/*-diagnostic.txt
+/*-tail.txt
+/*-key-paths.txt
+/vr-camera-functions*.txt
+/vr_apply_head_orientation_full.txt
+/*.tar.gz
+/save-backups/
+# END KISAKCOD VR LOCAL DEVELOPMENT ARTIFACTS

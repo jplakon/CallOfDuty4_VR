@@ -6,6 +6,7 @@
 #elif KISAK_SP
 #include "g_main.h"
 #include "g_local.h"
+#include "vr/vr_openxr.h" // KISAK_SP_VR_PLAYER_VEHICLE_WEAPON_V1
 #include "g_vehicle_path.h"
 #include "g_public.h"
 #include "savememory.h"
@@ -1088,15 +1089,58 @@ void __cdecl VEH_UpdateWeapon(gentity_s *ent)
     if ((player->client->ps.eFlags & 0x80000) != 0)
         return;
 
+    // Armed script vehicles use a different firing path from fixed
+    // emplacements in turret.cpp.  Read the raw tracked trigger here so a
+    // mission that starts directly on a vehicle gun does not depend on an
+    // ordinary first-person viewmodel having rendered first.
+    bool vrVehicleAttackHeld = false;
+
+    const bool vrVehicleTriggerAvailable =
+        VR_GetRightControllerMountedWeaponTrigger(
+            &vrVehicleAttackHeld);
+
+    const bool nativeVehicleAttackHeld =
+        (player->client->pers.cmd.buttons & 1) != 0;
+
+    static bool loggedVrPlayerVehicleWeaponPath = false;
+
+    if (!loggedVrPlayerVehicleWeaponPath)
+    {
+        Com_Printf(
+            0,
+            "[VR][VEHICLE] Player-operated vehicle weapon path "
+            "is active.\n");
+
+        loggedVrPlayerVehicleWeaponPath = true;
+    }
+
     fireTime = veh->turret.fireTime;
     if (fireTime > 0)
     {
         veh->turret.fireTime = fireTime - 50;
     }
-    else if ((player->client->pers.cmd.buttons & 1) != 0
-          && (player->client->ps.pm_flags & 0xC00) == 0)
+    else if ((nativeVehicleAttackHeld ||
+              (vrVehicleTriggerAvailable &&
+               vrVehicleAttackHeld)) &&
+             (player->client->ps.pm_flags & 0xC00) == 0)
     {
         Scr_Notify(ent, scr_const.turret_fire, 0);
+    }
+
+    if (vrVehicleAttackHeld &&
+        !nativeVehicleAttackHeld)
+    {
+        static bool loggedVrPlayerVehicleTrigger = false;
+
+        if (!loggedVrPlayerVehicleTrigger)
+        {
+            Com_Printf(
+                0,
+                "[VR][VEHICLE] Routed the raw right trigger to "
+                "the vehicle weapon's native turret_fire path.\n");
+
+            loggedVrPlayerVehicleTrigger = true;
+        }
     }
 
     veh->hasTarget = 1;
@@ -1113,9 +1157,44 @@ void __cdecl VEH_UpdateWeapon(gentity_s *ent)
     G_DObjGetWorldBoneIndexPos(ent, veh->boneIndex.barrel, barrelPos);
     G_GetPlayerViewOrigin(ps, viewOrigin);
 
-    if (vehHelicopterHeadSwayDontSwayTheTurret->current.enabled
-        && info->type == 5
-        && (player->client->ps.eFlags & 0x40000) != 0)
+    float vrVehicleAimPitch = 0.0f;
+    float vrVehicleAimYaw = 0.0f;
+
+    const bool vrVehicleAimAvailable =
+        VR_GetRightControllerMountedWeaponAim(
+            &vrVehicleAimPitch,
+            &vrVehicleAimYaw);
+
+    if (vrVehicleAimAvailable)
+    {
+        float vrVehicleAimAngles[3];
+
+        vrVehicleAimAngles[0] = vrVehicleAimPitch;
+        vrVehicleAimAngles[1] = vrVehicleAimYaw;
+        vrVehicleAimAngles[2] = 0.0f;
+
+        AngleVectors(
+            vrVehicleAimAngles,
+            forward,
+            0,
+            0);
+
+        static bool loggedVrPlayerVehicleAim = false;
+
+        if (!loggedVrPlayerVehicleAim)
+        {
+            Com_Printf(
+                0,
+                "[VR][VEHICLE] Vehicle weapon aim follows the "
+                "live right controller; head-look remains "
+                "independent.\n");
+
+            loggedVrPlayerVehicleAim = true;
+        }
+    }
+    else if (vehHelicopterHeadSwayDontSwayTheTurret->current.enabled
+             && info->type == 5
+             && (player->client->ps.eFlags & 0x40000) != 0)
     {
         AngleVectors(ent->r.currentAngles, forward, 0, 0);
     }
@@ -1765,12 +1844,43 @@ void __cdecl VEH_UpdateAim(gentity_s *ent)
                 if (!player->client)
                     MyAssertHandler(".\\game\\g_scr_vehicle.cpp", 2081, 0, "%s", "player->client");
 
-                if ((player->client->ps.eFlags & 0x40000) == 0 && info->type != 5)
-                    angles[1] = player->client->ps.viewangles[1];
-                Vec3Sub(veh->targetOrigin, barrelPos, tgtDir);
+#ifdef KISAK_SP
+                float ignoredVrVehiclePitch = 0.0f;
+                float ignoredVrVehicleYaw = 0.0f;
+
+                const bool vrPlayerVehicleAim =
+                    VR_GetRightControllerMountedWeaponAim(
+                        &ignoredVrVehiclePitch,
+                        &ignoredVrVehicleYaw);
+#else
+                const bool vrPlayerVehicleAim = false;
+#endif
+
+                if (!vrPlayerVehicleAim &&
+                    (player->client->ps.eFlags & 0x40000) == 0 &&
+                    info->type != 5)
+                {
+                    angles[1] =
+                        player->client->ps.viewangles[1];
+                }
+
+                Vec3Sub(
+                    veh->targetOrigin,
+                    barrelPos,
+                    tgtDir);
+
                 Vec3Normalize(tgtDir);
                 vectoangles(tgtDir, tgtAngles);
-                tgtAngles[1] = player->client->ps.viewangles[1];
+
+                // Native vehicle aiming deliberately replaces target yaw
+                // with player view yaw.  Preserve that fallback, but do not
+                // overwrite the controller-derived target ray in VR.
+                if (!vrPlayerVehicleAim)
+                {
+                    tgtAngles[1] =
+                        player->client->ps.viewangles[1];
+                }
+
                 tgtAngles[2] = 0.0f;
             }
             else

@@ -17,6 +17,9 @@
 #include <script/scr_const.h>
 #include "cg_view.h"
 
+// Implemented by src/vr/vr_openxr.cpp.
+bool VR_IsInitialized();
+
 const dvar_t *hud_fade_sprint;
 const dvar_t *hud_health_pulserate_injured;
 const dvar_t *hud_health_startpulse_critical;
@@ -3155,8 +3158,65 @@ void __cdecl CG_OwnerDraw(
         CG_DrawHoldBreathHint(localClientNum, &rect, font, scale, textStyle);
         break;
     case 72:
-        CG_DrawCursorhint(localClientNum, &rect, font, scale, color, textStyle);
+    {
+        // The desktop render is two eyes wide. Center-aligned cursor hints
+        // otherwise use the midpoint of that combined surface, which is the
+        // outer edge of a single eye. Give this owner draw a temporary
+        // one-eye-wide placement and keep the complete text/icon block
+        // centered around x=0 in that placement.
+        ScreenPlacement savedPlacement =
+            scrPlaceView[localClientNum];
+        rect.horzAlign = 2;
+        rect.x = 0.0f;
+
+        if (VR_IsInitialized() &&
+            savedPlacement.realViewportSize[0] >
+                savedPlacement.realViewportSize[1] * 1.5f)
+        {
+            scrPlaceView[localClientNum].realViewportSize[0] =
+                savedPlacement.realViewportSize[0] * 0.5f;
+
+            static bool loggedVrCursorHintCenter = false;
+
+            if (!loggedVrCursorHintCenter)
+            {
+                Com_Printf(
+                    0,
+                    "[VR][HUD] Centered interaction prompts in the per-eye view.\n");
+                loggedVrCursorHintCenter = true;
+            }
+        }
+
+        if (VR_IsInitialized())
+        {
+            // Keep the prompt's center fixed while reducing its text and
+            // icon dimensions together to one quarter of the flat HUD size.
+            rect.w *= 0.25f;
+            rect.h *= 0.25f;
+            scale *= 0.25f;
+
+            static bool loggedVrCursorHintScale = false;
+
+            if (!loggedVrCursorHintScale)
+            {
+                Com_Printf(
+                    0,
+                    "[VR][HUD] Scaled interaction prompts to 0.25.\n");
+                loggedVrCursorHintScale = true;
+            }
+        }
+
+        CG_DrawCursorhint(
+            localClientNum,
+            &rect,
+            font,
+            scale,
+            color,
+            textStyle);
+
+        scrPlaceView[localClientNum] = savedPlacement;
         break;
+    }
     case 79:
         CG_DrawPlayerBarHealth(localClientNum, &rect, material, color);
         break;

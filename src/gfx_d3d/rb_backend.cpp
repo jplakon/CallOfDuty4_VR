@@ -696,6 +696,72 @@ void __cdecl RB_StretchRaw(int x, int y, int w, int h, int cols, int rows, const
     }
 }
 
+// KISAK_VR_DEDICATED_SCOPE_CAMERA_V2_BACKEND_FIX
+static bool VR_IsDedicatedScopeViewDepthHackDrawSurf(
+    const GfxCmdBufContext& context,
+    const GfxDrawSurf& drawSurf)
+{
+    if (!VR_D3D9IsSameFrameStereoEnabled() ||
+        !backEndData ||
+        backEndData->viewInfoCount != 3u ||
+        backEndData->viewInfoIndex != 0u ||
+        !context.source ||
+        !context.source->input.data)
+    {
+        return false;
+    }
+
+    const GfxBackEndData* data =
+        context.source->input.data;
+
+    std::uint32_t gfxEntIndex = 0u;
+
+    switch (drawSurf.fields.surfType)
+    {
+    case SF_XMODEL_RIGID:
+    case SF_XMODEL_RIGID_SKINNED:
+    {
+        const GfxModelRigidSurface* modelSurf =
+            reinterpret_cast<const GfxModelRigidSurface*>(
+                reinterpret_cast<const char*>(data) +
+                4u * drawSurf.fields.objectId);
+
+        gfxEntIndex =
+            modelSurf->surf.info.gfxEntIndex;
+
+        break;
+    }
+
+    case SF_XMODEL_SKINNED:
+    {
+        const GfxModelSkinnedSurface* modelSurf =
+            reinterpret_cast<const GfxModelSkinnedSurface*>(
+                reinterpret_cast<const char*>(data) +
+                4u * drawSurf.fields.objectId);
+
+        gfxEntIndex =
+            modelSurf->info.gfxEntIndex;
+
+        break;
+    }
+
+    default:
+        return false;
+    }
+
+    if (!gfxEntIndex ||
+        gfxEntIndex >=
+            static_cast<std::uint32_t>(
+                sizeof(data->gfxEnts) /
+                sizeof(data->gfxEnts[0])))
+    {
+        return false;
+    }
+
+    return
+        (data->gfxEnts[gfxEntIndex].renderFxFlags & 2u) != 0u;
+}
+
 void __cdecl R_DrawSurfs(GfxCmdBufContext context, GfxCmdBufState *prepassState, const GfxDrawSurfListInfo *info)
 {
     GfxViewport viewport; // [esp+30h] [ebp-30h] BYREF
@@ -727,6 +793,27 @@ void __cdecl R_DrawSurfs(GfxCmdBufContext context, GfxCmdBufState *prepassState,
     listArgs.info = info;
     while (listArgs.firstDrawSurfIndex != drawSurfCount)
     {
+        if (info->cameraView &&
+            VR_IsDedicatedScopeViewDepthHackDrawSurf(
+                context,
+                info->drawSurfs[listArgs.firstDrawSurfIndex]))
+        {
+            static bool loggedVrScopeViewmodelSuppression = false;
+
+            if (!loggedVrScopeViewmodelSuppression)
+            {
+                Com_Printf(
+                    0,
+                    "[VR] Suppressed depth-hacked viewmodel surfaces "
+                    "from the dedicated scope camera.\n");
+
+                loggedVrScopeViewmodelSuppression = true;
+            }
+
+            ++listArgs.firstDrawSurfIndex;
+            continue;
+        }
+
         processedDrawSurfCount = R_RenderDrawSurfListMaterial(&listArgs, prepassContext);
         listArgs.firstDrawSurfIndex += processedDrawSurfCount;
     }
@@ -2648,18 +2735,27 @@ void __cdecl RB_Draw3D()
     PROF_SCOPED("ExecuteRenderCmds");
 
     if (VR_D3D9IsSameFrameStereoEnabled() &&
-        data->viewInfoCount == 2u)
+        (data->viewInfoCount == 2u ||
+         data->viewInfoCount == 3u))
     {
-        // Both frontend eye generations share one GfxBackEndData and its
-        // dynamic geometry buffers. The second generated eye is the one
-        // that remains valid. As a diagnostic, keep each eye's own camera,
-        // projection, viewport, and constants, but make the first eye use
-        // the second eye's final draw-surface references.
-        GfxViewInfo* firstGeneratedView =
-            &data->viewInfo[0];
+        // All same-frame view generations share one GfxBackEndData and its
+        // dynamic geometry buffers. Only the final generated view remains
+        // valid. Keep every view's own camera, projection, viewport, and
+        // constants, but make each earlier view use the final view's stable
+        // draw-surface references. In the three-view physical-scope layout,
+        // view 0 is the scope camera and views 1/2 are the stereo eyes.
+        const std::uint32_t finalGeneratedViewIndex =
+            data->viewInfoCount - 1u;
 
         const GfxViewInfo* secondGeneratedView =
-            &data->viewInfo[1];
+            &data->viewInfo[finalGeneratedViewIndex];
+
+        for (std::uint32_t earlierViewIndex = 0u;
+             earlierViewIndex < finalGeneratedViewIndex;
+             ++earlierViewIndex)
+        {
+            GfxViewInfo* firstGeneratedView =
+                &data->viewInfo[earlierViewIndex];
 
         firstGeneratedView->litInfo.drawSurfs =
             secondGeneratedView->litInfo.drawSurfs;
@@ -2814,6 +2910,128 @@ void __cdecl RB_Draw3D()
             }
         }
 
+        // KISAK_SP_VR_STEREO_SHADOW_LIST_SYNC_V1
+        if (firstGeneratedView->dynamicShadowType == SHADOW_MAP &&
+            secondGeneratedView->dynamicShadowType == SHADOW_MAP)
+        {
+            const bool finalViewHasSunShadow =
+                rgp.world->sunPrimaryLightIndex != 0u &&
+                Com_BitCheckAssert(
+                    data->shadowableLightHasShadowMap,
+                    rgp.world->sunPrimaryLightIndex,
+                    32);
+
+            if (finalViewHasSunShadow)
+            {
+                for (std::uint32_t partitionIndex = 0u;
+                     partitionIndex < 2u;
+                     ++partitionIndex)
+                {
+                    GfxDrawSurfListInfo* earlierSunInfo =
+                        &firstGeneratedView->
+                            sunShadow.partition[partitionIndex].
+                            info;
+
+                    const GfxDrawSurfListInfo* finalSunInfo =
+                        &secondGeneratedView->
+                            sunShadow.partition[partitionIndex].
+                            info;
+
+                    earlierSunInfo->drawSurfs =
+                        finalSunInfo->drawSurfs;
+
+                    earlierSunInfo->drawSurfCount =
+                        finalSunInfo->drawSurfCount;
+
+                    earlierSunInfo->baseTechType =
+                        finalSunInfo->baseTechType;
+
+                    earlierSunInfo->viewInfo =
+                        firstGeneratedView;
+
+                    earlierSunInfo->light =
+                        finalSunInfo->light;
+
+                    earlierSunInfo->cameraView =
+                        finalSunInfo->cameraView;
+
+                    for (std::uint32_t originComponent = 0u;
+                         originComponent < 4u;
+                         ++originComponent)
+                    {
+                        earlierSunInfo->
+                            viewOrigin[originComponent] =
+                                finalSunInfo->
+                                    viewOrigin[originComponent];
+                    }
+                }
+            }
+
+            const std::uint32_t sharedSpotShadowCount =
+                secondGeneratedView->spotShadowCount < 4u
+                    ? secondGeneratedView->spotShadowCount
+                    : 4u;
+
+            firstGeneratedView->spotShadowCount =
+                sharedSpotShadowCount;
+
+            for (std::uint32_t spotShadowIndex = 0u;
+                 spotShadowIndex < sharedSpotShadowCount;
+                 ++spotShadowIndex)
+            {
+                firstGeneratedView->
+                    spotShadows[spotShadowIndex] =
+                        secondGeneratedView->
+                            spotShadows[spotShadowIndex];
+
+                GfxSpotShadow* earlierSpotShadow =
+                    &firstGeneratedView->
+                        spotShadows[spotShadowIndex];
+
+                earlierSpotShadow->info.viewInfo =
+                    firstGeneratedView;
+
+                const std::uint32_t shadowableLightIndex =
+                    earlierSpotShadow->shadowableLightIndex;
+
+                if (shadowableLightIndex <
+                    firstGeneratedView->shadowableLightCount)
+                {
+                    GfxLight* earlierLight =
+                        &firstGeneratedView->
+                            shadowableLights[
+                                shadowableLightIndex];
+
+                    earlierLight->spotShadowIndex =
+                        static_cast<std::uint8_t>(
+                            spotShadowIndex);
+
+                    earlierSpotShadow->light =
+                        earlierLight;
+
+                    if (earlierSpotShadow->info.light != nullptr)
+                    {
+                        earlierSpotShadow->info.light =
+                            earlierLight;
+                    }
+                }
+            }
+
+            static bool loggedVrStereoShadowListSync = false;
+
+            if (!loggedVrStereoShadowListSync)
+            {
+                Com_Printf(
+                    0,
+                    "[VR][SHADOWS] Reused the final VR view's "
+                    "sun and spot shadow caster lists for every "
+                    "earlier view; %u spot shadows selected.\n",
+                    sharedSpotShadowCount);
+
+                loggedVrStereoShadowListSync = true;
+            }
+        }
+
         static bool loggedVrSafeLightingMetadataSync = false;
 
         if (!loggedVrSafeLightingMetadataSync)
@@ -2832,10 +3050,11 @@ void __cdecl RB_Draw3D()
         {
             Com_Printf(
                 0,
-                "[VR] Reused final stereo draw-surface references "
-                "for both eyes.\n");
+                "[VR] Reused final same-frame draw-surface references "
+                "for every earlier VR view.\n");
 
             loggedVrSharedSecondEyeDrawSurfs = true;
+        }
         }
 
         const std::uint32_t savedViewInfoIndex =
@@ -2871,15 +3090,17 @@ void __cdecl RB_Draw3D()
             loggedVrPerEyeBackendViewIndex = true;
         }
 
-        static bool loggedSameFrameViews = false;
+        static std::uint32_t loggedSameFrameViewCount = 0u;
 
-        if (!loggedSameFrameViews)
+        if (loggedSameFrameViewCount != data->viewInfoCount)
         {
             Com_Printf(
                 0,
-                "[VR] Rendered two same-frame stereo GfxViewInfo records.\n");
+                "[VR] Rendered %u same-frame VR GfxViewInfo records.\n",
+                data->viewInfoCount);
 
-            loggedSameFrameViews = true;
+            loggedSameFrameViewCount =
+                data->viewInfoCount;
         }
 
         return;

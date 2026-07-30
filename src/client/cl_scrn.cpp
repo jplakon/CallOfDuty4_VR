@@ -176,9 +176,24 @@ void __cdecl SCR_DrawScreenField(int refreshedUI)
             break;
         }
     LABEL_12:
-        if (!refreshedUI && Key_IsCatcherActive(0, 16))
-            LABEL_14 :
-            UI_Refresh();
+        if (!Key_IsCatcherActive(0, 16))
+            return;
+
+    LABEL_14:
+        UI_Refresh();
+
+        static bool loggedVrPauseUiRefresh = false;
+
+        if (!loggedVrPauseUiRefresh &&
+            clientUIActives[0].connectionState == CA_ACTIVE)
+        {
+            Com_Printf(
+                0,
+                "[VR] Forced active SP pause UI into the final "
+                "render command list.\n");
+
+            loggedVrPauseUiRefresh = true;
+        }
     }
 }
 

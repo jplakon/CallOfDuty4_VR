@@ -12,10 +12,43 @@
 #include <ui/ui.h>
 #include "cg_view.h"
 #include <gfx_d3d/r_reflection_probe.h>
+#include <gfx_d3d/r_rendercmds.h>
+#include <chrono>
+
+// KISAK_VR_DEDICATED_SCOPE_CAMERA_V2
+#ifdef KISAK_SP
+void __cdecl
+CG_AddDeferredPhysicalSniperViewWeaponToScene(
+    int32_t localClientNum);
+#endif
 
 CenterPrint s_centerPrint[1];
 ScreenBlur s_screenBlur[1];
 ScreenFade s_screenFade[1];
+
+// KISAK_SP_JAVELIN_HUD_DIAGNOSTICS
+// KISAK_SP_JAVELIN_MENU_DIAGNOSTICS_DRAW
+void VR_JavelinMenuDiagnosticSetActive(bool active);
+
+static uint32_t s_vrJavelinHudDiagnosticSequence = 0;
+
+static bool VR_JavelinHudDiagnosticActive()
+{
+    return BG_GetViewmodelWeaponIndex(
+               &cgArray[0].predictedPlayerState) == 7;
+}
+
+static void VR_JavelinHudDiagnostic(const char *stage)
+{
+    if (!VR_JavelinHudDiagnosticActive())
+        return;
+
+    Com_Printf(
+        0,
+        "[VR][JAVELIN][HUD] %u: %s.\n",
+        ++s_vrJavelinHudDiagnosticSequence,
+        stage);
+}
 
 void __cdecl TRACK_cg_draw()
 {
@@ -1181,7 +1214,9 @@ void __cdecl CG_Draw2D(int localClientNum)
 
     cg_s *cgameGlob = CG_GetLocalClientGlobals(localClientNum);
 
+    VR_JavelinHudDiagnostic("CG_Draw2D enter");
     CG_UpdateTimeScale(localClientNum);
+    VR_JavelinHudDiagnostic("time scale complete");
 
     if (cgArray[0].predictedPlayerState.pm_type != 4 && cgArray[0].cubemapShot == CUBEMAPSHOT_NONE)
     {
@@ -1199,35 +1234,59 @@ void __cdecl CG_Draw2D(int localClientNum)
                 return;
             }
             CG_DrawNightVisionOverlay(localClientNum);
+            VR_JavelinHudDiagnostic("night-vision overlay complete");
             CG_DrawFadeInCinematic(localClientNum);
+            VR_JavelinHudDiagnostic("cinematic fade complete");
             CG_DrawFriendOverlay(localClientNum);
+            VR_JavelinHudDiagnostic("friend overlay complete");
             CG_ScreenBlur(localClientNum);
+            VR_JavelinHudDiagnostic("screen blur complete");
             CG_DrawFlashDamage(cgArray);
+            VR_JavelinHudDiagnostic("flash damage complete");
             if (cg_drawHUD->current.enabled && hud_drawHUD->current.enabled)
             {
                 CG_DrawDamageDirectionIndicators(localClientNum);
+                VR_JavelinHudDiagnostic("damage indicators complete");
                 if (nextSnap->ps.pm_type < 5)
                 {
+                    VR_JavelinHudDiagnostic("before crosshair stage");
                     if (!cg_drawFriendlyFireCrosshair->current.enabled || !(unsigned __int8)CG_DrawFriendlyFire(cgArray))
                         CG_DrawCrosshair(localClientNum);
+                    VR_JavelinHudDiagnostic("crosshair stage complete");
                     CG_DrawGrenadeIndicators(localClientNum);
+                    VR_JavelinHudDiagnostic("grenade indicators complete");
                     CG_CheckTimedMenus(localClientNum);
+                    VR_JavelinHudDiagnostic("timed menus complete");
                 }
+                VR_JavelinHudDiagnostic("before primary HUD elements");
                 CG_Draw2dHudElems(localClientNum, 0);
+                VR_JavelinHudDiagnostic("primary HUD elements complete");
             }
+            VR_JavelinHudDiagnostic("before menu painting");
+            VR_JavelinMenuDiagnosticSetActive(
+                VR_JavelinHudDiagnosticActive());
             Menu_PaintAll(&cgDC);
+            VR_JavelinMenuDiagnosticSetActive(false);
+            VR_JavelinHudDiagnostic("menu painting complete");
             CG_Draw2dHudElems(localClientNum, 1);
+            VR_JavelinHudDiagnostic("secondary HUD elements complete");
             CG_DrawPerformanceWarnings();
+            VR_JavelinHudDiagnostic("performance warnings complete");
             //Profile_Begin(349);
             CG_DrawDebugOverlays(localClientNum);
+            VR_JavelinHudDiagnostic("debug overlays complete");
             //Profile_EndInternal(0);
             CG_DrawUpperRightDebugInfo(localClientNum);
+            VR_JavelinHudDiagnostic("upper-right debug info complete");
             if (!cgArray[0].showScores && cg_minicon->current.enabled)
                 Con_DrawMiniConsole(0, 2, 4, 1.0);
             Con_DrawErrors(0, 2, 300, 1.0);
+            VR_JavelinHudDiagnostic("console errors complete");
             CG_DrawFlashFade(localClientNum);
+            VR_JavelinHudDiagnostic("flash fade complete");
             if (cg_paused->current.integer && cg_drawpaused->current.enabled)
                 CG_HudMenuShowAllTimed(localClientNum);
+            VR_JavelinHudDiagnostic("timed HUD visibility complete");
         }
         else
         {
@@ -1265,6 +1324,60 @@ void __cdecl CG_DrawActive(int localClientNum)
     CL_SetExtraButtons(localClientNum, cgArray[0].extraButtons);
     cgArray[0].extraButtons = 0;
 
+    float vrScopeAdsFraction = 0.0f;
+
+    const unsigned int vrScopeWeaponIndex =
+        BG_GetViewmodelWeaponIndex(
+            &cgArray[0].predictedPlayerState);
+
+    WeaponDef* vrScopeWeaponDef =
+        BG_GetWeaponDef(vrScopeWeaponIndex);
+
+    const bool vrScopeWeapon =
+        vrScopeWeaponDef != nullptr &&
+        vrScopeWeaponDef->overlayInterface !=
+            WEAPOVERLAYINTERFACE_JAVELIN &&
+        (vrScopeWeaponDef->overlayMaterial != nullptr ||
+         vrScopeWeaponDef->overlayReticle !=
+             WEAPOVERLAYRETICLE_NONE);
+
+    const bool vrScopeActive =
+        VR_IsInitialized() &&
+        vrScopeWeapon &&
+        CG_GetWeapReticleZoom(
+            &cgArray[0],
+            &vrScopeAdsFraction);
+
+    VR_SetPhysicalSniperScopeState(
+        vrScopeActive,
+        vrScopeActive ? vrScopeAdsFraction : 0.0f,
+        vrScopeWeaponDef != nullptr
+            ? vrScopeWeaponDef->fAdsZoomFov
+            : 65.0f);
+
+    // KISAK_SP_VR_FIXED_SCOPE_SHARP_VIEW_AND_TRACER_V5
+    // Publish the fixed scoped-turret state before choosing the first scene
+    // view. CG_DrawCrosshair also publishes it later for the compositor, but
+    // that is too late to schedule this frame's dedicated scope camera.
+    const unsigned int vrFixedScopeWeaponIndex =
+        CG_PlayerTurretWeaponIdx(
+            localClientNum);
+
+    WeaponDef* vrFixedScopeWeaponDef =
+        BG_GetWeaponDef(
+            vrFixedScopeWeaponIndex);
+
+    const bool vrFixedScopeActive =
+        VR_IsInitialized() &&
+        CG_PlayerUsingScopedTurret(
+            localClientNum) &&
+        vrFixedScopeWeaponDef != nullptr &&
+        vrFixedScopeWeaponDef->overlayInterface ==
+            WEAPOVERLAYINTERFACE_TURRETSCOPE;
+
+    VR_SetFixedScopedTurretState(
+        vrFixedScopeActive);
+
     if (!VR_IsInitialized() ||
         cgArray[0].refdef.width < 2)
     {
@@ -1272,14 +1385,136 @@ void __cdecl CG_DrawActive(int localClientNum)
         return;
     }
 
+    int stereoWidth =
+        static_cast<int>(
+            cgArray[0].refdef.width);
+
+#ifdef KISAK_SP
+    const void* deferredClientCommands2D =
+        nullptr;
+
+    bool renderedDedicatedScopeCamera =
+        false;
+
+    int scopePanelX = 0;
+    int scopePanelY = 0;
+    int scopePanelSize = 0;
+
+    const bool packedScopeLayout =
+        VR_GetPhysicalSniperScopeCaptureLayout(
+            static_cast<int>(
+                cgArray[0].refdef.width),
+            static_cast<int>(
+                cgArray[0].refdef.height),
+            &stereoWidth,
+            &scopePanelX,
+            &scopePanelY,
+            &scopePanelSize);
+
+    if (packedScopeLayout)
+    {
+        refdef_s scopeRefdef =
+            cgArray[0].refdef;
+
+        if (VR_GetPhysicalSniperScopeRenderView(
+                scopeRefdef.vieworg,
+                scopeRefdef.viewaxis,
+                &scopeRefdef.tanHalfFovX,
+                &scopeRefdef.tanHalfFovY) &&
+            frontEndDataOut != nullptr &&
+            frontEndDataOut->viewInfo != nullptr)
+        {
+            // KISAK_SP_VR_FIXED_SCOPE_SHARP_VIEW_AND_TRACER_V5
+            // Keep mission/cinematic blur in the normal eyes, but do not bake
+            // it into the optical source that will be magnified across both
+            // eyes.
+            if (vrFixedScopeActive)
+            {
+                scopeRefdef.blurRadius = 0.0f;
+                scopeRefdef.dof.nearBlur = 0.0f;
+                scopeRefdef.dof.farBlur = 0.0f;
+            }
+
+            scopeRefdef.x =
+                cgArray[0].refdef.x +
+                scopePanelX;
+
+            scopeRefdef.y =
+                cgArray[0].refdef.y +
+                scopePanelY;
+
+            scopeRefdef.width =
+                scopePanelSize;
+
+            scopeRefdef.height =
+                scopePanelSize;
+
+            scopeRefdef.useScissorViewport = 0;
+
+            const uint32_t scopeViewInfoIndex =
+                frontEndDataOut->viewInfoCount;
+
+            deferredClientCommands2D =
+                frontEndDataOut
+                    ->viewInfo[scopeViewInfoIndex]
+                    .cmds;
+
+            // CL_CGameRendering attaches this frame's 2D list to the next
+            // view before cgame runs.  The scope camera is now that first
+            // view, so move the list to the left eye instead of painting
+            // the HUD into the weapon-free scope source.
+            frontEndDataOut
+                ->viewInfo[scopeViewInfoIndex]
+                .cmds = nullptr;
+
+            CL_RenderScene(
+                &scopeRefdef);
+
+            if (frontEndDataOut->viewInfoCount >
+                scopeViewInfoIndex)
+            {
+                renderedDedicatedScopeCamera =
+                    true;
+
+                static bool
+                    loggedDedicatedScopeCamera = false;
+
+                if (!loggedDedicatedScopeCamera)
+                {
+                    Com_Printf(
+                        0,
+                        "[VR] Rendered the first weapon-free "
+                        "dedicated sniper-scope camera at %d x %d "
+                        "and transferred the 2D HUD to the left eye.\n",
+                        scopePanelSize,
+                        scopePanelSize);
+
+                    loggedDedicatedScopeCamera =
+                        true;
+                }
+            }
+            else
+            {
+                frontEndDataOut
+                    ->viewInfo[scopeViewInfoIndex]
+                    .cmds =
+                        deferredClientCommands2D;
+
+                deferredClientCommands2D =
+                    nullptr;
+            }
+        }
+
+        CG_AddDeferredPhysicalSniperViewWeaponToScene(
+            localClientNum);
+    }
+#endif
+
     refdef_s leftEyeRefdef =
         cgArray[0].refdef;
 
     refdef_s rightEyeRefdef =
         cgArray[0].refdef;
-
-    const int stereoWidth =
-        cgArray[0].refdef.width;
 
     const int leftEyeWidth =
         stereoWidth / 2;
@@ -1300,33 +1535,193 @@ void __cdecl CG_DrawActive(int localClientNum)
     leftEyeRefdef.useScissorViewport = 0;
     rightEyeRefdef.useScissorViewport = 0;
 
-    VR_ApplyStereoEyeOffsetForEye(
-        leftEyeRefdef.vieworg,
-        leftEyeRefdef.viewaxis,
-        0u);
+    // KISAK_SP_JAVELIN_VR_USABILITY_FIX
+    // The native Javelin is a full-screen magnified optic. Rendering that
+    // flat optic from two separated cameras magnifies binocular disparity
+    // into an unusable doubled target. Present one stable camera to both eyes
+    // only while this optic is raised; normal gameplay remains true stereo.
+    const unsigned int vrJavelinWeaponIndex =
+        BG_GetViewmodelWeaponIndex(
+            &cgArray[0].predictedPlayerState);
 
-    VR_ApplyStereoEyeOffsetForEye(
-        rightEyeRefdef.vieworg,
-        rightEyeRefdef.viewaxis,
-        1u);
+    WeaponDef *vrJavelinWeaponDef =
+        BG_GetWeaponDef(vrJavelinWeaponIndex);
+
+    const bool vrJavelinAds =
+        vrJavelinWeaponDef != nullptr &&
+        vrJavelinWeaponDef->overlayInterface ==
+            WEAPOVERLAYINTERFACE_JAVELIN &&
+        cgArray[0].predictedPlayerState.fWeaponPosFrac > 0.0f;
+
+    if (!vrJavelinAds)
+    {
+        VR_ApplyStereoEyeOffsetForEye(
+            leftEyeRefdef.vieworg,
+            leftEyeRefdef.viewaxis,
+            0u);
+
+        VR_ApplyStereoEyeOffsetForEye(
+            rightEyeRefdef.vieworg,
+            rightEyeRefdef.viewaxis,
+            1u);
+    }
+    else
+    {
+        // KISAK_SP_JAVELIN_CONTROLLER_LOCK_FIX
+        // A controller-projected lock square is useful only if the optic's
+        // world view looks along the same ray. Keep the head position as the
+        // camera origin, but aim the monoscopic Javelin view with the launcher.
+        float vrJavelinPitch = 0.0f;
+        float vrJavelinYaw = 0.0f;
+        bool ignoredVrAttackPressed = false;
+
+        if (VR_GetRightControllerWeaponCommand(
+                &vrJavelinPitch,
+                &vrJavelinYaw,
+                &ignoredVrAttackPressed))
+        {
+            const float vrJavelinViewAngles[3] = {
+                vrJavelinPitch,
+                vrJavelinYaw,
+                0.0f,
+            };
+
+            AnglesToAxis(
+                vrJavelinViewAngles,
+                leftEyeRefdef.viewaxis);
+            AnglesToAxis(
+                vrJavelinViewAngles,
+                rightEyeRefdef.viewaxis);
+
+            static bool loggedVrJavelinControllerView = false;
+            if (!loggedVrJavelinControllerView)
+            {
+                Com_Printf(
+                    0,
+                    "[VR][JAVELIN] Monoscopic optic view now follows "
+                    "the tracked launcher direction.\n");
+                loggedVrJavelinControllerView = true;
+            }
+        }
+
+        static bool loggedVrJavelinMonoscopicOptic = false;
+        if (!loggedVrJavelinMonoscopicOptic)
+        {
+            Com_Printf(
+                0,
+                "[VR][JAVELIN] Using a monoscopic full-screen optic "
+                "to prevent stereo double vision.\n");
+            loggedVrJavelinMonoscopicOptic = true;
+        }
+    }
 
     VR_GetStereoEyeFovBounds(
         0u,
         &leftEyeRefdef.tanHalfFovX,
         &leftEyeRefdef.tanHalfFovY);
 
+    // KISAK_SP_JAVELIN_VR_COMPLETION_FIX
+    // Keep zero IPD for the raised Javelin, but render the right half with
+    // the right eye's own asymmetric projection. This makes the two images
+    // converge correctly when OpenXR submits them with per-eye FOV metadata.
     VR_GetStereoEyeFovBounds(
         1u,
         &rightEyeRefdef.tanHalfFovX,
         &rightEyeRefdef.tanHalfFovY);
 
+    const auto vrStereoFrontendStart =
+        std::chrono::steady_clock::now();
+
+    const auto vrLeftEyeStart =
+        std::chrono::steady_clock::now();
+
+#ifdef KISAK_SP
+    if (renderedDedicatedScopeCamera)
+    {
+        frontEndDataOut
+            ->viewInfo[
+                frontEndDataOut->viewInfoCount]
+            .cmds =
+                deferredClientCommands2D;
+    }
+#endif
+
     VR_BeginStereoEyeRender(0u);
     CL_RenderScene(&leftEyeRefdef);
     VR_EndStereoEyeRender();
 
+    const auto vrLeftEyeEnd =
+        std::chrono::steady_clock::now();
+
+    if (frontEndDataOut != nullptr &&
+        frontEndDataOut->viewInfo != nullptr)
+    {
+        frontEndDataOut
+            ->viewInfo[
+                frontEndDataOut->viewInfoCount]
+            .cmds = nullptr;
+    }
+
     VR_BeginStereoEyeRender(1u);
     CL_RenderScene(&rightEyeRefdef);
     VR_EndStereoEyeRender();
+
+    const auto vrStereoFrontendEnd =
+        std::chrono::steady_clock::now();
+
+    const double vrLeftEyeMilliseconds =
+        std::chrono::duration<double, std::milli>(
+            vrLeftEyeEnd - vrLeftEyeStart).count();
+
+    const double vrRightEyeMilliseconds =
+        std::chrono::duration<double, std::milli>(
+            vrStereoFrontendEnd - vrLeftEyeEnd).count();
+
+    const double vrStereoFrontendMilliseconds =
+        std::chrono::duration<double, std::milli>(
+            vrStereoFrontendEnd - vrStereoFrontendStart).count();
+
+    static unsigned int vrStereoTimingSampleCount = 0u;
+    static double vrStereoTimingLeftTotal = 0.0;
+    static double vrStereoTimingRightTotal = 0.0;
+    static double vrStereoTimingTotal = 0.0;
+    static double vrStereoTimingMaximum = 0.0;
+
+    ++vrStereoTimingSampleCount;
+    vrStereoTimingLeftTotal += vrLeftEyeMilliseconds;
+    vrStereoTimingRightTotal += vrRightEyeMilliseconds;
+    vrStereoTimingTotal += vrStereoFrontendMilliseconds;
+
+    if (vrStereoFrontendMilliseconds >
+        vrStereoTimingMaximum)
+    {
+        vrStereoTimingMaximum =
+            vrStereoFrontendMilliseconds;
+    }
+
+    if (vrStereoTimingSampleCount >= 120u)
+    {
+        const double sampleScale =
+            1.0 /
+            static_cast<double>(
+                vrStereoTimingSampleCount);
+
+        Com_Printf(
+            0,
+            "[VR] SP stereo frontend timing: "
+            "left %.2f ms, right %.2f ms, "
+            "total %.2f ms, max %.2f ms.\n",
+            vrStereoTimingLeftTotal * sampleScale,
+            vrStereoTimingRightTotal * sampleScale,
+            vrStereoTimingTotal * sampleScale,
+            vrStereoTimingMaximum);
+
+        vrStereoTimingSampleCount = 0u;
+        vrStereoTimingLeftTotal = 0.0;
+        vrStereoTimingRightTotal = 0.0;
+        vrStereoTimingTotal = 0.0;
+        vrStereoTimingMaximum = 0.0;
+    }
 
     static bool loggedSpStereoViews = false;
 
@@ -1352,4 +1747,3 @@ void __cdecl CG_GenerateSceneVerts(int localClientNum)
 {
     CG_AddDrawSurfsFor3dHudElems(localClientNum);
 }
-

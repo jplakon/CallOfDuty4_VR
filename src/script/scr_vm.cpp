@@ -976,7 +976,56 @@ void __cdecl VM_Notify(uint32_t notifyListOwnerId, uint32_t stringValue, Variabl
     bool bNoStack; // [esp+53h] [ebp-Dh]
     VariableValueInternal_u* tempValue; // [esp+54h] [ebp-Ch]
     uint32_t selfId; // [esp+58h] [ebp-8h]
+\
     uint32_t notifyListEntry; // [esp+5Ch] [ebp-4h]
+
+#ifdef KISAK_SP
+    // Capture only the events that can advance or terminate the tree-to-church
+    // transition.  VM_Notify sees both script-originated and engine-originated
+    // notifications, including notifications that currently have no waiter.
+    {
+        const char* notifyName = SL_ConvertToString(stringValue);
+        bool logEvent = false;
+        const char* ownerName = 0;
+
+        if (notifyListOwnerId == scrVarPub.levelId)
+        {
+            if (!I_stricmp(notifyName, "intro_left_area")
+                || !I_stricmp(notifyName, "church_intro")
+                || !I_stricmp(notifyName, "church_area_clear")
+                || !I_stricmp(notifyName, "_stealth_spotted"))
+            {
+                logEvent = true;
+                ownerName = "level";
+            }
+        }
+        else if (GetObjectType(notifyListOwnerId) == VAR_ENTITY)
+        {
+            const scr_entref_t ownerRef = Scr_GetEntityIdRef(notifyListOwnerId);
+            if (ownerRef.classnum == CLASS_NUM_ENTITY && ownerRef.entnum == 814
+                && (!I_stricmp(notifyName, "follow_path")
+                    || !I_stricmp(notifyName, "follow_path_new_goal")
+                    || !I_stricmp(notifyName, "goal")
+                    || !I_stricmp(notifyName, "bad_path")
+                    || !I_stricmp(notifyName, "stop_path")
+                    || !I_stricmp(notifyName, "scoutsniper_path_end_reached")
+                    || !I_stricmp(notifyName, "death")))
+            {
+                logEvent = true;
+                ownerName = "entity 814";
+            }
+        }
+
+        if (logEvent)
+        {
+            Com_Printf(23,
+                "[VR][SCOUTSNIPER][EVENT] time %u owner %s notify '%s'.\n",
+                scrVarPub.time,
+                ownerName,
+                notifyName);
+        }
+    }
+#endif
 
     notifyListId = FindVariable(notifyListOwnerId, 0x18000u);
     if (notifyListId)

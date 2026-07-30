@@ -58,6 +58,7 @@ void *__cdecl SaveMemory_ReadLoadFromDevice(
     int useLoadedSourceFiles,
     SaveGame **save);
 bool __cdecl SaveMemory_IsRecentlyLoaded();
+bool __cdecl SaveMemory_HasLoadedGameSinceLastSave();
 int __cdecl SaveMemory_IsCommittedSaveAvailable(const char *filename, int checksum);
 bool __cdecl SaveMemory_IsCurrentCommittedSaveValid();
 int __cdecl SaveMemory_CommitSave(SaveGame *save, int saveId);

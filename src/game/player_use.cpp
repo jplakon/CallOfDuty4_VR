@@ -15,6 +15,7 @@
 #include <aim_assist/aim_target.h>
 #include "actor_events.h"
 #include "bullet.h"
+#include "vr/vr_openxr.h"
 
 
 void __cdecl Player_UseEntity(gentity_s *playerEnt, gentity_s *useEnt)
@@ -1061,6 +1062,45 @@ void __cdecl Player_UpdateLookAtEntity(gentity_s *ent)
         weapon = ent->client->ps.weapon;
     }
     weapDef = BG_GetWeaponDef(weapon);
+
+    // KISAK_SP_JAVELIN_VR_USABILITY_FIX
+    // The stock look-at trace follows playerState viewangles. In VR those are
+    // the body/flat-camera angles, not the visible tracked launcher. Javelin
+    // scripts use pLookatEnt to start and finalize their native vehicle lock,
+    // so redirect only that weapon's ADS trace along the rendered controller.
+    if (VR_IsInitialized() &&
+        weapDef->overlayInterface == WEAPOVERLAYINTERFACE_JAVELIN &&
+        client->ps.fWeaponPosFrac > 0.0f)
+    {
+        float vrJavelinPitch = 0.0f;
+        float vrJavelinYaw = 0.0f;
+        bool ignoredVrAttackPressed = false;
+
+        if (VR_GetRightControllerWeaponCommand(
+                &vrJavelinPitch,
+                &vrJavelinYaw,
+                &ignoredVrAttackPressed))
+        {
+            const float vrJavelinAngles[3] = {
+                vrJavelinPitch,
+                vrJavelinYaw,
+                0.0f,
+            };
+
+            AngleVectors(vrJavelinAngles, forward, 0, 0);
+
+            static bool loggedVrJavelinLockDirection = false;
+            if (!loggedVrJavelinLockDirection)
+            {
+                Com_Printf(
+                    0,
+                    "[VR][JAVELIN] Lock acquisition now follows the "
+                    "tracked launcher direction.\n");
+                loggedVrJavelinLockDirection = true;
+            }
+        }
+    }
+
     if (ent->client->ps.weapon && weapDef->bRifleBullet)
         prioMap = riflePriorityMap;
     else

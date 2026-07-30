@@ -1,60 +1,118 @@
-# KisakCOD
+# KisakCOD VR
 
-## About the project
-An open source fully-buildable reimplementation of Call of Duty 4's Multi-Player .exe
+KisakCOD VR is a single-player OpenXR VR conversion for the original 2007
+Windows release of Call of Duty 4: Modern Warfare. It adds stereoscopic
+rendering, 6DoF headset tracking, motion-controller weapon aiming, physical
+scope support, VR HUD placement, and campaign-specific compatibility fixes.
 
-Aimed towards mod developers and COD4 enthusiasts.
+This project is based on [KisakCOD](https://github.com/SwagSoftware/KisakCOD).
+It contains no Call of Duty game data and requires a legitimately installed
+copy of the original game.
 
-![licimg](./GPLv3_Logo.png)
+[Get the current precompiled beta and supporter updates](PATREON_URL_HERE)
 
-### Development Blog
-Learn about the Development of KisakCOD here: [https://lwss.github.io/Duty-Of-Kisak/](https://lwss.github.io/Duty-Of-Kisak/)
+## Current status
 
-## Current Requirements
-- Windows OS
-- Visual Studio 2022
-- CMake >= 3.16
-- [DirectX SDK 2010](https://www.microsoft.com/en-us/download/details.aspx?id=6812)
-- Steam with a copy of [Call of Duty 4](https://store.steampowered.com/app/7940/Call_of_Duty_4_Modern_Warfare_2007/)
+The first public target is `v0.9.0-beta.1`.
 
+- The single-player campaign is playable from beginning to end when
+  **Death From Above** is skipped.
+- **Death From Above is not supported in this beta.**
+- Primary test configuration: Meta Quest 3, Virtual Desktop's OpenXR runtime,
+  and an NVIDIA RTX 3080 Ti.
+- Other OpenXR headsets and runtimes should be considered experimental until
+  users confirm them.
 
-## How to build
-1) Install the above requirements and Clone repo
-2) Open a terminal and run `generate-project.bat`
-3) Open .sln projects that are generated in `build-sp`, `build-mp`, and `build-dedi` respectively. 
-4) Copy COD4 Game files to `bin/(BUILD_TYPE)/*` (Don't try to cherry-pick them, small files like localization.txt are needed)
-5) Copy `deps/binklib/binkw32.dll` as well ^^
-6) Copy all files in `deps/msslib/dlls/*` ^^ 
-7) Copy `deps/steamsdk/steam_api.dll`  ^^
-8) Run the game via Visual Studio play button or just the .exe
+See [KNOWN-ISSUES.md](KNOWN-ISSUES.md) before downloading.
 
+## Requirements
 
+- Windows 10 or Windows 11
+- The original 2007 Call of Duty 4: Modern Warfare for Windows
+- A working OpenXR runtime
+- A PC VR headset and motion controllers
+- A VR-capable GPU
+
+The precompiled package is an overlay for an existing COD4 installation. It
+does not include `iw3sp.exe`, COD4 maps, fastfiles, Miles/Bink DLLs, Steam
+DLLs, or other proprietary game files.
+
+## Install a precompiled build
+
+1. Install and launch the original COD4 once.
+2. In Steam, open **Manage → Browse local files**.
+3. Extract the contents of the KisakCOD VR ZIP into that folder, beside
+   `iw3sp.exe`.
+4. Start the OpenXR runtime you intend to use.
+5. Run `Launch-KisakCOD-VR.bat`.
+6. Edit `VR-Settings.bat` if the default Quest 3 settings are too demanding or
+   the HUD/scope needs calibration.
+
+Full instructions are in [INSTALL.md](INSTALL.md).
+
+## Build from source
+
+Requirements:
+
+- Visual Studio 2022 with C++ desktop development tools
+- CMake 3.16 or newer
+- DirectX SDK (June 2010)
+- A legitimate COD4 installation for runtime data
+
+Clone the repository and both OpenXR submodules:
+
+```bash
+git clone --recurse-submodules \
+  https://github.com/jplakon/CallOfDuty4_VR.git
+
+cd CallOfDuty4_VR
+cmake -S . -B build -G "Visual Studio 17 2022" -A Win32
+cmake --build build --config Release --target KisakCOD-sp --parallel 8
 ```
-Keep in Mind: This is a ~20 year old game with some known exploits. We will try to fix these as we become aware of them.
-However, there is a non-zero chance of some type of binary exploitation when playing online. Use a sandbox (Sandboxie?) for peace of mind. 
+
+The compiled executable is written to:
+
+```text
+bin/Release/KisakCOD-sp.exe
 ```
 
-## Known Issues
-(Use the **[issues](https://github.com/SwagSoftware/KisakCOD/issues)** section)
+It must be run from a directory containing the files supplied by the user's
+own COD4 installation. See the upstream
+[KisakCOD build notes](docs/KISAKCOD-UPSTREAM-README.md) for the underlying
+runtime layout.
 
-## Troubleshooting
-- ***Can't Connect to Dedicated Server*** :
-  -  Check `net_ip` and `net_port`, the server will increment the port if the preferred one isn't available but the client won't sweep upwards.
- - ***DLL Error upon launch*** :
-   - You didn't copy over the necessary runtime DLL's
+## Source and binary releases
 
-## FAQ
-- Can we use AI in this project?
-  - Yes you can, but you're still responsible for whatever you commit. In general, you should have the AI be assisting you, and not carrying you. We have started using AI to help de-bug, and it's been extremely helpful.
+The complete source for every distributed binary is published under the Git
+tag named in that binary package's `SOURCE.txt`. GitHub contains source,
+documentation, tags, and issue tracking. Patreon provides convenient
+precompiled early-access packages and supporter updates.
 
-## Credits and Special Thanks
-- ***All Original COD4 Developers (for creating one of the best games of all time)***
-- https://github.com/PJayB/jk3src (Jedi Academy fork with .sln)
-- https://github.com/voron00/CoD2rev_Server - Useful yacc code for the gsc scripting here
-- https://github.com/shiversoftdev/BO3Enhanced - Viewed as reference code for some of the Steam API Auth
-- [RAD Game Tools](https://www.radgametools.com/) for their Bink and Miles Sound System libraries.
-- [ODE Physics](https://www.ode.org/) COD4 uses a modified version of this physics engine.
+KisakCOD and this derivative are distributed under the GNU General Public
+License version 3. Recipients may copy and redistribute the GPL-covered source
+and binaries under that license. See [LICENSE](LICENSE).
 
+## Reporting bugs
 
-## Discord
-[Join the KisakCOD Discord](https://discord.gg/9uqntRWMA3)
+Use the GitHub bug-report form and include:
+
+- Mod version and source commit from `SOURCE.txt`
+- Headset and OpenXR runtime
+- GPU and CPU
+- Mission and checkpoint
+- Reproduction steps
+- Relevant lines from `main/console.log`
+
+Do not report the unsupported Death From Above mission as a new bug.
+
+## Credits
+
+- The KisakCOD contributors
+- Infinity Ward and the original Call of Duty 4 development team
+- The Khronos OpenXR project
+- Tracy Profiler and the other upstream dependencies retained by KisakCOD
+- Testers and Patreon supporters
+
+Call of Duty, Call of Duty 4, and related names and assets belong to their
+respective owners. This is an independently developed mod and is not an
+official Call of Duty product.

@@ -15,6 +15,7 @@
 #include <qcommon/cmd.h>
 #include <devgui/devgui.h>
 #include "g_public.h"
+#include "vr/vr_openxr.h"
 
 struct $1CCC8782424A70CD39BB8AAD8063E797
 {
@@ -24,6 +25,55 @@ struct $1CCC8782424A70CD39BB8AAD8063E797
 };
 
 $1CCC8782424A70CD39BB8AAD8063E797 s_cmdNotify;
+
+// KISAK_SP_VR_FIXED_SCOPE_SCRIPTED_BULLET_BRIDGE_V7
+// sniperescape's fixed rifle converts a deliberately blocked turret hitscan
+// into its own wind-affected travelling round through player script methods.
+// Keep the VR overrides restricted to the player who currently owns the
+// active TURRETSCOPE entity.
+static bool G_VR_PlayerUsingFixedScopedTurret(
+    const gentity_s *player)
+{
+    if (!VR_IsInitialized() ||
+        player == nullptr ||
+        player->client == nullptr)
+    {
+        return false;
+    }
+
+    const playerState_s &ps =
+        player->client->ps;
+
+    const unsigned int viewlockedEntNum =
+        ps.viewlocked_entNum;
+
+    if (ps.viewlocked == PLAYERVIEWLOCK_NONE ||
+        viewlockedEntNum >= MAX_GENTITIES)
+    {
+        return false;
+    }
+
+    const gentity_s *turret =
+        &g_entities[viewlockedEntNum];
+
+    if (!turret->r.inuse ||
+        !turret->active ||
+        turret->pTurretInfo == nullptr ||
+        turret->s.weapon == 0 ||
+        !turret->r.ownerNum.isDefined() ||
+        turret->r.ownerNum.ent() != player)
+    {
+        return false;
+    }
+
+    const WeaponDef *weaponDef =
+        BG_GetWeaponDef(
+            turret->s.weapon);
+
+    return weaponDef != nullptr &&
+        weaponDef->overlayInterface ==
+            WEAPOVERLAYINTERFACE_TURRETSCOPE;
+}
 
 int __cdecl G_GetNeededStartAmmo(gentity_s *pSelf, WeaponDef *weapDef)
 {
@@ -983,6 +1033,98 @@ void __cdecl PlayerCmd_getAngles(scr_entref_t entref)
             Scr_ObjectError(v2);
         }
     }
+
+    // KISAK_SP_VR_FIXED_SCOPE_SCRIPTED_BULLET_BRIDGE_V7
+    // exchange_player_fires() builds the travelling sniper round from
+    // getplayerangles(). Return the same fused HMD ray represented by the
+    // binocular crosshair instead of the stale flat-screen view angles.
+    if (G_VR_PlayerUsingFixedScopedTurret(v1))
+    {
+        float vrAngles[3] = {};
+
+        if (VR_GetFixedScopedTurretAim(
+                &vrAngles[0],
+                &vrAngles[1]))
+        {
+            vrAngles[2] = 0.0f;
+
+            static bool loggedVrFixedScopeScriptAngles =
+                false;
+
+            if (!loggedVrFixedScopeScriptAngles)
+            {
+                Com_Printf(
+                    0,
+                    "[VR][FIXED SCOPE][SCRIPTED BULLET] "
+                    "getplayerangles() now returns fused HMD "
+                    "pitch %.2f yaw %.2f.\n",
+                    vrAngles[0],
+                    vrAngles[1]);
+
+                loggedVrFixedScopeScriptAngles = true;
+            }
+
+            Scr_AddVector(vrAngles);
+            return;
+        }
+    }
+
+    // KISAK_SP_VR_SNIPERESCAPE_HELICOPTER_CONTROLLER_SHOT_V2
+    // The later helicopter crash is gated by player_looking_at(), but the
+    // visible VR rifle is aimed independently by the right controller.
+    // While firing, expose the same final weapon ray that the rendered gun
+    // and VR shot path use.  Otherwise retain the V1 HMD look-ray fallback.
+    if (VR_IsInitialized() &&
+        !I_stricmp(
+            Dvar_GetString("mapname"),
+            "sniperescape"))
+    {
+        float vrShotAngles[3] = {};
+        bool vrAttackPressed = false;
+
+        if (VR_GetRightControllerWeaponCommand(
+                &vrShotAngles[0],
+                &vrShotAngles[1],
+                &vrAttackPressed) &&
+            vrAttackPressed)
+        {
+            vrShotAngles[2] = 0.0f;
+
+            static bool loggedVrHelicopterWeaponRayBridge =
+                false;
+
+            if (!loggedVrHelicopterWeaponRayBridge)
+            {
+                Com_Printf(
+                    0,
+                    "[VR][SNIPERESCAPE][HELICOPTER] "
+                    "getplayerangles() now follows the "
+                    "right-controller weapon ray while "
+                    "firing at pitch %.2f yaw %.2f; the "
+                    "crash detector now samples the shot "
+                    "direction.\n",
+                    vrShotAngles[0],
+                    vrShotAngles[1]);
+
+                loggedVrHelicopterWeaponRayBridge = true;
+            }
+
+            Scr_AddVector(vrShotAngles);
+            return;
+        }
+
+        float vrLookAngles[3] = {};
+
+        if (VR_GetFixedScopedTurretAim(
+                &vrLookAngles[0],
+                &vrLookAngles[1]))
+        {
+            vrLookAngles[2] = 0.0f;
+            Scr_AddVector(vrLookAngles);
+            return;
+        }
+    }
+
     Scr_AddVector(v1->client->ps.viewangles);
 }
 
@@ -1113,7 +1255,53 @@ void __cdecl PlayerCmd_attackButtonPressed(scr_entref_t entref)
             Scr_ObjectError(v2);
         }
     }
-    Scr_AddInt((((unsigned __int8)v1->client->buttonsSinceLastFrame | (unsigned __int8)v1->client->buttons) & 1) != 0);
+
+    const bool nativeAttackPressed =
+        (((unsigned __int8)
+              v1->client->buttonsSinceLastFrame |
+          (unsigned __int8)
+              v1->client->buttons) &
+         1) != 0;
+
+    bool attackPressed =
+        nativeAttackPressed;
+
+    // KISAK_SP_VR_FIXED_SCOPE_SCRIPTED_BULLET_BRIDGE_V7
+    // The raw VR trigger already fires the generic turret, but sniperescape
+    // separately polls this script method before it creates the visible
+    // wind-curved round. Expose the same held state to that script only.
+    if (!attackPressed &&
+        G_VR_PlayerUsingFixedScopedTurret(v1))
+    {
+        bool vrAttackPressed = false;
+
+        if (VR_GetRightControllerMountedWeaponTrigger(
+                &vrAttackPressed) &&
+            vrAttackPressed)
+        {
+            attackPressed = true;
+
+            static bool loggedVrFixedScopeScriptTrigger =
+                false;
+
+            if (!loggedVrFixedScopeScriptTrigger)
+            {
+                Com_Printf(
+                    0,
+                    "[VR][FIXED SCOPE][SCRIPTED BULLET] "
+                    "attackButtonPressed() now sees the raw "
+                    "right trigger; sniperescape can launch "
+                    "its travelling wind-affected round.\n");
+
+                loggedVrFixedScopeScriptTrigger = true;
+            }
+        }
+    }
+
+    Scr_AddInt(
+        attackPressed
+            ? 1
+            : 0);
 }
 
 void __cdecl PlayerCmd_adsButtonPressed(scr_entref_t entref)
@@ -3505,6 +3693,7 @@ void __cdecl PlayerCmd_WeaponLockTargetTooClose(scr_entref_t entref)
     client->ps.weapLockFlags = v6;
 }
 
+// KISAK_SP_STINGER_CONTROLLER_LOCK_FIX
 void __cdecl PlayerCmd_WeaponLockNoClearance(scr_entref_t entref)
 {
     gentity_s *v1; // r31
@@ -3539,6 +3728,32 @@ void __cdecl PlayerCmd_WeaponLockNoClearance(scr_entref_t entref)
     }
     Int = Scr_GetInt(0);
     client = v1->client;
+
+    // The stock script traces clearance along GetPlayerAngles(), which is
+    // unrelated to the independently tracked launcher. The engine already
+    // performs physical muzzle obstruction checks for VR firing, so do not
+    // block a finalized lock because the head/body ray sees a nearby surface.
+    WeaponDef *vrLockOnWeaponDef =
+        BG_GetWeaponDef(client->ps.weapon);
+    if (Int &&
+        VR_IsInitialized() &&
+        vrLockOnWeaponDef &&
+        vrLockOnWeaponDef->requireLockonToFire &&
+        client->ps.fWeaponPosFrac > 0.0f)
+    {
+        Int = 0;
+
+        static bool loggedVrStingerClearance = false;
+        if (!loggedVrStingerClearance)
+        {
+            Com_Printf(
+                0,
+                "[VR][STINGER] Ignoring the flat-camera clearance gate; "
+                "physical VR muzzle obstruction remains active.\n");
+            loggedVrStingerClearance = true;
+        }
+    }
+
     weapLockFlags = client->ps.weapLockFlags;
     if (Int)
         v6 = weapLockFlags | 0x20;

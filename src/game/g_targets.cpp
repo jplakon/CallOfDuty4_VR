@@ -8,6 +8,7 @@
 #include <script/scr_vm.h>
 #include <server/sv_game.h>
 #include <script/scr_const.h>
+#include "vr/vr_openxr.h"
 
 TargetGlob targGlob;
 
@@ -464,7 +465,59 @@ int __cdecl G_WorldDirToScreenPos(
 
     if (fov_x <= 0.0)
         MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_targets.cpp", 360, 0, "%s", "fov_x > 0");
-    AnglesToAxis(player->s.lerp.apos.trBase, v17);
+    // KISAK_SP_JAVELIN_CONTROLLER_LOCK_FIX
+    // Bog's Javelin script decides whether a target is inside its lock circle
+    // through this server-side projection. The recovered game uses the player
+    // entity/body angles, which do not follow the independently tracked VR
+    // launcher. Use the same final weapon direction as the rendered launcher.
+    float targetViewAngles[3] = {
+        player->s.lerp.apos.trBase[0],
+        player->s.lerp.apos.trBase[1],
+        player->s.lerp.apos.trBase[2],
+    };
+
+    if (player->client && VR_IsInitialized())
+    {
+        WeaponDef *weaponDef =
+            BG_GetWeaponDef(player->client->ps.weapon);
+
+        // KISAK_SP_STINGER_CONTROLLER_LOCK_FIX
+        // Both Javelin and Stinger scripts reach this projection helper.
+        // Stinger does not need to advertise the Javelin full-screen overlay;
+        // requireLockonToFire is the shared native lock-on capability.
+        if (weaponDef &&
+            (weaponDef->overlayInterface ==
+                 WEAPOVERLAYINTERFACE_JAVELIN ||
+             weaponDef->requireLockonToFire) &&
+            player->client->ps.fWeaponPosFrac > 0.0f)
+        {
+            float vrJavelinPitch = 0.0f;
+            float vrJavelinYaw = 0.0f;
+            bool ignoredVrAttackPressed = false;
+
+            if (VR_GetRightControllerWeaponCommand(
+                    &vrJavelinPitch,
+                    &vrJavelinYaw,
+                    &ignoredVrAttackPressed))
+            {
+                targetViewAngles[0] = vrJavelinPitch;
+                targetViewAngles[1] = vrJavelinYaw;
+                targetViewAngles[2] = 0.0f;
+
+                static bool loggedVrJavelinScriptLockProjection = false;
+                if (!loggedVrJavelinScriptLockProjection)
+                {
+                    Com_Printf(
+                        0,
+                        "[VR][JAVELIN] Script lock-circle tests now follow "
+                        "the tracked launcher direction.\n");
+                    loggedVrJavelinScriptLockProjection = true;
+                }
+            }
+        }
+    }
+
+    AnglesToAxis(targetViewAngles, v17);
     MatrixTransposeTransformVector(worldDir, (const mat3x3&)v17, v16);
     if (v16[0] <= 0.0)
         return 0;
@@ -557,6 +610,7 @@ int __cdecl ScrGetTargetScreenPos(float *screenPos)
     return G_WorldDirToScreenPos(player, fov_x, worldDir, screenPos);
 }
 
+// KISAK_SP_STINGER_CONTROLLER_LOCK_FIX
 void __cdecl Scr_Target_IsInCircle()
 {
     double Float; // fp31
@@ -565,6 +619,34 @@ void __cdecl Scr_Target_IsInCircle()
     //float v3; // [sp+54h] [-1Ch]
 
     Float = Scr_GetFloat(3);
+
+    // Hunted's Stinger uses target_isincircle rather than the Javelin's
+    // target_isinrect. Add modest tolerance for tracked-hand motion only
+    // while a native lock-on weapon is raised in VR.
+    gentity_s *vrPlayer = Scr_GetEntity(1);
+    if (VR_IsInitialized() && vrPlayer && vrPlayer->client)
+    {
+        WeaponDef *vrWeaponDef =
+            BG_GetWeaponDef(vrPlayer->client->ps.weapon);
+
+        if (vrWeaponDef &&
+            vrWeaponDef->requireLockonToFire &&
+            vrPlayer->client->ps.fWeaponPosFrac > 0.0f)
+        {
+            Float *= 1.5;
+
+            static bool loggedVrStingerLockCircle = false;
+            if (!loggedVrStingerLockCircle)
+            {
+                Com_Printf(
+                    0,
+                    "[VR][STINGER] Lock circle now follows the tracked "
+                    "launcher with controller-friendly tolerance.\n");
+                loggedVrStingerLockCircle = true;
+            }
+        }
+    }
+
     if (!(unsigned __int8)ScrGetTargetScreenPos(screenPos)
         || (v1 = 1, (float)((float)(screenPos[0] * screenPos[0]) + (float)(screenPos[1] * screenPos[1])) >= (double)(float)((float)Float * (float)Float)))
     {
@@ -573,6 +655,7 @@ void __cdecl Scr_Target_IsInCircle()
     Scr_AddBool(v1);
 }
 
+// KISAK_SP_JAVELIN_VR_COMPLETION_FIX
 void __cdecl Scr_Target_IsInRect()
 {
     double Float; // fp31
@@ -582,8 +665,43 @@ void __cdecl Scr_Target_IsInRect()
 
     Float = Scr_GetFloat(3);
     v1 = Scr_GetFloat(4);
-    if (!(unsigned __int8)ScrGetTargetScreenPos(v3) || I_fabs(v3[0]) >= Float || (v2 = 1, I_fabs(v3[1]) >= v1))
+
+    // The original 25-by-60 acquisition rectangle is intended for a mouse.
+    // Give a tracked launcher enough tolerance for natural hand motion while
+    // leaving the campaign script and all non-VR targeting unchanged.
+    gentity_s *vrPlayer = Scr_GetEntity(1);
+    if (VR_IsInitialized() && vrPlayer && vrPlayer->client)
+    {
+        WeaponDef *vrWeaponDef =
+            BG_GetWeaponDef(vrPlayer->client->ps.weapon);
+
+        if (vrWeaponDef &&
+            (vrWeaponDef->overlayInterface ==
+                 WEAPOVERLAYINTERFACE_JAVELIN ||
+             vrWeaponDef->requireLockonToFire) &&
+            vrPlayer->client->ps.fWeaponPosFrac > 0.0f)
+        {
+            Float *= 2.5;
+            v1 *= 2.0;
+
+            static bool loggedVrJavelinLockTolerance = false;
+            if (!loggedVrJavelinLockTolerance)
+            {
+                Com_Printf(
+                    0,
+                    "[VR][JAVELIN] Enabled controller-friendly "
+                    "lock acquisition tolerance.\n");
+                loggedVrJavelinLockTolerance = true;
+            }
+        }
+    }
+
+    if (!(unsigned __int8)ScrGetTargetScreenPos(v3) ||
+        I_fabs(v3[0]) >= Float ||
+        (v2 = 1, I_fabs(v3[1]) >= v1))
+    {
         v2 = 0;
+    }
     Scr_AddBool(v2);
 }
 

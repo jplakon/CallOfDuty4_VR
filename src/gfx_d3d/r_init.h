@@ -390,6 +390,11 @@ void __cdecl R_UpdateGpuSyncType();
 
 int R_IsHiDef();
 
+#if defined(KISAK_SP) && defined(KISAK_OPENXR_ENABLED)
+// KISAK_SP_VR_GPU_SHARED_BRIDGE_V1
+bool R_SpVrD3D9ExDeviceActive();
+#endif
+
 extern DxGlobals dx;
 extern r_global_permanent_t rgp;
 extern int g_disableRendering;

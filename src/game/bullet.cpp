@@ -13,12 +13,20 @@
 #elif KISAK_SP
 #include "g_local.h"
 #include "g_main.h"
+#include "vr/vr_openxr.h"
 #include "actor_events.h"
 #include <script/scr_const.h>
 #include <qcommon/ent.h>
+#include "vr/vr_openxr.h"
 #endif
 
 #include <cgame/cg_local.h>
+
+#ifdef KISAK_SP
+// KISAK_SP_VR_FIXED_SCOPE_SHARP_VIEW_AND_TRACER_V5
+static unsigned int
+    s_vrFixedScopeBulletTraceLogCount = 0u;
+#endif
 
 char __cdecl Bullet_Trace(
     const BulletFireParams *bp,
@@ -43,7 +51,31 @@ char __cdecl Bullet_Trace(
         G_LocationalTraceAllowChildren(&br->trace, (float *)bp->start, (float *)bp->end, bp->ignoreEntIndex, 0x2806831, bulletPriorityMap);
 
     if (br->trace.hitType == TRACE_HITTYPE_NONE)
+    {
+#ifdef KISAK_SP
+        if (VR_IsInitialized() &&
+            weapDef->overlayInterface ==
+                WEAPOVERLAYINTERFACE_TURRETSCOPE &&
+            s_vrFixedScopeBulletTraceLogCount < 12u)
+        {
+            Com_Printf(
+                0,
+                "[VR][FIXED SCOPE][BULLET] Trace %u found no "
+                "collision: start (%.1f %.1f %.1f), "
+                "end (%.1f %.1f %.1f).\n",
+                s_vrFixedScopeBulletTraceLogCount + 1u,
+                bp->start[0],
+                bp->start[1],
+                bp->start[2],
+                bp->end[0],
+                bp->end[1],
+                bp->end[2]);
+
+            ++s_vrFixedScopeBulletTraceLogCount;
+        }
+#endif
         return 0;
+    }
 
     hitEntId = Trace_GetEntityHitId(&br->trace);
 
@@ -53,6 +85,31 @@ char __cdecl Bullet_Trace(
         br->hitEnt = &g_entities[hitEntId];
 
     Vec3Lerp(bp->start, bp->end, br->trace.fraction, br->hitPos);
+
+#ifdef KISAK_SP
+    if (VR_IsInitialized() &&
+        weapDef->overlayInterface ==
+            WEAPOVERLAYINTERFACE_TURRETSCOPE &&
+        s_vrFixedScopeBulletTraceLogCount < 12u)
+    {
+        Com_Printf(
+            0,
+            "[VR][FIXED SCOPE][BULLET] Trace %u hit entity %u "
+            "at fraction %.5f, position (%.1f %.1f %.1f); "
+            "startsolid %d, allsolid %d.\n",
+            s_vrFixedScopeBulletTraceLogCount + 1u,
+            static_cast<unsigned int>(
+                hitEntId),
+            br->trace.fraction,
+            br->hitPos[0],
+            br->hitPos[1],
+            br->hitPos[2],
+            br->trace.startsolid ? 1 : 0,
+            br->trace.allsolid ? 1 : 0);
+
+        ++s_vrFixedScopeBulletTraceLogCount;
+    }
+#endif
 
     if (br->hitEnt)
     {
@@ -292,7 +349,43 @@ void __cdecl Bullet_Fire(
         v9.start[0] = wp->muzzleTrace[0];
         v9.start[1] = wp->muzzleTrace[1];
         v9.start[2] = wp->muzzleTrace[2];
-        Bullet_Endpos(shotIndex + randSeed, spread, v9.end, v9.dir, wp, range);
+
+#ifdef KISAK_SP
+        // KISAK_VR_SCOPE_ZERO_SPREAD_V1
+        const bool vrPhysicalScopeShot =
+            attacker->client != nullptr &&
+            VR_IsPhysicalSniperScopeAimActive();
+
+        const float effectiveSpread =
+            vrPhysicalScopeShot
+                ? 0.0f
+                : spread;
+
+        if (vrPhysicalScopeShot)
+        {
+            static bool loggedVrPhysicalScopeZeroSpread = false;
+
+            if (!loggedVrPhysicalScopeZeroSpread)
+            {
+                Com_Printf(
+                    0,
+                    "[VR] Physical sniper scope forced authoritative "
+                    "bullet spread to zero.\n");
+
+                loggedVrPhysicalScopeZeroSpread = true;
+            }
+        }
+#else
+        const float effectiveSpread = spread;
+#endif
+
+        Bullet_Endpos(
+            shotIndex + randSeed,
+            effectiveSpread,
+            v9.end,
+            v9.dir,
+            wp,
+            range);
 
 #ifdef KISAK_MP
         if (shotIndex == 0)

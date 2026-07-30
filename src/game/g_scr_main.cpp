@@ -6709,7 +6709,12 @@ void Scr_SaveGameNoCommit()
     else
         Com_sprintf(v11, 64, "autosave\\%s", String);
     SaveMemory_ClearForcedCommitFlag();
-    v9 = SV_AddPendingSave(v11, IString, v7, SAVE_TYPE_AUTOSAVE, 1u, v8);
+    // The stock script has already passed its initial autosave safety check before
+    // calling saveGameNoCommit.  Force the candidate into the committed slot so
+    // the SP port cannot leave every checkpoint pending behind the level-start save.
+    v9 = SV_AddPendingSave(v11, IString, v7, SAVE_TYPE_AUTOSAVE, 2u, v8);
+    if (v9 >= 0)
+        Com_Printf(10, "[VR][SAVE] SP autosave candidate %d scheduled for immediate commit.\n", v9);
     v10 = v9;
     if (v9 == -2)
     {

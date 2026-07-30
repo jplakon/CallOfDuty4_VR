@@ -10,6 +10,11 @@
 #elif KISAK_SP
 #include "cg_main.h"
 #include "cg_newdraw.h"
+#include <cstdlib>
+
+// Implemented by src/vr/vr_openxr.cpp. A forward declaration avoids
+// coupling the shared compass renderer to OpenXR headers.
+bool VR_IsInitialized();
 
 #endif
 
@@ -657,6 +662,120 @@ void __cdecl CG_CompassCalcDimensions(
         *y = rect->y;
         *w = rect->w * compassSize->current.value;
         *h = rect->h * compassSize->current.value;
+
+#ifdef KISAK_SP
+        if (VR_IsInitialized())
+        {
+            // The standard partial compass is anchored against the
+            // extreme lower-right corner. Quest lens visibility cuts off
+            // that peripheral area, especially the objective arrow.
+            //
+            // These values are in CoD's virtual HUD coordinate system.
+            // Defaults are deliberately conservative for Quest lens
+            // visibility and can be changed before launch without rebuilding:
+            //
+            // KISAK_VR_COMPASS_INSET_X=0..320
+            // KISAK_VR_COMPASS_INSET_Y=0..180
+            static const float vrCompassInsetX = []()
+            {
+                constexpr float defaultInset = 192.0f;
+
+                const char* value =
+                    std::getenv(
+                        "KISAK_VR_COMPASS_INSET_X");
+
+                if (value == nullptr ||
+                    *value == '\0')
+                {
+                    return defaultInset;
+                }
+
+                char* parseEnd = nullptr;
+
+                float parsed =
+                    std::strtof(
+                        value,
+                        &parseEnd);
+
+                if (parseEnd == value ||
+                    *parseEnd != '\0')
+                {
+                    return defaultInset;
+                }
+
+                if (parsed < 0.0f)
+                {
+                    parsed = 0.0f;
+                }
+                else if (parsed > 320.0f)
+                {
+                    parsed = 320.0f;
+                }
+
+                return parsed;
+            }();
+
+            static const float vrCompassInsetY = []()
+            {
+                constexpr float defaultInset = 48.0f;
+
+                const char* value =
+                    std::getenv(
+                        "KISAK_VR_COMPASS_INSET_Y");
+
+                if (value == nullptr ||
+                    *value == '\0')
+                {
+                    return defaultInset;
+                }
+
+                char* parseEnd = nullptr;
+
+                float parsed =
+                    std::strtof(
+                        value,
+                        &parseEnd);
+
+                if (parseEnd == value ||
+                    *parseEnd != '\0')
+                {
+                    return defaultInset;
+                }
+
+                if (parsed < 0.0f)
+                {
+                    parsed = 0.0f;
+                }
+                else if (parsed > 180.0f)
+                {
+                    parsed = 180.0f;
+                }
+
+                return parsed;
+            }();
+
+            *x -=
+                vrCompassInsetX;
+
+            *y -=
+                vrCompassInsetY;
+
+            static bool loggedVrCompassSafeArea = false;
+
+            if (!loggedVrCompassSafeArea)
+            {
+                Com_Printf(
+                    0,
+                    "[VR] Inset the SP partial compass by "
+                    "%.1f left and %.1f up in virtual HUD pixels.\n",
+                    vrCompassInsetX,
+                    vrCompassInsetY);
+
+                loggedVrCompassSafeArea = true;
+            }
+        }
+#endif
+
         KISAK_NULLSUB();
         if (*w <= 0.0 || *h <= 0.0)
             Com_Error(ERR_FATAL, "Compass ownerdraw had width or height of 0");
@@ -1674,12 +1793,8 @@ void __cdecl CG_CompassDrawTickertape(
             {
 #ifdef KISAK_MP
                 objective = &cgameGlob->nextSnap->ps.objective[objIdx];
-#elif KISAK_SP
-                objective = cgArray[0].objectives;
-#endif
                 if (objective->state == OBJST_CURRENT || objective->state == OBJST_ACTIVE)
                 {
-#ifdef KISAK_MP
                     if (objective->entNum == ENTITYNUM_NONE)
                     {
                         goalOrig = objective->origin;
@@ -1690,7 +1805,13 @@ void __cdecl CG_CompassDrawTickertape(
                         goalOrig = cent->pose.origin;
                     }
 #elif KISAK_SP
-                    goalOrig = (const float*)objective->origin;
+                // KISAK_SP_COMPASS_PARTIAL_OBJECTIVES_V1
+                objective = &cgArray[0].objectives[objIdx];
+                if (objective->state == OBJST_CURRENT)
+                {
+                    for (int orgIdx = 0; orgIdx < 8; ++orgIdx)
+                    {
+                        goalOrig = objective->origin[orgIdx];
 #endif
 
                     colorMod[3] = defAlpha;
@@ -1756,6 +1877,9 @@ void __cdecl CG_CompassDrawTickertape(
                             textScale,
                             textStyle);
                     }
+#ifdef KISAK_SP
+                    }
+#endif
                 }
             }
 
@@ -2077,8 +2201,10 @@ void CG_CompassDrawPlayerPointers_SP(
     float xyClipped[2];
     //float v46; // [sp+70h] [-150h] BYREF
     //float v47; // [sp+74h] [-14Ch]
-    float north[5]; // [sp+78h] [-148h] BYREF
-    float v49; // [sp+8Ch] [-134h]
+    // KISAK_SP_COMPASS_OBJECTIVE_MARKERS_V1
+    float north[2]; // [sp+78h] [-148h] BYREF
+    float newColor[4];
+    Material *iconMaterial;
     rectDef_s scaledRect; // [sp+90h] [-130h] BYREF
 
     cg_s *cgameGlob = CG_GetLocalClientGlobals(localClientNum);
@@ -2113,27 +2239,27 @@ void CG_CompassDrawPlayerPointers_SP(
                     {
                         x = (float)(*v18 - cgArray[0].refdef.vieworg[0]);
                         v21 = (float)(v18[1] - cgArray[0].refdef.vieworg[1]);
-                        north[2] = *color;
-                        north[3] = color[1];
-                        north[4] = color[2];
+                        newColor[0] = *color;
+                        newColor[1] = color[1];
+                        newColor[2] = color[2];
                         v22 = sqrtf((float)((float)((float)v21 * (float)v21) + (float)((float)x * (float)x)));
-                        v49 = v22;
+                        newColor[3] = v22;
                         value = compassObjectiveMaxRange->current.value;
                         if (v22 > value || (value = compassMaxRange->current.value, v22 < value))
                         {
                             v22 = value;
-                            v49 = value;
+                            newColor[3] = value;
                         }
                         if ((float)(compassObjectiveMaxRange->current.value - compassMaxRange->current.value) == 0.0)
                         {
-                            v49 = 0.0;
+                            newColor[3] = 0.0;
                         }
                         else
                         {
-                            v49 = (float)v22 - compassMaxRange->current.value;
-                            v24 = (float)(v49 / (float)(compassObjectiveMaxRange->current.value - compassMaxRange->current.value));
-                            v49 = v49 / (float)(compassObjectiveMaxRange->current.value - compassMaxRange->current.value);
-                            v49 = (float)((float)(compassObjectiveMinAlpha->current.value - (float)1.0) * (float)v24) + (float)1.0;
+                            newColor[3] = (float)v22 - compassMaxRange->current.value;
+                            v24 = (float)(newColor[3] / (float)(compassObjectiveMaxRange->current.value - compassMaxRange->current.value));
+                            newColor[3] = newColor[3] / (float)(compassObjectiveMaxRange->current.value - compassMaxRange->current.value);
+                            newColor[3] = (float)((float)(compassObjectiveMinAlpha->current.value - (float)1.0) * (float)v24) + (float)1.0;
                         }
                         xyClipped[0] = 0.0f;
                         xyClipped[1] = 0.0f;
@@ -2145,12 +2271,12 @@ void CG_CompassDrawPlayerPointers_SP(
                         xy[1] += centerY;
                         v28 = (xyClipped[1] + centerY);
                         CalcCompassPointerSize(compassType, &w, &h);
-                        CG_ObjectiveIcon(objectives->icon, 0);
-                        txt = v49;
-                        if (fadeAlpha < v49)
+                        iconMaterial = CG_ObjectiveIcon(objectives->icon, 0);
+                        txt = newColor[3];
+                        if (fadeAlpha < newColor[3])
                         {
                             txt = fadeAlpha;
-                            v49 = fadeAlpha;
+                            newColor[3] = fadeAlpha;
                         }
                         v34 = w;
                         v35 = 0.0;
@@ -2182,7 +2308,7 @@ void CG_CompassDrawPlayerPointers_SP(
                         if (v40 > 0.5 && compassObjectiveDrawLines->current.enabled)
                         {
                             v41 = 2.0;
-                            v49 = (float)((float)((float)v40 - (float)0.5) * (float)txt) * 2.0;
+                            newColor[3] = (float)((float)((float)v40 - (float)0.5) * (float)txt) * 2.0;
                             if (v26 >= y && v26 <= (float)(scaledRect.h + (float)y))
                             {
                                 UI_DrawHandlePic(
@@ -2193,13 +2319,13 @@ void CG_CompassDrawPlayerPointers_SP(
                                     2.0,
                                     rect->horzAlign,
                                     rect->vertAlign,
-                                    color, // KISAKTODO: probably need 'newColor'
+                                    newColor,
                                     material);
                                 v41 = 2.0;
                             }
                             if (v25 >= x && v25 <= v39)
-                                CG_DrawVLine(&scrPlaceView[localClientNum], v25, y, v41, scaledRect.h, rect->horzAlign, rect->vertAlign, color, material); // KISAKTODO: probably need 'newColor'
-                            v49 = txt;
+                                CG_DrawVLine(&scrPlaceView[localClientNum], v25, y, v41, scaledRect.h, rect->horzAlign, rect->vertAlign, newColor, material);
+                            newColor[3] = txt;
                         }
                         UI_DrawHandlePic(
                             &scrPlaceView[localClientNum],
@@ -2209,8 +2335,8 @@ void CG_CompassDrawPlayerPointers_SP(
                             v37,
                             rect->horzAlign,
                             rect->vertAlign,
-                            color, // KISAKTODO: probably need 'newColor'
-                            material);
+                            newColor,
+                            iconMaterial);
                     }
                     --v19;
                     v18 += 3;

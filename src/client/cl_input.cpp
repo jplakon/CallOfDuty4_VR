@@ -1135,6 +1135,39 @@ void __cdecl CL_MouseMove(usercmd_s *cmd)
     float accelSensitivity; // [esp+E0h] [ebp-4h]
 
     CL_GetMouseMovement(clients, &mx, &my);
+
+    // KISAK_SP_VR_DISABLE_GAMEPLAY_MOUSE_LOOK_V1
+    // Consume every desktop sample so no stale delta survives, but do not
+    // let physical mouse motion modify the body pitch/yaw beneath the HMD.
+    // CL_MouseEvent handles menu coordinates before this gameplay path.
+    if (VR_IsInitialized())
+    {
+        if (mx != 0.0f || my != 0.0f)
+        {
+            static bool loggedVrDesktopMouseSuppressed =
+                false;
+
+            if (!loggedVrDesktopMouseSuppressed)
+            {
+                Com_Printf(
+                    0,
+                    "[VR][INPUT] Desktop mouse motion is disabled "
+                    "during VR gameplay; menu mouse input remains "
+                    "active.\n");
+
+                loggedVrDesktopMouseSuppressed = true;
+            }
+        }
+
+        mx = 0.0f;
+        my = 0.0f;
+
+        clients[0].mouseDx[0] = 0;
+        clients[0].mouseDx[1] = 0;
+        clients[0].mouseDy[0] = 0;
+        clients[0].mouseDy[1] = 0;
+    }
+
     if (frame_msec)
     {
         v15 = my * my + mx * mx;
@@ -1489,12 +1522,14 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
 
         bool vrAdsHeld = false;
         bool vrJumpHeld = false;
-        bool vrUseReloadHeld = false;
+        bool vrUseHeld = false;
+        bool vrReloadHeld = false;
 
         if (VR_GetBasicGameplayButtons(
                 &vrAdsHeld,
                 &vrJumpHeld,
-                &vrUseReloadHeld))
+                &vrUseHeld,
+                &vrReloadHeld))
         {
             if (vrAdsHeld)
             {
@@ -1508,10 +1543,16 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
                     BUTTON_JUMP;
             }
 
-            if (vrUseReloadHeld)
+            if (vrUseHeld)
             {
                 result->buttons |=
-                    BUTTON_USE_RELOAD;
+                    BUTTON_USE;
+            }
+
+            if (vrReloadHeld)
+            {
+                result->buttons |=
+                    BUTTON_RELOAD;
             }
 
             static bool loggedVrBasicButtons = false;
@@ -1520,10 +1561,62 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
             {
                 Com_Printf(
                     0,
-                    "[VR] Injected Touch ADS, jump, and use/reload "
-                    "buttons into SP usercmd.\n");
+                    "[VR][INPUT] Separated Touch actions: left X = "
+                    "pickup/activate, left trigger = reload.\n");
 
                 loggedVrBasicButtons = true;
+            }
+        }
+
+        // KISAK_SP_VR_SCRIPTED_JUMP_BRIDGE_V1
+        // Mission scripts can listen for +gostand through notifyOnCommand.
+        // Directly setting BUTTON_JUMP bypasses that notification, so replay
+        // one native command edge for every Touch A press.
+        static bool vrJumpCommandWasHeld = false;
+
+        const bool vrJumpCommandPressed =
+            vrJumpHeld &&
+            !vrJumpCommandWasHeld;
+
+        vrJumpCommandWasHeld =
+            vrJumpHeld;
+
+        // Match normal key-event routing: do not issue gameplay commands
+        // while the console, script input, UI, or message catcher owns input.
+        if (vrJumpCommandPressed &&
+            !Key_IsCatcherActive(0, 0x33))
+        {
+            // A private synthetic key number prevents this one-shot command
+            // from changing the user's physical Space-key state.  Executing
+            // both commands immediately preserves the keyboard wasPressed
+            // latch while notifying mission scripts before the trigger is
+            // left.
+            char vrJumpDownCommand[] =
+                "+gostand 255 0";
+
+            char vrJumpUpCommand[] =
+                "-gostand 255 0";
+
+            Cmd_ExecuteSingleCommand(
+                0,
+                0,
+                vrJumpDownCommand);
+
+            Cmd_ExecuteSingleCommand(
+                0,
+                0,
+                vrJumpUpCommand);
+
+            static bool loggedVrScriptedJumpBridge = false;
+
+            if (!loggedVrScriptedJumpBridge)
+            {
+                Com_Printf(
+                    0,
+                    "[VR][JUMP] Routed Touch A through the native "
+                    "+gostand command path.\n");
+
+                loggedVrScriptedJumpBridge = true;
             }
         }
 
@@ -1655,59 +1748,158 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
                 true;
         }
 
-        bool vrFragHeld = false;
-        bool vrNextWeaponHeld = false;
+        bool vrRightGripHeld = false;
+        bool vrLeftYHeld = false;
 
         VR_GetWeaponUtilityButtons(
-            &vrFragHeld,
-            &vrNextWeaponHeld);
+            &vrRightGripHeld,
+            &vrLeftYHeld);
 
-        if (vrFragHeld)
+        // CoD4 routes smoke and flash grenades through +smoke.
+        // Keep the right grip as the intuitive tactical-grenade control.
+        if (vrRightGripHeld)
+        {
+            result->buttons |=
+                BUTTON_SMOKE;
+
+            static bool loggedVrTacticalGrenade = false;
+
+            if (!loggedVrTacticalGrenade)
+            {
+                Com_Printf(
+                    0,
+                    "[VR] Injected right-grip tactical grenade control.\n");
+
+                loggedVrTacticalGrenade = true;
+            }
+        }
+
+        // Preserve weapon cycling while giving frag grenades their own
+        // controller path: tap Y to cycle, hold Y to cook, release to throw.
+        constexpr int vrFragHoldThresholdMs = 300;
+
+        static bool vrLeftYWasHeld = false;
+        static bool vrLeftYFragActivated = false;
+        static int vrLeftYPressTime = 0;
+
+        if (vrLeftYHeld &&
+            !vrLeftYWasHeld)
+        {
+            vrLeftYPressTime =
+                com_frameTime;
+
+            vrLeftYFragActivated =
+                false;
+        }
+
+        if (vrLeftYHeld &&
+            !vrLeftYFragActivated &&
+            com_frameTime - vrLeftYPressTime >=
+                vrFragHoldThresholdMs)
+        {
+            vrLeftYFragActivated =
+                true;
+        }
+
+        if (vrLeftYHeld &&
+            vrLeftYFragActivated)
         {
             result->buttons |=
                 BUTTON_FRAG;
 
-            static bool loggedVrFrag = false;
+            static bool loggedVrFragHold = false;
 
-            if (!loggedVrFrag)
+            if (!loggedVrFragHold)
             {
                 Com_Printf(
                     0,
-                    "[VR] Injected right-grip frag grenade control.\n");
+                    "[VR] Bound left Y hold to frag grenade "
+                    "and tap to next weapon.\n");
 
-                loggedVrFrag = true;
+                loggedVrFragHold = true;
             }
         }
 
-        static bool vrNextWeaponWasHeld = false;
-
-        if (vrNextWeaponHeld &&
-            !vrNextWeaponWasHeld)
+        if (!vrLeftYHeld &&
+            vrLeftYWasHeld &&
+            !vrLeftYFragActivated)
         {
             CG_NextWeapon_f();
 
-            static bool loggedVrNextWeapon = false;
+            static bool loggedVrNextWeaponTap = false;
 
-            if (!loggedVrNextWeapon)
+            if (!loggedVrNextWeaponTap)
             {
                 Com_Printf(
                     0,
-                    "[VR] Bound left Y to the existing "
+                    "[VR] Bound left Y tap to the existing "
                     "single-player next-weapon command.\n");
 
-                loggedVrNextWeapon = true;
+                loggedVrNextWeaponTap = true;
             }
         }
 
-        vrNextWeaponWasHeld =
-            vrNextWeaponHeld;
+        vrLeftYWasHeld =
+            vrLeftYHeld;
 
         float vrMoveForward = 0.0f;
         float vrMoveRight = 0.0f;
 
-        if (VR_GetHmdOrientedMovement(
+        bool vrHmdMovementActive =
+            VR_GetHmdOrientedMovement(
                 &vrMoveForward,
-                &vrMoveRight))
+                &vrMoveRight);
+
+        if (vrSprintHeld &&
+            vrHmdMovementActive)
+        {
+            float vrBodyYawDeltaDegrees =
+                0.0f;
+
+            if (VR_TransferHmdYawToBody(
+                    &vrBodyYawDeltaDegrees))
+            {
+                clients[0].viewangles[1] +=
+                    vrBodyYawDeltaDegrees;
+
+                while (clients[0].viewangles[1] >=
+                       360.0f)
+                {
+                    clients[0].viewangles[1] -=
+                        360.0f;
+                }
+
+                while (clients[0].viewangles[1] <
+                       0.0f)
+                {
+                    clients[0].viewangles[1] +=
+                        360.0f;
+                }
+
+                // The HMD-relative movement basis changed when the yaw
+                // was transferred, so rebuild this frame's command vector.
+                vrHmdMovementActive =
+                    VR_GetHmdOrientedMovement(
+                        &vrMoveForward,
+                        &vrMoveRight);
+
+                static bool loggedVrSprintBodyAlignment =
+                    false;
+
+                if (!loggedVrSprintBodyAlignment)
+                {
+                    Com_Printf(
+                        0,
+                        "[VR] Transferred HMD yaw into body yaw "
+                        "while sprinting.\n");
+
+                    loggedVrSprintBodyAlignment =
+                        true;
+                }
+            }
+        }
+
+        if (vrHmdMovementActive)
         {
             result->forwardmove =
                 ClampChar(
@@ -2355,7 +2547,14 @@ int __cdecl CL_MouseEvent(int x, int y, int dx, int dy)
         }
         else
         {
-            UI_MouseEvent(0, x, y);
+            // KISAK_SP_VR_MENU_MOUSE_HANDOFF_V1
+            // IN_MouseMove polls every frame.  Do not let an unchanged
+            // desktop cursor overwrite the OpenXR controller menu cursor.
+            // Actual desktop mouse motion still takes ownership normally.
+            if (dx != 0 || dy != 0)
+            {
+                UI_MouseEvent(0, x, y);
+            }
             return 0;
         }
     }

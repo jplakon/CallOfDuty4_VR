@@ -18,6 +18,47 @@
 
 #include <algorithm>
 
+#if defined(KISAK_SP) && defined(KISAK_OPENXR_ENABLED)
+#include <atomic>
+
+namespace
+{
+// KISAK_SP_VR_GPU_SHARED_BRIDGE_V1
+// KISAK_SP_VR_GPU_SHARED_BRIDGE_TEXTURE_FIX_V2
+std::atomic<bool>
+    g_spVrLoggedDynamicDefaultTextures{false};
+
+void Image_SpVrMakeStaticTextureExCompatible(
+    uint32_t& usage,
+    D3DPOOL& pool)
+{
+    if (!R_SpVrD3D9ExDeviceActive() ||
+        usage != 0u ||
+        pool != D3DPOOL_MANAGED)
+    {
+        return;
+    }
+
+    usage = D3DUSAGE_DYNAMIC;
+    pool = D3DPOOL_DEFAULT;
+
+    bool expected = false;
+
+    if (g_spVrLoggedDynamicDefaultTextures
+            .compare_exchange_strong(
+                expected,
+                true,
+                std::memory_order_relaxed))
+    {
+        Com_Printf(
+            8,
+            "[VR] D3D9Ex static textures use "
+            "lockable dynamic default-pool resources.\n");
+    }
+}
+}
+#endif
+
 static const char *g_imageProgNames[14] =
 {
   "$shadow_cookie",
@@ -1125,7 +1166,25 @@ void __cdecl Image_CreateCubeTexture_PC(
     image->mapType = MAPTYPE_CUBE;
     if (!gfxMetrics.canMipCubemaps)
         mipmapCount = 1;
-    hr = dx.device->CreateCubeTexture(edgeLen, mipmapCount, 0, imageFormat, D3DPOOL_MANAGED, (IDirect3DCubeTexture9 **)&image->texture, 0);
+
+    uint32_t textureUsage = 0u;
+    D3DPOOL texturePool = D3DPOOL_MANAGED;
+
+#if defined(KISAK_SP) && defined(KISAK_OPENXR_ENABLED)
+    Image_SpVrMakeStaticTextureExCompatible(
+        textureUsage,
+        texturePool);
+#endif
+
+    hr = dx.device->CreateCubeTexture(
+        edgeLen,
+        mipmapCount,
+        textureUsage,
+        imageFormat,
+        texturePool,
+        (IDirect3DCubeTexture9 **)&image->texture,
+        0);
+
     if (hr < 0)
     {
         v4 = R_ErrorDescription(hr);
@@ -1178,14 +1237,38 @@ void __cdecl Image_Create3DTexture_PC(
     image->depth = depth;
     image->mapType = MAPTYPE_3D;
     usage = Image_GetUsage(imageFlags, imageFormat);
-    if ((imageFlags & 0x40000) != 0)
-    {
-        v7 = dx.device->CreateVolumeTexture(width, height, depth, mipmapCount, 0, imageFormat, D3DPOOL_SYSTEMMEM, (IDirect3DVolumeTexture9 **)&image->texture, 0);
-    }
-    else
-    {
-        v7 = dx.device->CreateVolumeTexture(width, height, depth, mipmapCount, 0, imageFormat, (_D3DPOOL)(usage == 0), (IDirect3DVolumeTexture9 **)&image->texture, 0);
-    }
+
+    const bool explicitlySystemMemory =
+        (imageFlags & 0x40000) != 0;
+
+    uint32_t textureUsage =
+        explicitlySystemMemory
+            ? 0u
+            : usage;
+
+    D3DPOOL texturePool =
+        explicitlySystemMemory
+            ? D3DPOOL_SYSTEMMEM
+            : static_cast<D3DPOOL>(
+                usage == 0);
+
+#if defined(KISAK_SP) && defined(KISAK_OPENXR_ENABLED)
+    Image_SpVrMakeStaticTextureExCompatible(
+        textureUsage,
+        texturePool);
+#endif
+
+    v7 = dx.device->CreateVolumeTexture(
+        width,
+        height,
+        depth,
+        mipmapCount,
+        textureUsage,
+        imageFormat,
+        texturePool,
+        (IDirect3DVolumeTexture9 **)&image->texture,
+        0);
+
     hr = v7;
     if (v7 < 0)
     {
@@ -1272,26 +1355,34 @@ void __cdecl Image_Create2DTexture_PC(
     image->depth = 1;
     image->mapType = MAPTYPE_2D;
     usage = Image_GetUsage(imageFlags, imageFormat);
-    if ((imageFlags & 0x40000) != 0)
-        v6 = dx.device->CreateTexture(
-            width,
-            height,
-            mipmapCount,
-            usage,
-            imageFormat,
-            D3DPOOL_SYSTEMMEM,
-            (IDirect3DTexture9 **)&image->texture,
-            0);
-    else
-        v6 = dx.device->CreateTexture(
-            width,
-            height,
-            mipmapCount,
-            usage,
-            imageFormat,
-            (_D3DPOOL)(usage == 0),
-            (IDirect3DTexture9 **)&image->texture,
-            0);
+
+    const bool explicitlySystemMemory =
+        (imageFlags & 0x40000) != 0;
+
+    uint32_t textureUsage = usage;
+
+    D3DPOOL texturePool =
+        explicitlySystemMemory
+            ? D3DPOOL_SYSTEMMEM
+            : static_cast<D3DPOOL>(
+                usage == 0);
+
+#if defined(KISAK_SP) && defined(KISAK_OPENXR_ENABLED)
+    Image_SpVrMakeStaticTextureExCompatible(
+        textureUsage,
+        texturePool);
+#endif
+
+    v6 = dx.device->CreateTexture(
+        width,
+        height,
+        mipmapCount,
+        textureUsage,
+        imageFormat,
+        texturePool,
+        (IDirect3DTexture9 **)&image->texture,
+        0);
+
     hr = v6;
     if (v6 < 0)
     {

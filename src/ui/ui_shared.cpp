@@ -4628,6 +4628,47 @@ char __cdecl Menu_IsVisible(UiContext *dc, menuDef_t *menu)
     return 0;
 }
 
+// KISAK_SP_JAVELIN_MENU_DIAGNOSTICS_UI
+static bool s_vrJavelinMenuDiagnosticActive = false;
+static uint32_t s_vrJavelinMenuDiagnosticSequence = 0;
+
+void VR_JavelinMenuDiagnosticSetActive(bool active)
+{
+    s_vrJavelinMenuDiagnosticActive = active;
+}
+
+static void VR_JavelinMenuDiagnostic(
+    const char *stage,
+    const menuDef_t *menu,
+    const itemDef_s *item,
+    int itemIndex)
+{
+    if (!s_vrJavelinMenuDiagnosticActive)
+        return;
+
+    const char *menuName =
+        menu && menu->window.name
+            ? menu->window.name
+            : "<unnamed>";
+    const char *itemName =
+        item && item->window.name
+            ? item->window.name
+            : "<unnamed>";
+    const int itemType = item ? item->type : -1;
+
+    Com_Printf(
+        0,
+        "[VR][JAVELIN][MENU] %u: %s; menu '%s'; "
+        "item %d '%s'; type %d; ptr %p.\n",
+        ++s_vrJavelinMenuDiagnosticSequence,
+        stage,
+        menuName,
+        itemIndex,
+        itemName,
+        itemType,
+        item);
+}
+
 char __cdecl Menu_Paint(UiContext *dc, menuDef_t *menu)
 {
     float fadeCycle; // [esp+1Ch] [ebp-14h]
@@ -4640,6 +4681,7 @@ char __cdecl Menu_Paint(UiContext *dc, menuDef_t *menu)
     ZoneText(menu->window.name, strlen(menu->window.name));
 
     iassert(menu);
+    VR_JavelinMenuDiagnostic("menu enter", menu, nullptr, -1);
 
     if (*(_BYTE *)ui_showMenuOnly->current.integer
         && menu->window.name
@@ -4648,8 +4690,25 @@ char __cdecl Menu_Paint(UiContext *dc, menuDef_t *menu)
         return 0;
     }
 
+    VR_JavelinMenuDiagnostic(
+        "before menu visibility",
+        menu,
+        nullptr,
+        -1);
     if (!Menu_IsVisible(dc, menu))
+    {
+        VR_JavelinMenuDiagnostic(
+            "menu hidden",
+            menu,
+            nullptr,
+            -1);
         return 0;
+    }
+    VR_JavelinMenuDiagnostic(
+        "menu visible",
+        menu,
+        nullptr,
+        -1);
 
     if (menu->soundName)
         UI_PlayLocalSoundAliasByName(dc->localClientNum, menu->soundName);
@@ -4687,7 +4746,19 @@ char __cdecl Menu_Paint(UiContext *dc, menuDef_t *menu)
     Window_Paint(dc, &menu->window, menu->fadeAmount, menu->fadeInAmount, menu->fadeClamp, fadeCycle);
 
     for (i = 0; i < menu->itemCount; ++i)
+    {
+        VR_JavelinMenuDiagnostic(
+            "before item paint",
+            menu,
+            menu->items[i],
+            i);
         Item_Paint(dc, menu->items[i]);
+        VR_JavelinMenuDiagnostic(
+            "item paint complete",
+            menu,
+            menu->items[i],
+            i);
+    }
 
     if (g_debugMode)
     {
@@ -4705,6 +4776,11 @@ char __cdecl Menu_Paint(UiContext *dc, menuDef_t *menu)
             colorMagenta);
     }
 
+    VR_JavelinMenuDiagnostic(
+        "menu exit",
+        menu,
+        nullptr,
+        -1);
     return 1;
 }
 
@@ -5017,8 +5093,22 @@ void __cdecl Item_Paint(UiContext *dc, itemDef_s *item)
     menuDef_t *parent; // [esp+48h] [ebp-4Ch]
     char lowerCaseName[68]; // [esp+4Ch] [ebp-48h] BYREF
 
+    VR_JavelinMenuDiagnostic(
+        "Item_Paint enter",
+        item ? item->parent : nullptr,
+        item,
+        -1);
+    if (!item)
+    {
+        VR_JavelinMenuDiagnostic(
+            "null item skipped",
+            nullptr,
+            nullptr,
+            -1);
+        return;
+    }
+
     parent = item->parent;
-    if (item)
     {
         if (item->window.ownerDrawFlags)
         {
@@ -5029,10 +5119,25 @@ void __cdecl Item_Paint(UiContext *dc, itemDef_s *item)
         }
         if ((item->dvarFlags & 0xC) == 0 || Item_EnableShowViaDvar(item, 4))
         {
+            VR_JavelinMenuDiagnostic(
+                "before item expressions",
+                parent,
+                item,
+                -1);
             if (item->forecolorAExp.numEntries)
                 item->window.foreColor[3] = GetExpressionFloat(dc->localClientNum, &item->forecolorAExp);
+            VR_JavelinMenuDiagnostic(
+                "before item visibility",
+                parent,
+                item,
+                -1);
             if (Item_IsVisible(dc->localClientNum, item))
             {
+                VR_JavelinMenuDiagnostic(
+                    "item visible",
+                    parent,
+                    item,
+                    -1);
                 if (item->rectXExp.numEntries)
                 {
                     v2 = item->parent;
@@ -5047,6 +5152,11 @@ void __cdecl Item_Paint(UiContext *dc, itemDef_s *item)
                     item->window.rect.w = GetExpressionFloat(dc->localClientNum, &item->rectWExp);
                 if (item->rectHExp.numEntries)
                     item->window.rect.h = GetExpressionFloat(dc->localClientNum, &item->rectHExp);
+                VR_JavelinMenuDiagnostic(
+                    "item geometry complete",
+                    parent,
+                    item,
+                    -1);
                 if (item->window.style == 5)
                 {
                     String = (char *)Dvar_GetString(item->dvar);
@@ -5061,8 +5171,18 @@ void __cdecl Item_Paint(UiContext *dc, itemDef_s *item)
                     I_strlwr(lowerCaseName);
                     item->window.background = Material_RegisterHandle(lowerCaseName, item->imageTrack);
                 }
+                VR_JavelinMenuDiagnostic(
+                    "item material complete",
+                    parent,
+                    item,
+                    -1);
                 fadeCycle = (float)parent->fadeCycle;
                 Window_Paint(dc, &item->window, parent->fadeAmount, parent->fadeInAmount, parent->fadeClamp, fadeCycle);
+                VR_JavelinMenuDiagnostic(
+                    "item window paint complete",
+                    parent,
+                    item,
+                    -1);
                 if (g_debugMode)
                 {
                     r = Item_CorrectedTextRect(dc->localClientNum, item);

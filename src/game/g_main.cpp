@@ -2588,6 +2588,7 @@ int __cdecl G_RunFrame(ServerFrameExtent extent, int timeCap)
         Actor_DumpEventListners();
         Dvar_SetBool(g_dumpAIEventListeners, 0);
     }
+    G_SaveLoadStateDiagnosticFrame();
     return 1;
 }
 

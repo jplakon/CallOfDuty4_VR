@@ -11,7 +11,34 @@
 #include <client_mp/client_mp.h>
 #elif KISAK_SP
 #include <cgame/cg_main.h>
+#include "vr/vr_openxr.h"
 #endif
+
+// KISAK_SP_JAVELIN_RETICLE_DIAGNOSTICS
+static uint32_t s_vrJavelinReticleDiagnosticSequence = 0;
+
+static bool VR_JavelinReticleDiagnosticActive(int32_t localClientNum)
+{
+    const cg_s *cgameGlob =
+        CG_GetLocalClientGlobals(localClientNum);
+
+    return BG_GetViewmodelWeaponIndex(
+               &cgameGlob->predictedPlayerState) == 7;
+}
+
+static void VR_JavelinReticleDiagnostic(
+    int32_t localClientNum,
+    const char *stage)
+{
+    if (!VR_JavelinReticleDiagnosticActive(localClientNum))
+        return;
+
+    Com_Printf(
+        0,
+        "[VR][JAVELIN][RETICLE] %u: %s.\n",
+        ++s_vrJavelinReticleDiagnosticSequence,
+        stage);
+}
 
 void __cdecl CG_CalcCrosshairPosition(const cg_s *cgameGlob, float *x, float *y)
 {
@@ -129,7 +156,15 @@ void __cdecl CG_DrawCrosshair(int32_t localClientNum)
 
     PROF_SCOPED("CG_DrawCrosshair");
 
+    VR_JavelinReticleDiagnostic(localClientNum, "CG_DrawCrosshair enter");
     cgameGlob = CG_GetLocalClientGlobals(localClientNum);
+
+#ifdef KISAK_SP
+    // KISAK_SP_VR_FIXED_SCOPED_TURRET_VIEW_FIX_V1
+    // Re-publish this every HUD frame so leaving the fixed rifle immediately
+    // restores the ordinary per-eye compositor.
+    VR_SetFixedScopedTurretState(false);
+#endif
 
     ps = &cgameGlob->predictedPlayerState;
 
@@ -154,7 +189,38 @@ void __cdecl CG_DrawCrosshair(int32_t localClientNum)
             weapIndex = CG_PlayerTurretWeaponIdx(localClientNum);
             if (weapIndex && (weapDefTurret = BG_GetWeaponDef(weapIndex), weapDefTurret->overlayMaterial))
             {
-                CG_DrawAdsOverlay(localClientNum, weapDefTurret, colorWhite, vec2_origin);
+#ifdef KISAK_SP
+                if (VR_IsInitialized() &&
+                    weapDefTurret->overlayInterface ==
+                        WEAPOVERLAYINTERFACE_TURRETSCOPE)
+                {
+                    // The mission-start Barrett is a scoped turret, not a
+                    // held sniper rifle.  Its native material is centered on
+                    // the packed stereo seam.  The compositor replaces it
+                    // with one centered mask and reticle per HMD eye.
+                    VR_SetFixedScopedTurretState(true);
+
+                    static bool loggedVrFixedScopedTurret = false;
+
+                    if (!loggedVrFixedScopedTurret)
+                    {
+                        Com_Printf(
+                            0,
+                            "[VR][FIXED SCOPE] Detected CoD4's scoped-turret "
+                            "path; suppressed the packed native overlay.\n");
+
+                        loggedVrFixedScopedTurret = true;
+                    }
+                }
+                else
+#endif
+                {
+                    CG_DrawAdsOverlay(
+                        localClientNum,
+                        weapDefTurret,
+                        colorWhite,
+                        vec2_origin);
+                }
             }
             else if (!CG_Flashbanged(localClientNum) && drawHud && ps->viewlocked_entNum != ENTITYNUM_NONE)
             {
@@ -167,7 +233,9 @@ void __cdecl CG_DrawCrosshair(int32_t localClientNum)
             if (weapIndex)
             {
                 weapDef = BG_GetWeaponDef(weapIndex);
+                VR_JavelinReticleDiagnostic(localClientNum, "before weapon reticle");
                 reticleAlpha = CG_DrawWeapReticle(localClientNum);
+                VR_JavelinReticleDiagnostic(localClientNum, "weapon reticle complete");
                 if (!CG_Flashbanged(localClientNum) && drawHud)
                 {
                     iassert(localClientNum == 0);
@@ -219,6 +287,7 @@ void __cdecl CG_DrawAdsOverlay(
     int32_t horzAlign; // [esp+60h] [ebp-4h]
 
     iassert(weapDef);
+    VR_JavelinReticleDiagnostic(localClientNum, "CG_DrawAdsOverlay enter");
 
     if (CG_UsingLowResViewPort(localClientNum) && weapDef->overlayMaterialLowRes)
         material = weapDef->overlayMaterialLowRes;
@@ -227,6 +296,7 @@ void __cdecl CG_DrawAdsOverlay(
 
     if (material)
     {
+        VR_JavelinReticleDiagnostic(localClientNum, "ADS overlay material available");
         cgameGlob = CG_GetLocalClientGlobals(localClientNum);
         horzAlign = 2;
         vertAlign = 2;
@@ -333,9 +403,14 @@ void __cdecl CG_DrawAdsOverlay(
                 CG_DrawFrameOverlay(drawPos[0], v6, drawPos[1], v7, color, material);
             }
             if (color[3] > 0.9900000095367432)
+            {
+                VR_JavelinReticleDiagnostic(localClientNum, "before scissor viewport update");
                 CG_UpdateScissorViewport(&cgameGlob->refdef, drawPos, drawSize);
+                VR_JavelinReticleDiagnostic(localClientNum, "scissor viewport update complete");
+            }
         }
     }
+    VR_JavelinReticleDiagnostic(localClientNum, "CG_DrawAdsOverlay exit");
 }
 
 void __cdecl CG_DrawFrameOverlay(
@@ -458,23 +533,55 @@ double __cdecl CG_DrawWeapReticle(int32_t localClientNum)
 
     cgameGlob = CG_GetLocalClientGlobals(localClientNum);
 
+    VR_JavelinReticleDiagnostic(localClientNum, "CG_DrawWeapReticle enter");
+    VR_JavelinReticleDiagnostic(localClientNum, "before reticle zoom query");
     if (CG_GetWeapReticleZoom(cgameGlob, &zoomFrac))
     {
+        VR_JavelinReticleDiagnostic(localClientNum, "reticle zoom active");
         weapIndex = BG_GetViewmodelWeaponIndex(&cgameGlob->predictedPlayerState);
         weapDef = BG_GetWeaponDef(weapIndex);
         color[0] = 1.0f;
         color[1] = 1.0f;
         color[2] = 1.0f;
         color[3] = zoomFrac;
-        CG_CalcCrosshairPosition(cgameGlob, crosshairPos, &crosshairPos[1]);
-        CG_DrawAdsOverlay(localClientNum, weapDef, color, crosshairPos);
+
+#ifdef KISAK_SP
+        const bool vrPhysicalScope =
+            VR_IsInitialized() &&
+            weapDef->overlayInterface !=
+                WEAPOVERLAYINTERFACE_JAVELIN &&
+            (weapDef->overlayMaterial != nullptr ||
+             weapDef->overlayReticle !=
+                 WEAPOVERLAYRETICLE_NONE);
+#else
+        const bool vrPhysicalScope = false;
+#endif
+
+        if (!vrPhysicalScope)
+        {
+            CG_CalcCrosshairPosition(
+                cgameGlob,
+                crosshairPos,
+                &crosshairPos[1]);
+
+            VR_JavelinReticleDiagnostic(localClientNum, "before ADS overlay");
+            CG_DrawAdsOverlay(
+                localClientNum,
+                weapDef,
+                color,
+                crosshairPos);
+            VR_JavelinReticleDiagnostic(localClientNum, "ADS overlay complete");
+        }
+
         crossHairAlpha = 1.0f - zoomFrac;
     }
     else
     {
+        VR_JavelinReticleDiagnostic(localClientNum, "reticle zoom inactive");
         crossHairAlpha = 1.0f;
     }
 
+    VR_JavelinReticleDiagnostic(localClientNum, "CG_DrawWeapReticle exit");
     iassert(crossHairAlpha >= 0 && crossHairAlpha <= 1);
     return crossHairAlpha;
 }

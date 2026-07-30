@@ -3,6 +3,8 @@
 #endif
 
 #include "cg_view.h"
+// KISAK_SP_VR_FIXED_SCOPED_TURRET_CONTROLS_V3_CGVIEW_INCLUDE
+#include "vr/vr_openxr.h"
 #include <EffectsCore/fx_system.h>
 #include "cg_main.h"
 #include "cg_actors.h"
@@ -27,6 +29,27 @@
 
 ClientViewParams clientViewParamsArray[1][1] = { { { 0.0, 0.0, 1.0, 1.0 } } };
 TestEffect s_testEffect[1];
+
+// KISAK_SP_JAVELIN_FRAME_DIAGNOSTICS
+static uint32_t s_vrJavelinFrameDiagnosticSequence = 0;
+
+static bool VR_JavelinFrameDiagnosticActive()
+{
+    return BG_GetViewmodelWeaponIndex(
+               &cgArray[0].predictedPlayerState) == 7;
+}
+
+static void VR_JavelinFrameDiagnostic(const char *stage)
+{
+    if (!VR_JavelinFrameDiagnosticActive())
+        return;
+
+    Com_Printf(
+        0,
+        "[VR][JAVELIN][FRAME] %u: %s.\n",
+        ++s_vrJavelinFrameDiagnosticSequence,
+        stage);
+}
 
 void __cdecl TRACK_cg_view()
 {
@@ -1010,7 +1033,27 @@ void __cdecl CG_ApplyViewAnimation(int localClientNum)
                 cgameGlob->viewModelAxis[3][1] = cgameGlob->refdef.vieworg[1];
                 cgameGlob->viewModelAxis[3][2] = cgameGlob->refdef.vieworg[2];
                 CG_UpdateViewModelPose(weapInfo->viewModelDObj, 0);
-                if (CG_DObjGetWorldTagMatrix(
+                // KISAK_SP_VR_DISABLE_WEAPON_CAMERA_ANIMATION_V1
+                // Keep updating the viewmodel pose, but do not let its
+                // animated tag_camera rotate or translate the player's head.
+                if (VR_IsInitialized())
+                {
+                    static bool loggedVrWeaponCameraSuppressed =
+                        false;
+
+                    if (!loggedVrWeaponCameraSuppressed)
+                    {
+                        Com_Printf(
+                            0,
+                            "[VR][CAMERA] Disabled weapon tag_camera "
+                            "motion; sprint animation can no longer "
+                            "tilt the VR horizon.\n");
+
+                        loggedVrWeaponCameraSuppressed =
+                            true;
+                    }
+                }
+                else if (CG_DObjGetWorldTagMatrix(
                     &cgameGlob->viewModelPose,
                     weapInfo->viewModelDObj,
                     scr_const.tag_camera,
@@ -1359,51 +1402,111 @@ void __cdecl CG_UpdateViewOffset(int localClientNum)
     CL_ResetSkeletonCache();
 }
 
+// KISAK_SP_VR_FIXED_SCOPED_TURRET_CONTROLS_V3_ZOOM_LEGACY_BASE
 void __cdecl UpdateTurretScopeZoom(cg_s *cgameGlob)
 {
-    unsigned int v2; // r3
-    int CurrentCmdNumber; // r3
-    int v4[4]; // r11
-    double value; // fp31
-    const dvar_s *v6; // r3
-    double v7; // fp0
-    double v8; // fp1
-    unsigned int v9; // r3
-    snd_alias_list_t *fireStopSoundPlayer; // r4
-    usercmd_s v11; // [sp+60h] [-60h] BYREF
-
-    if (CG_PlayerUsingScopedTurret(cgameGlob->localClientNum))
+    if (!CG_PlayerUsingScopedTurret(
+            cgameGlob->localClientNum))
     {
-        v2 = CG_PlayerTurretWeaponIdx(cgameGlob->localClientNum);
-        if (BG_GetWeaponDef(v2)->overlayInterface == WEAPOVERLAYINTERFACE_TURRETSCOPE)
+        return;
+    }
+
+    const unsigned int turretWeapon =
+        CG_PlayerTurretWeaponIdx(
+            cgameGlob->localClientNum);
+
+    if (BG_GetWeaponDef(
+            turretWeapon)->overlayInterface !=
+        WEAPOVERLAYINTERFACE_TURRETSCOPE)
+    {
+        return;
+    }
+
+    float zoomInput = 0.0f;
+
+    const bool vrZoomInputAvailable =
+        VR_GetFixedScopedTurretZoomAxis(
+            &zoomInput);
+
+    if (!vrZoomInputAvailable)
+    {
+        usercmd_s usercmd = {};
+
+        CL_GetUserCmd(
+            cgameGlob->localClientNum,
+            CL_GetCurrentCmdNumber(
+                cgameGlob->localClientNum),
+            &usercmd);
+
+        zoomInput =
+            (float)usercmd.forwardmove *
+            (1.0f / 127.0f);
+    }
+
+    const float oldZoom =
+        turretScopeZoom->current.value;
+
+    Dvar_SetFloat(
+        turretScopeZoom,
+        oldZoom +
+            ((float)cgameGlob->frametime * 0.001f) *
+            -zoomInput *
+            turretScopeZoomRate->current.value);
+
+    const float unclampedZoom =
+        turretScopeZoom->current.value;
+
+    if (unclampedZoom <
+        turretScopeZoomMin->current.value)
+    {
+        Dvar_SetFloat(
+            turretScopeZoom,
+            turretScopeZoomMin->current.value);
+    }
+    else if (unclampedZoom >
+             turretScopeZoomMax->current.value)
+    {
+        Dvar_SetFloat(
+            turretScopeZoom,
+            turretScopeZoomMax->current.value);
+    }
+
+    // KISAK_SP_VR_FIXED_SCOPED_TURRET_RUNTIME_V4
+    // The OpenXR fixed-scope compositor owns the visible image and therefore
+    // must receive the value that CoD's flat-screen FOV code also consumes.
+    VR_SetFixedScopedTurretZoomFov(
+        turretScopeZoom->current.value,
+        turretScopeZoomMax->current.value);
+
+    if (fabsf(
+            turretScopeZoom->current.value -
+            oldZoom) > 0.0f)
+    {
+        if (vrZoomInputAvailable &&
+            fabsf(zoomInput) > 0.0f)
         {
-            CurrentCmdNumber = CL_GetCurrentCmdNumber(cgameGlob->localClientNum);
-            CL_GetUserCmd(cgameGlob->localClientNum, CurrentCmdNumber, &v11);
-            v4[1] = (unsigned __int8)v11.forwardmove;
-            v4[2] = cgameGlob->frametime;
-            value = turretScopeZoom->current.value;
-            v4[3] = v11.forwardmove;
-            Dvar_SetFloat(
-                turretScopeZoom,
-                (float)((float)((float)((float)((float)*(__int64 *)&v4[1] * (float)0.001)
-                    * (float)((float)*(__int64 *)&v4[2] * (float)-0.0078740157))
-                    * turretScopeZoomRate->current.value)
-                    + turretScopeZoom->current.value));
-            v6 = turretScopeZoom;
-            v7 = turretScopeZoom->current.value;
-            v8 = turretScopeZoomMin->current.value;
-            if (v7 < v8 || (v8 = turretScopeZoomMax->current.value, v7 > v8))
+            static bool loggedVrFixedScopeZoom = false;
+
+            if (!loggedVrFixedScopeZoom)
             {
-                Dvar_SetFloat(turretScopeZoom, v8);
-                v6 = turretScopeZoom;
+                Com_Printf(
+                    0,
+                    "[VR][FIXED SCOPE] Left-stick vertical now "
+                    "controls Barrett scope zoom.\n");
+
+                loggedVrFixedScopeZoom = true;
             }
-            if (fabsf((float)(v6->current.value - (float)value)) > 0.0f)
-            {
-                v9 = CG_PlayerTurretWeaponIdx(cgameGlob->localClientNum);
-                fireStopSoundPlayer = BG_GetWeaponDef(v9)->fireStopSoundPlayer;
-                if (fireStopSoundPlayer)
-                    CG_PlayClientSoundAlias(cgameGlob->localClientNum, fireStopSoundPlayer);
-            }
+        }
+
+        snd_alias_list_t *zoomSound =
+            BG_GetWeaponDef(
+                turretWeapon)->fireStopSoundPlayer;
+
+        if (zoomSound)
+        {
+            CG_PlayClientSoundAlias(
+                cgameGlob->localClientNum,
+                zoomSound);
         }
     }
 }
@@ -1517,6 +1620,19 @@ void __cdecl CG_CalcViewValues(int localClientNum)
     CG_ApplyViewAnimation(localClientNum);
     CG_PerturbCamera(cgArray);
     CG_CalcFov(localClientNum);
+
+    static bool vrSpGameplayTranslationRecentered = false;
+
+    if (!vrSpGameplayTranslationRecentered &&
+        VR_RecenterHeadPosition())
+    {
+        vrSpGameplayTranslationRecentered = true;
+
+        Com_Printf(
+            0,
+            "[VR] Recentered SP head translation "
+            "at the first gameplay camera.\n");
+    }
 
     const bool vrHeadPositionApplied =
         VR_ApplyHeadPosition(
@@ -1651,6 +1767,7 @@ int __cdecl CG_DrawActiveFrame(
             v18);
     }
     CG_ProcessSnapshots(localClientNum);
+    VR_JavelinFrameDiagnostic("snapshots complete");
     if (!cgArray[0].snap)
         MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\cgame\\cg_view.cpp", 1425, 0, "%s", "cgameGlob->snap");
     if (!cgArray[0].nextSnap)
@@ -1682,6 +1799,7 @@ int __cdecl CG_DrawActiveFrame(
     FX_FillUpdateCmd(localClientNum, v32);
     //Profile_Begin(22);
     R_UpdateNonDependentEffects(v32);
+    VR_JavelinFrameDiagnostic("non-dependent effects complete");
     //Profile_EndInternal(0);
     if (localClientNum)
         MyAssertHandler(
@@ -1716,6 +1834,7 @@ int __cdecl CG_DrawActiveFrame(
         viewlocked_entNum = cgArray[0].predictedPlayerState.viewlocked_entNum;
     else
         viewlocked_entNum = ENTITYNUM_NONE;
+    VR_JavelinFrameDiagnostic("packet entities complete");
     //CG_UpdateRumble(localClientNum); // KISAKTODO 
     if (!cgArray[0].predictedPlayerState.locationSelectionInfo)
     {
@@ -1730,6 +1849,7 @@ int __cdecl CG_DrawActiveFrame(
         cgArray[0].selectedLocation[1] = 0.5;
     }
     CL_Input(localClientNum);
+    VR_JavelinFrameDiagnostic("client input complete");
 #ifndef KISAK_NO_FASTFILES
     CG_ModelPreviewerFrame(cgArray);
     CG_AddModelPreviewerModel(cgArray[0].frametime);
@@ -1738,14 +1858,17 @@ int __cdecl CG_DrawActiveFrame(
         PROF_SCOPED("player state");
         CG_PredictPlayerState(localClientNum);
     }
+    VR_JavelinFrameDiagnostic("player prediction complete");
     {
         PROF_SCOPED("view anim");
         CG_UpdateViewWeaponAnim(localClientNum);
     }
+    VR_JavelinFrameDiagnostic("view weapon animation complete");
     {
         PROF_SCOPED("view values");
         CG_CalcViewValues(localClientNum);
     }
+    VR_JavelinFrameDiagnostic("view values complete");
 
     //PIXBeginNamedEvent_Copy_NoVarArgs(0xFFFFFFFF, "player entity");
     if (cl_freemove->current.integer)
@@ -1753,14 +1876,19 @@ int __cdecl CG_DrawActiveFrame(
     FarPlaneDist = R_GetFarPlaneDist();
     FX_SetNextUpdateCamera(localClientNum, &cgArray[0].refdef, FarPlaneDist);
     R_UpdateSpotLightEffect(v32);
+    VR_JavelinFrameDiagnostic("spotlight effect complete");
     SND_SetListener(
         localClientNum,
         cgArray[0].nextSnap->ps.clientNum,
         cgArray[0].refdef.vieworg,
         cgArray[0].refdef.viewaxis);
+    VR_JavelinFrameDiagnostic("sound listener complete");
     //CG_SetRumbleReceiver(localClientNum, cgArray[0].nextSnap->ps.clientNum, cgArray[0].refdef.vieworg); // KISAKTODO
+    VR_JavelinFrameDiagnostic("before view weapon");
     CG_AddViewWeapon(localClientNum);
+    VR_JavelinFrameDiagnostic("view weapon complete");
     CG_UpdateTestFX(localClientNum);
+    VR_JavelinFrameDiagnostic("test effects complete");
     if (cgArray[0].nextSnap->serverTime != G_GetServerSnapTime())
         MyAssertHandler(
             "c:\\trees\\cod3\\cod3src\\src\\cgame\\cg_view.cpp",
@@ -1769,13 +1897,17 @@ int __cdecl CG_DrawActiveFrame(
             "%s",
             "cgameGlob->nextSnap->serverTime == G_GetServerSnapTime()");
     CG_ProcessEntity(localClientNum, &cgArray[0].predictedPlayerEntity);
+    VR_JavelinFrameDiagnostic("predicted player entity complete");
     if (viewlocked_entNum != ENTITYNUM_NONE)
         CG_AddPacketEntity(localClientNum, viewlocked_entNum);
     GetCeilingHeight(cgArray);
+    VR_JavelinFrameDiagnostic("ceiling query complete");
     DumpAnims(localClientNum);
+    VR_JavelinFrameDiagnostic("animation dump complete");
     //PIXEndNamedEvent();
     //PIXBeginNamedEvent_Copy_NoVarArgs(0xFFFFFFFF, "remaining fx");
     R_UpdateRemainingEffects(v32);
+    VR_JavelinFrameDiagnostic("remaining effects complete");
     //PIXEndNamedEvent();
     //PIXBeginNamedEvent_Copy_NoVarArgs(0xFFFFFFFF, "aim assist");
     AimAssist_UpdateScreenTargets(
@@ -1784,6 +1916,7 @@ int __cdecl CG_DrawActiveFrame(
         cgArray[0].refdefViewAngles,
         cgArray[0].refdef.tanHalfFovX,
         cgArray[0].refdef.tanHalfFovY);
+    VR_JavelinFrameDiagnostic("aim assist complete");
     //PIXEndNamedEvent();
     cgArray[0].refdef.dof.nearStart = cgArray[0].snap->ps.dofNearStart;
     cgArray[0].refdef.dof.nearEnd = cgArray[0].snap->ps.dofNearEnd;
@@ -1793,9 +1926,13 @@ int __cdecl CG_DrawActiveFrame(
     cgArray[0].refdef.dof.farBlur = cgArray[0].snap->ps.dofFarBlur;
     //PIXBeginNamedEvent_Copy_NoVarArgs(0xFFFFFFFF, "draw 2D");
     R_AddCmdProjectionSet2D();
+    VR_JavelinFrameDiagnostic("2D projection command complete");
     DrawShellshockBlend(localClientNum);
+    VR_JavelinFrameDiagnostic("shellshock blend complete");
     //Profile_Begin(350);
+    VR_JavelinFrameDiagnostic("before 2D HUD");
     CG_Draw2D(localClientNum);
+    VR_JavelinFrameDiagnostic("2D HUD complete");
     //Profile_EndInternal(0);
     //PIXEndNamedEvent();
     if (cgArray[0].nextSnap->serverTime != G_GetServerSnapTime())
@@ -1808,7 +1945,9 @@ int __cdecl CG_DrawActiveFrame(
     Sys_AllowSendClientMessages();
     R_Cinematic_SetPaused((CinematicEnum)(cg_paused->current.integer != 0));
     //Profile_Begin(25);
+    VR_JavelinFrameDiagnostic("before stereo scene render");
     CG_DrawActive(localClientNum);
+    VR_JavelinFrameDiagnostic("stereo scene render complete");
     //Profile_EndInternal(0);
     //Profile_EndInternal(0);
     return 1;

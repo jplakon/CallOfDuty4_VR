@@ -560,6 +560,11 @@ bool __cdecl SaveMemory_IsRecentlyLoaded()
     return (unsigned int)(Sys_Milliseconds() - saveMemoryGlob.recentLoadTime) < 0x7D0;
 }
 
+bool __cdecl SaveMemory_HasLoadedGameSinceLastSave()
+{
+    return saveMemoryGlob.recentLoadTime != 0;
+}
+
 int __cdecl SaveMemory_IsCommittedSaveAvailable(const char *filename, int checksum)
 {
     const SaveHeader *Header; // r3
@@ -628,6 +633,11 @@ int __cdecl SaveMemory_CommitSave(SaveGame *save, int saveId)
         saveMemoryGlob.committedGameSave = saveMemoryGlob.currentGameSave;
         saveMemoryGlob.currentGameSave = committedGameSave;
         saveMemoryGlob.committedGameSave->saveState = COMMITTED;
+        Com_Printf(10,
+            "[VR][SAVE][STATE] commit id %d '%s'; body %d bytes.\n",
+            saveMemoryGlob.committedGameSave->header.saveId,
+            saveMemoryGlob.committedGameSave->header.description,
+            saveMemoryGlob.committedGameSave->header.bodySize);
         if (save == (SaveGame *)-1024)
             MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\savememory.cpp", 846, 0, "%s", "save->header.filename");
         SV_SetLastSaveName(save->header.filename);

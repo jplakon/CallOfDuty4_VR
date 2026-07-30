@@ -487,6 +487,99 @@ bool __cdecl LogAccuracyHit(gentity_s *target, gentity_s *attacker)
 // OpenXR blocked-muzzle state used by FireWeapon.
 bool VR_ShouldSuppressRightControllerBlockedMuzzleShot();
 
+#if defined(KISAK_SP) && !defined(DEDICATED)
+// KISAK_VR_SCOPE_BALLISTIC_CONVERGENCE_V1
+// Trace the visible optic ray first, then turn the physical tag_flash ray
+// toward that exact target.  A nearer obstruction seen only from the muzzle
+// remains authoritative when Bullet_Fire performs its normal trace.
+static bool VR_ConvergePhysicalSniperShot(
+    const gentity_s* attacker,
+    weaponParms* wp)
+{
+    if (attacker == nullptr ||
+        wp == nullptr ||
+        wp->weapDef == nullptr ||
+        !wp->weapDef->bRifleBullet)
+    {
+        return false;
+    }
+
+    float scopeOrigin[3] = {};
+    float scopeForward[3] = {};
+
+    if (!VR_GetPhysicalSniperScopeAimWorld(
+            scopeOrigin,
+            scopeForward))
+    {
+        return false;
+    }
+
+    constexpr float kScopeTraceRange = 8192.0f;
+
+    float scopeEnd[3] = {};
+    Vec3Mad(
+        scopeOrigin,
+        kScopeTraceRange,
+        scopeForward,
+        scopeEnd);
+
+    trace_t scopeTrace = {};
+
+    G_LocationalTraceAllowChildren(
+        &scopeTrace,
+        scopeOrigin,
+        scopeEnd,
+        attacker->s.number,
+        0x2806831,
+        riflePriorityMap);
+
+    float convergenceTarget[3] = {
+        scopeEnd[0],
+        scopeEnd[1],
+        scopeEnd[2],
+    };
+
+    if (!scopeTrace.startsolid &&
+        scopeTrace.fraction < 1.0f)
+    {
+        Vec3Lerp(
+            scopeOrigin,
+            scopeEnd,
+            scopeTrace.fraction,
+            convergenceTarget);
+    }
+
+    float convergedForward[3] = {};
+    Vec3Sub(
+        convergenceTarget,
+        wp->muzzleTrace,
+        convergedForward);
+
+    if (Vec3Normalize(convergedForward) <= 0.0001f)
+    {
+        return false;
+    }
+
+    wp->forward[0] = convergedForward[0];
+    wp->forward[1] = convergedForward[1];
+    wp->forward[2] = convergedForward[2];
+
+    static bool loggedVrScopeConvergence = false;
+
+    if (!loggedVrScopeConvergence)
+    {
+        Com_Printf(
+            0,
+            "[VR] Physical sniper bullets now converge from "
+            "tag_flash onto the scope-reticle trace.\n");
+
+        loggedVrScopeConvergence = true;
+    }
+
+    return true;
+}
+#endif
+
 void __cdecl FireWeapon(gentity_s *ent, int gametime)
 {
     float offset[3]; // [esp+18h] [ebp-60h] BYREF
@@ -569,6 +662,12 @@ void __cdecl FireWeapon(gentity_s *ent, int gametime)
 
                 return;
             }
+#endif
+
+#if defined(KISAK_SP) && !defined(DEDICATED)
+            VR_ConvergePhysicalSniperShot(
+                ent,
+                &wp);
 #endif
 
             Bullet_Fire(ent, fAimSpreadAmount, &wp, ent, gametime);
@@ -803,8 +902,38 @@ void __cdecl FireWeaponMelee(gentity_s *ent, int gametime)
 #endif
     {
         wp.weapDef = BG_GetWeaponDef(ent->s.weapon);
-        G_GetPlayerViewOrigin(&ent->client->ps, wp.muzzleTrace);
-        BG_GetPlayerViewDirection(&ent->client->ps, wp.forward, wp.right, wp.up);
+
+#ifdef KISAK_SP
+        // The normal SP melee path traces from ps.viewangles, but the HMD
+        // and tracked weapon do not directly modify those body angles.
+        // Reuse the same authoritative tracked origin/direction already
+        // used for firearm shots so melee follows the visible right hand.
+        CalcMuzzlePoints(
+            ent,
+            &wp);
+
+        static bool loggedVrTrackedMeleeTrace = false;
+
+        if (!loggedVrTrackedMeleeTrace)
+        {
+            Com_Printf(
+                0,
+                "[VR] SP melee trace now uses the tracked weapon "
+                "origin and direction.\n");
+
+            loggedVrTrackedMeleeTrace = true;
+        }
+#else
+        G_GetPlayerViewOrigin(
+            &ent->client->ps,
+            wp.muzzleTrace);
+
+        BG_GetPlayerViewDirection(
+            &ent->client->ps,
+            wp.forward,
+            wp.right,
+            wp.up);
+#endif
         if (!player_meleeRange)
             MyAssertHandler(".\\game\\g_weapon.cpp", 577, 0, "%s", "player_meleeRange");
         if (!player_meleeWidth)

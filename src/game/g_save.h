@@ -141,6 +141,7 @@ int __cdecl G_LoadWeapons(SaveGame *save);
 void __cdecl G_InitLoadGame(SaveGame *save);
 void __cdecl G_LoadMainState(SaveGame *save);
 void __cdecl G_LoadGame(int checksum, SaveGame *save);
+void G_SaveLoadStateDiagnosticFrame();
 int __cdecl G_LoadErrorCleanup();
 
 

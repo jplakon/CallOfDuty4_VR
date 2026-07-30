@@ -2,12 +2,113 @@
 
 #ifdef KISAK_MP
 #include <client_mp/client_mp.h>
+#elif defined(KISAK_SP)
+#include <cstdlib>
 #endif
 
 ScreenPlacement scrPlaceView[1];
 ScreenPlacement scrPlaceFull;
 float cg_hudSplitscreenScale;
 ScreenPlacement scrPlaceFullUnsafe;
+
+
+#ifdef KISAK_SP
+namespace
+{
+float VR_ReadHudSafeAreaFraction(const char *name)
+{
+    const char *value = std::getenv(name);
+
+    if (value == nullptr || *value == '\0')
+    {
+        return 1.0f;
+    }
+
+    char *parseEnd = nullptr;
+    float fraction = std::strtof(value, &parseEnd);
+
+    if (parseEnd == value || *parseEnd != '\0')
+    {
+        Com_PrintWarning(
+            0,
+            "[VR][HUD] Ignoring invalid %s value '%s'.\n",
+            name,
+            value);
+        return 1.0f;
+    }
+
+    if (fraction < 0.5f)
+    {
+        fraction = 0.5f;
+    }
+    else if (fraction > 1.0f)
+    {
+        fraction = 1.0f;
+    }
+
+    return fraction;
+}
+
+void VR_ApplyHudSafeArea(
+    ScreenPlacement *scrPlace,
+    float viewportWidth,
+    float viewportHeight)
+{
+    const float horizontalFraction =
+        VR_ReadHudSafeAreaFraction("KISAK_VR_HUD_SAFE_X");
+    const float verticalFraction =
+        VR_ReadHudSafeAreaFraction("KISAK_VR_HUD_SAFE_Y");
+
+    if (horizontalFraction >= 1.0f &&
+        verticalFraction >= 1.0f)
+    {
+        return;
+    }
+
+    const float horizontalInset =
+        (1.0f - horizontalFraction) *
+        0.5f *
+        viewportWidth;
+    const float verticalInset =
+        (1.0f - verticalFraction) *
+        0.5f *
+        viewportHeight;
+
+    scrPlace->realViewableMin[0] = horizontalInset;
+    scrPlace->realViewableMin[1] = verticalInset;
+    scrPlace->realViewableMax[0] =
+        viewportWidth - horizontalInset;
+    scrPlace->realViewableMax[1] =
+        viewportHeight - verticalInset;
+
+    scrPlace->virtualViewableMin[0] =
+        scrPlace->realViewableMin[0] *
+        scrPlace->scaleRealToVirtual[0];
+    scrPlace->virtualViewableMin[1] =
+        scrPlace->realViewableMin[1] *
+        scrPlace->scaleRealToVirtual[1];
+    scrPlace->virtualViewableMax[0] =
+        scrPlace->realViewableMax[0] *
+        scrPlace->scaleRealToVirtual[0];
+    scrPlace->virtualViewableMax[1] =
+        scrPlace->realViewableMax[1] *
+        scrPlace->scaleRealToVirtual[1];
+
+    static bool loggedHudSafeArea = false;
+
+    if (!loggedHudSafeArea)
+    {
+        Com_Printf(
+            0,
+            "[VR][HUD] Applied %.2f horizontal and %.2f vertical "
+            "in-game HUD safe area.\n",
+            horizontalFraction,
+            verticalFraction);
+        loggedHudSafeArea = true;
+    }
+}
+}
+#endif
 
 void __cdecl ScrPlace_SetupFloatViewport(
     ScreenPlacement *scrPlace,
@@ -216,6 +317,16 @@ void __cdecl ScrPlace_SetupViewport(
     v6 = (float)viewportY;
     v5 = (float)viewportX;
     ScrPlace_SetupFloatViewport(scrPlace, v5, v6, v7, v8);
+
+
+#ifdef KISAK_SP
+    // Only the in-game view placement gets the VR safe rectangle.
+    // Full-screen fades, menus, and cinematics retain their original extent.
+    if (scrPlace == scrPlaceView)
+    {
+        VR_ApplyHudSafeArea(scrPlace, v7, v8);
+    }
+#endif
 }
 
 void __cdecl ScrPlace_SetupUnsafeViewport(
@@ -366,6 +477,37 @@ void __cdecl ScrPlace_ApplyRect(
         MyAssertHandler(".\\client\\screen_placement.cpp", 246, 0, "%s", "w");
     if (!h)
         MyAssertHandler(".\\client\\screen_placement.cpp", 247, 0, "%s", "h");
+#ifdef KISAK_SP
+    // Edge HUD items with left-safe and bottom-safe alignment form the
+    // action-slot/status cluster ([5], [6], weapon icon, and its count).
+    // Scaling virtual positions and dimensions before screen placement
+    // keeps the complete cluster attached to its safe-area corner.
+    if (scrPlace == scrPlaceView &&
+        horzAlign == 1 &&
+        vertAlign == 3)
+    {
+        static const float vrBottomLeftHudScale =
+            VR_ReadHudSafeAreaFraction(
+                "KISAK_VR_HUD_BOTTOM_LEFT_SCALE");
+
+        *x *= vrBottomLeftHudScale;
+        *y *= vrBottomLeftHudScale;
+        *w *= vrBottomLeftHudScale;
+        *h *= vrBottomLeftHudScale;
+
+        static bool loggedBottomLeftHudScale = false;
+
+        if (!loggedBottomLeftHudScale)
+        {
+            Com_Printf(
+                0,
+                "[VR][HUD] Scaled the bottom-left HUD cluster to %.2f.\n",
+                vrBottomLeftHudScale);
+            loggedBottomLeftHudScale = true;
+        }
+    }
+#endif
+
     switch (horzAlign)
     {
     case 0:

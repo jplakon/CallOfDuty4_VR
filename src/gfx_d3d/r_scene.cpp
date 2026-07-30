@@ -1,4 +1,5 @@
 #include "r_scene.h"
+#include <cstdlib>
 #include "vr/vr_openxr.h"
 #if defined(XR_USE_GRAPHICS_API_D3D11)
 #include "vr/vr_d3d9_capture.h"
@@ -48,6 +49,18 @@
 //struct GfxScene scene      859c8280     gfx_d3d : r_scene.obj
 GfxViewParms lockPvsViewParms;
 GfxScene scene;
+
+// KISAK_SP_VR_STEREO_SHADOW_RESTORATION_V1
+static bool R_VrStereoShadowMapsRequested()
+{
+    const char* requestedValue =
+        std::getenv("KISAK_VR_SHADOWS");
+
+    return
+        requestedValue != nullptr &&
+        requestedValue[0] == '1' &&
+        requestedValue[1] == '\0';
+}
 
 void __cdecl TRACK_r_scene()
 {
@@ -1419,7 +1432,32 @@ void __cdecl R_UpdateLodParms(const refdef_s *refdef, GfxLodParms *lodParms)
         lodParms->origin[1] = refdef->vieworg[1];
         lodParms->origin[2] = refdef->vieworg[2];
     }
-    invFovScale = refdef->tanHalfFovY * 2.118673086166382;
+    float lodTanHalfFovY =
+        refdef->tanHalfFovY;
+
+#if defined(KISAK_SP) && defined(XR_USE_GRAPHICS_API_D3D11)
+    if (VR_D3D9IsSameFrameStereoEnabled() &&
+        lodTanHalfFovY > 1.0f)
+    {
+        lodTanHalfFovY = 1.0f;
+
+        static bool loggedSpVrLodClamp = false;
+
+        if (!loggedSpVrLodClamp)
+        {
+            Com_Printf(
+                0,
+                "[VR] Clamped SP VR LOD FOV scale "
+                "to prevent premature distant-model culling.\n");
+
+            loggedSpVrLodClamp = true;
+        }
+    }
+#endif
+
+    invFovScale =
+        lodTanHalfFovY *
+        2.118673086166382;
     value = r_lodBiasRigid->current.value;
     lodParms->ramp[0].scale = r_lodScaleRigid->current.value * invFovScale;
     lodParms->ramp[0].bias = value * invFovScale;
@@ -1558,6 +1596,49 @@ void __cdecl R_GenerateSortedDrawSurfs(
     }
 #endif
     dynamicShadowType = R_DynamicShadowType();
+
+#if defined(KISAK_SP) && defined(XR_USE_GRAPHICS_API_D3D11)
+    const bool vrStereoShadowMapsRequested =
+        VR_D3D9IsSameFrameStereoEnabled() &&
+        R_VrStereoShadowMapsRequested() &&
+        dynamicShadowType == SHADOW_MAP;
+
+    if (VR_D3D9IsSameFrameStereoEnabled() &&
+        !vrStereoShadowMapsRequested)
+    {
+        dynamicShadowType =
+            SHADOW_NONE;
+
+        static bool loggedSpVrDynamicShadowDisable = false;
+
+        if (!loggedSpVrDynamicShadowDisable)
+        {
+            Com_Printf(
+                0,
+                "[VR] Disabled SP dynamic shadows during "
+                "same-frame stereo to stabilize lighting. "
+                "Set KISAK_VR_SHADOWS=1 to test the synchronized "
+                "shadow-map path.\n");
+
+            loggedSpVrDynamicShadowDisable = true;
+        }
+    }
+    else if (vrStereoShadowMapsRequested)
+    {
+        static bool loggedSpVrShadowRestore = false;
+
+        if (!loggedSpVrShadowRestore)
+        {
+            Com_Printf(
+                0,
+                "[VR][SHADOWS] Enabled synchronized SP VR "
+                "dynamic shadow maps.\n");
+
+            loggedSpVrShadowRestore = true;
+        }
+    }
+#endif
+
     rg.sunShadowFull = r_rendererInUse->current.integer == 1;
     if (rg.sunShadowFull)
     {
@@ -1653,7 +1734,8 @@ void __cdecl R_GenerateSortedDrawSurfs(
         {
             R_AddAllBspDrawSurfacesCamera();
             const bool vrStereoSunShadowsDisabled =
-                VR_D3D9IsSameFrameStereoEnabled();
+                VR_D3D9IsSameFrameStereoEnabled() &&
+                !R_VrStereoShadowMapsRequested();
 
             if (vrStereoSunShadowsDisabled)
             {

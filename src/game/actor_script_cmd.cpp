@@ -1075,17 +1075,49 @@ void __cdecl ActorCmd_Teleport(scr_entref_t entref)
         iassert(player);
         iassert(player->sentient);
         Sentient_GetEyePosition(player->sentient, vEyePos);
-        if (PointCouldSeeSpawn(vEyePos, vSpawnPos, player->s.number, entref.entnum))
+
+        // The early scoutsniper two-guard sequence teleports the fixed MacMillan
+        // actor after the player's shot.  A clear trace at this exact location can
+        // reject that scripted move, but the GSC does not retry it; the following
+        // checkpoint then preserves a companion who can never reach his next node.
+        // Keep the original visibility protection everywhere except this observed
+        // actor/map/location combination.
+        const float scoutsniperDeltaX = player->r.currentOrigin[0] + 8912.55f;
+        const float scoutsniperDeltaY = player->r.currentOrigin[1] + 10788.38f;
+        const bool recoverScoutsniperCompanion =
+            ent->s.number == 814
+            && !I_stricmp(Dvar_GetString("mapname"), "scoutsniper")
+            && scoutsniperDeltaX * scoutsniperDeltaX
+                + scoutsniperDeltaY * scoutsniperDeltaY < 1048576.0f;
+
+        if (recoverScoutsniperCompanion)
         {
-            Com_DPrintf(18, "Teleport (of actor %i) failed because player could see goal pos.\n", ent->s.number);
-            Scr_AddInt(0);
-            return;
+            Com_Printf(18,
+                "[VR][SCOUTSNIPER] Recovered companion teleport for actor %i at level time %i: "
+                "(%.2f %.2f %.2f) -> (%.2f %.2f %.2f).\n",
+                ent->s.number,
+                level.time,
+                ent->r.currentOrigin[0],
+                ent->r.currentOrigin[1],
+                ent->r.currentOrigin[2],
+                vSpawnPos[0],
+                vSpawnPos[1],
+                vSpawnPos[2]);
         }
-        if (PointCouldSeeSpawn(vEyePos, ent->r.currentOrigin, player->s.number, entref.entnum))
+        else
         {
-            Com_DPrintf(18, "Teleport failed because player could see actor (%i).\n", ent->s.number);
-            Scr_AddInt(0);
-            return;
+            if (PointCouldSeeSpawn(vEyePos, vSpawnPos, player->s.number, entref.entnum))
+            {
+                Com_DPrintf(18, "Teleport (of actor %i) failed because player could see goal pos.\n", ent->s.number);
+                Scr_AddInt(0);
+                return;
+            }
+            if (PointCouldSeeSpawn(vEyePos, ent->r.currentOrigin, player->s.number, entref.entnum))
+            {
+                Com_DPrintf(18, "Teleport failed because player could see actor (%i).\n", ent->s.number);
+                Scr_AddInt(0);
+                return;
+            }
         }
         if (distSquared <= 16384.0)
             goto LABEL_16;
