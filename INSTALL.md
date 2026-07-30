@@ -65,10 +65,18 @@ main\console.log
 
 **Death From Above is not supported in `v0.9.0-beta.1`.**
 
-DEATH_FROM_ABOVE_SKIP_INSTRUCTIONS_HERE
+To skip **Death From Above**:
 
-The release author must replace the line above with the exact tested skip
-procedure before publishing the first paid build.
+1. From the main menu, open **Options -> Game Options** and set
+   **Enable Console** to **Yes**.
+2. Press `~` to open the console. If necessary, use `Shift+~`.
+3. Enter `/spmap bog_b` and press Enter.
+4. This loads **War Pig**, the mission immediately following
+   **Death From Above**.
+
+Loading `bog_b` directly does not mark Death From Above as completed in the
+original profile. If the campaign menu later returns to the unsupported
+mission, repeat `/spmap bog_b`.
 
 ## Common problems
 

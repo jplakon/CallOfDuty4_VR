@@ -1,30 +1,46 @@
 # Controls
 
-The beta uses motion-controller aiming plus VR-specific bindings for firing,
-use, reload, stance, sprint, melee, weapon cycling, night vision, grenades, and
-mission weapons.
+This controller map applies to Meta Quest Touch controllers. Other OpenXR
+controllers may use different runtime bindings.
 
-Before the first release, replace this section with the exact controller map
-confirmed on the final build.
+| Action | Controller binding |
+|---|---|
+| Move | Left thumbstick; movement follows HMD direction |
+| Snap turn | Right thumbstick left or right |
+| Fire | Right index trigger |
+| Aim / scope | Hold the left grip and physically shoulder the weapon near the headset sight line |
+| Jump | Right A button |
+| Reload | Left index trigger |
+| Use / interact | Left X button |
+| Sprint | Click left thumbstick |
+| Crouch | Tap right B button |
+| Prone | Hold right B button |
+| Melee | Click right thumbstick |
+| Frag grenade | Hold left Y for at least 0.3 seconds, then release to throw |
+| Flashbang / tactical grenade | Right grip |
+| Next weapon | Tap left Y |
+| Pause / menu | Left controller menu button |
+| Night vision | Right thumbstick down |
+| Rifle grenade launcher | Right thumbstick up |
 
-CONTROLLER_MAPPING_MUST_BE_VERIFIED_HERE
+## Right-thumbrest mission controls
 
-Include at least:
+Touch and hold the right controller's thumbrest sensor while moving the left
+thumbstick. Normal locomotion is suspended while this modifier is active.
 
-| Action | Right controller | Left controller |
-|---|---|---|
-| Fire | VERIFY | — |
-| Aim / scope | VERIFY | VERIFY |
-| Reload | VERIFY | VERIFY |
-| Use / interact | VERIFY | VERIFY |
-| Sprint | VERIFY | VERIFY |
-| Crouch / prone | VERIFY | VERIFY |
-| Melee | VERIFY | VERIFY |
-| Frag grenade | VERIFY | VERIFY |
-| Flashbang | VERIFY | VERIFY |
-| Night vision | VERIFY | VERIFY |
-| Weapon cycle | VERIFY | VERIFY |
-| Mission weapons | VERIFY | VERIFY |
+| Direction | Action |
+|---|---|
+| Left stick up | Rifle grenade launcher / weapon slot 5 |
+| Left stick down | Night vision |
+| Left stick left | Airstrike / mission action slot 6 |
+| Left stick right | C4 / mission action slot 7 |
 
-Document any mission-specific exception separately. Do not infer a binding
-from a patch filename; test it in the packaged executable.
+## Mission-specific weapons
+
+- For the Javelin and Stinger, aim with the right controller, hold the left
+  grip, bring the weapon into the eye-level aiming pose, wait for target lock,
+  and fire with the right trigger.
+- Mounted and vehicle weapons aim with the right controller and fire with the
+  right trigger.
+- **Death From Above** is unsupported in this beta. Follow the skip procedure
+  in `INSTALL.md`.

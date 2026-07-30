@@ -5,7 +5,7 @@ This list applies to the `v0.9.0-beta.1` release target.
 ## Unsupported mission
 
 - **Death From Above is not playable in VR and must be skipped.**
-- The exact tested skip procedure must be added to `INSTALL.md` before release.
+- Skip instructions are documented in `INSTALL.md`; the next playable mission is **War Pig** (`bog_b`).
 
 ## Hardware and runtimes
 
