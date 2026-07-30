@@ -56,7 +56,7 @@ def git(root: Path, *args: str, allow_failure: bool = False) -> str:
     if result.returncode and not allow_failure:
         detail = result.stderr.strip() or result.stdout.strip()
         fail(f"git {' '.join(args)} failed: {detail}")
-    return result.stdout.strip()
+    return result.stdout.rstrip()
 
 
 def sha256(data: bytes) -> str:
