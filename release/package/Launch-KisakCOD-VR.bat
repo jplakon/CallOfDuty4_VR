@@ -36,7 +36,6 @@ if "%KISAK_VR_DIAGNOSTICS%"=="1" (
 )
 
 "%~dp0KisakCOD-sp.exe" ^
-  +set developer %VR_DEVELOPER% ^
   +set logfile 2 ^
   +set r_fullscreen 0 ^
   +set r_customMode %VR_CUSTOM_MODE% ^
@@ -52,11 +51,14 @@ if "%KISAK_VR_DIAGNOSTICS%"=="1" (
   +set sm_sunEnable 1 ^
   +set sm_spotEnable 1 ^
   +set sm_maxLights 4 ^
-  +set com_statmon 0 ^
-  +set cg_drawFPS 0 ^
   +set cg_drawPerformanceWarnings 0 ^
+  +set developer 0 ^
+  +set developer_script 0 ^
+  +set uiscript_debug 0 ^
+  +set con_errormessagetime 0 ^
   +set con_minicon 0 ^
-  +set con_errormessagetime %VR_ERROR_TIME% ^
+  +set cg_drawFPS 0 ^
+  +set com_statmon 0 ^
   +spmap cargoship
 
 set "VR_EXIT_CODE=%ERRORLEVEL%"
