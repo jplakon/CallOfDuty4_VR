@@ -1666,6 +1666,33 @@ void __cdecl Script_SetDvar(UiContext *dc, itemDef_s *item, const char **args)
     }
 }
 
+#ifdef KISAK_SP
+static void UI_RedirectVRNewGameCommand(
+    itemDef_s *item,
+    char *command,
+    int commandSize)
+{
+    if (!item || !item->parent || !item->parent->window.name)
+        return;
+
+    const char *menuName = item->parent->window.name;
+    const bool isNewGameMenu =
+        !I_stricmp(menuName, "main")
+        || !I_stricmp(menuName, "popmenu_newgame")
+        || !I_stricmp(menuName, "popmenu_overwrite_warning")
+        || !I_stricmp(menuName, "popmenu_autosave_warning");
+
+    if (isNewGameMenu
+        && !I_stricmp(command, "devmap killhouse"))
+    {
+        Com_Printf(
+            13,
+            "[VR] New Game: loading Crew Expendable instead of F.N.G.\n");
+        I_strncpyz(command, "devmap cargoship", commandSize);
+    }
+}
+#endif
+
 void __cdecl Script_Exec(UiContext *dc, itemDef_s *item, const char **args)
 {
     int v3; // eax
@@ -1685,6 +1712,9 @@ void __cdecl Script_ExecHandler(
 
     if (String_Parse(args, val, 1023))
     {
+#ifdef KISAK_SP
+        UI_RedirectVRNewGameCommand(item, val, sizeof(val));
+#endif
         I_strncat(val, 1024, "\n");
         textCallback(localClientNum, controllerIndex, val);
     }
@@ -1726,6 +1756,12 @@ void __cdecl Script_ConditionalExecHandler(
         dvarValue = Dvar_GetVariantString(dvarName);
         if (shouldExec(dvarValue, testValue))
         {
+#ifdef KISAK_SP
+            UI_RedirectVRNewGameCommand(
+                item,
+                command,
+                sizeof(command));
+#endif
             I_strncat(command, 1024, "\n");
             v5 = CL_ControllerIndexFromClientNum(localClientNum);
             textCallback(localClientNum, v5, command);

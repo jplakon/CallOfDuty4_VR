@@ -58,8 +58,7 @@ if "%KISAK_VR_DIAGNOSTICS%"=="1" (
   +set con_errormessagetime 0 ^
   +set con_minicon 0 ^
   +set cg_drawFPS 0 ^
-  +set com_statmon 0 ^
-  +spmap cargoship
+  +set com_statmon 0
 
 set "VR_EXIT_CODE=%ERRORLEVEL%"
 if not "%VR_EXIT_CODE%"=="0" (
