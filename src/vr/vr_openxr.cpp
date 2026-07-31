@@ -9999,10 +9999,8 @@ bool VR_RenderSolidColorFrame(
                 eyeSwapchain.width,
                 eyeSwapchain.height);
 
-            VR_RenderControllerProxies(
-                eyeIndex,
-                eyeSwapchain.width,
-                eyeSwapchain.height);
+            // The colored controller diamonds and rays were development diagnostics.
+            // Keep controller tracking active without drawing the proxy overlay.
         }
 
         g_vrD3dContext->Flush();
