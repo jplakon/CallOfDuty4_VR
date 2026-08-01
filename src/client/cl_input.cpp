@@ -1562,7 +1562,8 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
                 Com_Printf(
                     0,
                     "[VR][INPUT] Separated Touch actions: left X = "
-                    "pickup/activate, left trigger = reload.\n");
+                    "pickup/activate, left trigger = magazine eject "
+                    "or native reload fallback.\n");
 
                 loggedVrBasicButtons = true;
             }

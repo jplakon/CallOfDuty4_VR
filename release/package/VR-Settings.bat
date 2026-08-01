@@ -20,6 +20,11 @@ set "KISAK_VR_OUTPUT_SCALE=1.0"
 set "KISAK_VR_FSR=0"
 set "KISAK_VR_BRIGHTNESS=1.00"
 
+rem Physical magazines for supported rifles, SMGs, and pistols.
+rem Left trigger ejects; squeeze at the left hip draws; release at the
+rem magazine well inserts. Set to 0 to restore trigger-to-reload.
+set "KISAK_VR_MANUAL_RELOAD=1"
+
 rem Set to 0 if synchronized shadows cause corruption or poor performance.
 set "KISAK_VR_SHADOWS=1"
 

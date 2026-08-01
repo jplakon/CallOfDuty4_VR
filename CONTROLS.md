@@ -10,7 +10,7 @@ controllers may use different runtime bindings.
 | Fire | Right index trigger |
 | Aim / scope | Hold the left grip and physically shoulder the weapon near the headset sight line |
 | Jump | Right A button |
-| Reload | Left index trigger |
+| Manual magazine reload | Left trigger to eject; squeeze at left hip to draw; release at magazine well to insert |
 | Use / interact | Left X button |
 | Sprint | Click left thumbstick |
 | Crouch | Tap right B button |
@@ -36,6 +36,13 @@ thumbstick. Normal locomotion is suspended while this modifier is active.
 | Left stick right | C4 / mission action slot 7 |
 
 ## Mission-specific weapons
+
+- Supported detachable-magazine rifles, SMGs, and pistols use physical
+  reloading. Press the left trigger to eject the magazine, move the left
+  controller to your left hip and squeeze to draw a fresh magazine, keep
+  squeezing while moving it to the weapon, then release inside the magazine
+  well. Shotguns, launchers, bolt-action rifles, belt-fed weapons, and weapons
+  without a usable clip model retain left-trigger native reload.
 
 - For the Javelin and Stinger, aim with the right controller, hold the left
   grip, bring the weapon into the eye-level aiming pose, wait for target lock,

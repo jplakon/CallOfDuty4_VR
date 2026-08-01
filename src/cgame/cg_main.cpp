@@ -1556,6 +1556,11 @@ void __cdecl CG_FreeWeapons(int localClientNum)
     XAnimTree_s **p_tree; // r30
     int v4; // r3
 
+    // KISAK_SP_VR_MANUAL_MAGAZINE_RELOAD_V1
+    // Implemented in cg_weapons.cpp alongside the cached world-clip DObjs.
+    extern void VR_FreeManualReloadClipRenderObjectsForShutdown();
+    VR_FreeManualReloadClipRenderObjectsForShutdown();
+
     v2 = 1;
     if (BG_GetNumWeapons() > 1)
     {
@@ -1712,4 +1717,3 @@ int __cdecl CG_PlayEntitySoundAliasByName(int localClientNum, SndEntHandle entit
     SND_AddLengthNotify(v9, v7, SndLengthNotify_Subtitle);
     return v9;
 }
-

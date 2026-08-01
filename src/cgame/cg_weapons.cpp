@@ -66,6 +66,207 @@ static void VR_JavelinDiagnostic(
         object);
 }
 
+#ifdef KISAK_SP
+// KISAK_SP_VR_MANUAL_MAGAZINE_RELOAD_V1
+// World clip models are ordinary one-model DObjs.  Cache one per weapon so
+// their backing allocations and pose pointers remain valid through scene
+// submission; CG_FreeWeapons releases them before map assets are unloaded.
+struct VrManualReloadClipRenderObject
+{
+    DObj_s object = {};
+    XModel* model = nullptr;
+    cpose_t ejectedPose = {};
+    cpose_t heldPose = {};
+    bool created = false;
+};
+
+static VrManualReloadClipRenderObject
+    s_vrManualReloadClipObjects[128] = {};
+
+static void VR_FreeManualReloadClipRenderObjects()
+{
+    for (VrManualReloadClipRenderObject& clipObject :
+         s_vrManualReloadClipObjects)
+    {
+        if (clipObject.created)
+        {
+            DObjFree(&clipObject.object);
+        }
+
+        clipObject =
+            VrManualReloadClipRenderObject{};
+    }
+}
+
+void VR_FreeManualReloadClipRenderObjectsForShutdown()
+{
+    VR_FreeManualReloadClipRenderObjects();
+}
+
+static VrManualReloadClipRenderObject*
+VR_GetManualReloadClipRenderObject(
+    const uint32_t weaponNum,
+    XModel* clipModel)
+{
+    if (weaponNum >=
+            ARRAY_COUNT(
+                s_vrManualReloadClipObjects) ||
+        clipModel == nullptr)
+    {
+        return nullptr;
+    }
+
+    VrManualReloadClipRenderObject& clipObject =
+        s_vrManualReloadClipObjects[weaponNum];
+
+    if (clipObject.created &&
+        clipObject.model != clipModel)
+    {
+        DObjFree(&clipObject.object);
+
+        clipObject =
+            VrManualReloadClipRenderObject{};
+    }
+
+    if (!clipObject.created)
+    {
+        DObjModel_s modelDescription = {};
+        modelDescription.model = clipModel;
+        modelDescription.boneName = 0;
+        modelDescription.ignoreCollision = false;
+
+        DObjCreate(
+            &modelDescription,
+            1u,
+            nullptr,
+            &clipObject.object,
+            0);
+
+        clipObject.model = clipModel;
+        clipObject.created = true;
+
+        clipObject.ejectedPose.eType =
+            ET_GENERAL;
+
+        clipObject.heldPose.eType =
+            ET_GENERAL;
+
+        Com_Printf(
+            0,
+            "[VR][RELOAD] Prepared world clip model '%s' "
+            "for weapon %u.\n",
+            XModelGetName(clipModel),
+            weaponNum);
+    }
+
+    return &clipObject;
+}
+
+static void VR_SetManualReloadClipPose(
+    cpose_t* pose,
+    const float origin[3],
+    const float axis[3][3])
+{
+    if (pose == nullptr ||
+        origin == nullptr ||
+        axis == nullptr)
+    {
+        return;
+    }
+
+    pose->origin[0] = origin[0];
+    pose->origin[1] = origin[1];
+    pose->origin[2] = origin[2];
+
+    AxisToAngles(
+        *reinterpret_cast<const mat3x3*>(axis),
+        pose->angles);
+}
+
+static void VR_AddManualReloadClipModelsToScene(
+    const uint32_t weaponNum,
+    XModel* clipModel,
+    const float lightingOrigin[3])
+{
+    if (clipModel == nullptr ||
+        lightingOrigin == nullptr)
+    {
+        return;
+    }
+
+    bool hideLoadedMagazine = false;
+    bool drawEjectedMagazine = false;
+    bool drawHeldMagazine = false;
+    float ejectedOrigin[3] = {};
+    float ejectedAxis[3][3] = {};
+    float heldOrigin[3] = {};
+    float heldAxis[3][3] = {};
+
+    if (!VR_GetManualMagazineReloadRenderState(
+            static_cast<int>(weaponNum),
+            &hideLoadedMagazine,
+            &drawEjectedMagazine,
+            ejectedOrigin,
+            ejectedAxis,
+            &drawHeldMagazine,
+            heldOrigin,
+            heldAxis) ||
+        (!drawEjectedMagazine &&
+         !drawHeldMagazine))
+    {
+        return;
+    }
+
+    VrManualReloadClipRenderObject* clipObject =
+        VR_GetManualReloadClipRenderObject(
+            weaponNum,
+            clipModel);
+
+    if (clipObject == nullptr)
+    {
+        return;
+    }
+
+    float mutableLightingOrigin[3] = {
+        lightingOrigin[0],
+        lightingOrigin[1],
+        lightingOrigin[2],
+    };
+
+    if (drawEjectedMagazine)
+    {
+        VR_SetManualReloadClipPose(
+            &clipObject->ejectedPose,
+            ejectedOrigin,
+            ejectedAxis);
+
+        R_AddDObjToScene(
+            &clipObject->object,
+            &clipObject->ejectedPose,
+            ENTITYNUM_WORLD,
+            0u,
+            mutableLightingOrigin,
+            0.0f);
+    }
+
+    if (drawHeldMagazine)
+    {
+        VR_SetManualReloadClipPose(
+            &clipObject->heldPose,
+            heldOrigin,
+            heldAxis);
+
+        R_AddDObjToScene(
+            &clipObject->object,
+            &clipObject->heldPose,
+            ENTITYNUM_NONE,
+            0u,
+            mutableLightingOrigin,
+            0.0f);
+    }
+}
+#endif
+
 int32_t g_animRateOffsets[33] =
 {
   -1,
@@ -695,6 +896,8 @@ void __cdecl CG_AddPlayerWeapon(
     {
         iassert(localClientNum == 0);
         weapInfo = &cg_weaponsArray[0][weaponNum];
+        weapDef = BG_GetWeaponDef(weaponNum);
+        iassert(weapDef);
         VR_JavelinDiagnostic("render: enter", weaponNum, weapInfo->viewModelDObj);
         iassert(weapInfo->viewModelDObj);
         if (ps)
@@ -1005,6 +1208,160 @@ void __cdecl CG_AddPlayerWeapon(
             }
 #endif
 
+#ifdef KISAK_SP
+            if (bDrawGun)
+            {
+                const bool detachableMagazineClass =
+                    weapDef->weapClass == WEAPCLASS_RIFLE ||
+                    weapDef->weapClass == WEAPCLASS_SMG ||
+                    weapDef->weapClass == WEAPCLASS_PISTOL;
+
+                const bool detachableMagazineWeapon =
+                    weapDef->worldClipModel != nullptr &&
+                    weapDef->weapType == WEAPTYPE_BULLET &&
+                    detachableMagazineClass &&
+                    !weapDef->bSegmentedReload &&
+                    !weapDef->bBoltAction;
+
+                const uint32_t magazineTagCandidates[] = {
+                    scr_const.tag_clip,
+                    SL_FindString("tag_mag"),
+                    SL_FindString("tag_magazine"),
+                    SL_FindString("tag_clip_animate"),
+                };
+
+                float magazineWellOrigin[3] = {};
+                float magazineWellAxis[3][3] = {
+                    {1.0f, 0.0f, 0.0f},
+                    {0.0f, 1.0f, 0.0f},
+                    {0.0f, 0.0f, 1.0f},
+                };
+
+                uint8_t magazineBoneIndex = 0u;
+                bool foundMagazineWell = false;
+
+                if (detachableMagazineWeapon)
+                {
+                    for (const uint32_t magazineTag :
+                         magazineTagCandidates)
+                    {
+                        if (magazineTag == 0u)
+                        {
+                            continue;
+                        }
+
+                        uint8_t candidateBoneIndex = 0u;
+
+                        if (DObjGetBoneIndex(
+                                weapInfo->viewModelDObj,
+                                magazineTag,
+                                &candidateBoneIndex) &&
+                            CG_DObjGetWorldTagMatrix(
+                                &cgameGlob->viewModelPose,
+                                weapInfo->viewModelDObj,
+                                magazineTag,
+                                magazineWellAxis,
+                                magazineWellOrigin))
+                        {
+                            magazineBoneIndex =
+                                candidateBoneIndex;
+
+                            foundMagazineWell = true;
+                            break;
+                        }
+                    }
+                }
+
+                const int clipIndex =
+                    BG_ClipForWeapon(weaponNum);
+
+                const int ammoIndex =
+                    BG_AmmoForWeapon(weaponNum);
+
+                const bool canManualReload =
+                    foundMagazineWell &&
+                    ps->weaponstate == WEAPON_READY &&
+                    ps->ammoclip[clipIndex] <
+                        weapDef->iClipSize &&
+                    ps->ammo[ammoIndex] > 0;
+
+                VR_UpdateManualMagazineReload(
+                    static_cast<int>(weaponNum),
+                    detachableMagazineWeapon &&
+                        foundMagazineWell,
+                    canManualReload,
+                    magazineWellOrigin,
+                    magazineWellAxis,
+                    cgameGlob->refdef.vieworg,
+                    cgameGlob->refdef.viewaxis);
+
+                bool hideLoadedMagazine = false;
+                bool drawEjectedMagazine = false;
+                bool drawHeldMagazine = false;
+                float ejectedOrigin[3] = {};
+                float ejectedAxis[3][3] = {};
+                float heldOrigin[3] = {};
+                float heldAxis[3][3] = {};
+
+                VR_GetManualMagazineReloadRenderState(
+                    static_cast<int>(weaponNum),
+                    &hideLoadedMagazine,
+                    &drawEjectedMagazine,
+                    ejectedOrigin,
+                    ejectedAxis,
+                    &drawHeldMagazine,
+                    heldOrigin,
+                    heldAxis);
+
+                uint32_t manualHidePartBits[4] = {
+                    weapInfo->partBits[0],
+                    weapInfo->partBits[1],
+                    weapInfo->partBits[2],
+                    weapInfo->partBits[3],
+                };
+
+                if (hideLoadedMagazine &&
+                    foundMagazineWell)
+                {
+                    manualHidePartBits[
+                        magazineBoneIndex >> 5] |=
+                        0x80000000u >>
+                        (magazineBoneIndex & 0x1F);
+                }
+
+                DObjSetHidePartBits(
+                    weapInfo->viewModelDObj,
+                    manualHidePartBits);
+
+                float manualReloadLightingOrigin[3] = {
+                    ps->origin[0],
+                    ps->origin[1],
+                    ps->origin[2] +
+                        ps->viewHeightCurrent,
+                };
+
+                VR_AddManualReloadClipModelsToScene(
+                    weaponNum,
+                    weapDef->worldClipModel,
+                    manualReloadLightingOrigin);
+
+                static bool loggedManualReloadSupport = false;
+
+                if (detachableMagazineWeapon &&
+                    foundMagazineWell &&
+                    !loggedManualReloadSupport)
+                {
+                    Com_Printf(
+                        0,
+                        "[VR][RELOAD] Weapon %u supports physical "
+                        "magazine ejection, hip draw, and insertion.\n",
+                        weaponNum);
+
+                    loggedManualReloadSupport = true;
+                }
+            }
+#endif
+
             VR_JavelinDiagnostic("render: VR grip and muzzle stages complete", weaponNum, weapInfo->viewModelDObj);
             if (bDrawGun
 #ifdef KISAK_SP
@@ -1020,8 +1377,6 @@ void __cdecl CG_AddPlayerWeapon(
                 VR_JavelinDiagnostic("render: before scene submission", weaponNum, weapInfo->viewModelDObj);
                 R_AddDObjToScene(weapInfo->viewModelDObj, &cgameGlob->viewModelPose, ENTITYNUM_NONE, 3u, lightingOrigin, 0.0);
                 VR_JavelinDiagnostic("render: scene submission complete", weaponNum, weapInfo->viewModelDObj);
-                weapDef = BG_GetWeaponDef(weaponNum);
-                iassert(weapDef);
                 v7 = CG_LookingThroughNightVision(localClientNum) && weapDef->laserSightDuringNightvision;
                 if (cg_laserForceOn->current.enabled || v7)
                     CG_Laser_Add(

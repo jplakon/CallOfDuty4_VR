@@ -178,12 +178,49 @@ bool VR_ConsumeSnapTurn(
 
 // Returns the first Touch gameplay-control set:
 // a left-squeeze two-hand weapon pose near the HMD sight line = ADS,
-// right A = jump, left X = pickup/activate, and left trigger = reload.
+// right A = jump, left X = pickup/activate, and left trigger = magazine
+// eject for supported weapons (native reload fallback otherwise).
 bool VR_GetBasicGameplayButtons(
     bool* adsHeld,
     bool* jumpHeld,
     bool* useHeld,
     bool* reloadHeld);
+
+// KISAK_SP_VR_MANUAL_MAGAZINE_RELOAD_V1
+// Publishes the current weapon's physical magazine well and advances the
+// OpenXR manual-reload state machine.  Detachable-magazine weapons use the
+// left trigger to eject, left squeeze near the hip to draw a fresh magazine,
+// and release at the magazine well to insert it.
+void VR_UpdateManualMagazineReload(
+    int weaponIndex,
+    bool supported,
+    bool canReload,
+    const float magazineWellOrigin[3],
+    const float magazineWellAxis[3][3],
+    const float cameraOrigin[3],
+    const float cameraAxis[3][3]);
+
+// Returns the two optional world-space clip poses rendered by cgame, plus
+// whether the loaded viewmodel magazine bone must be hidden.
+bool VR_GetManualMagazineReloadRenderState(
+    int weaponIndex,
+    bool* hideLoadedMagazine,
+    bool* drawEjectedMagazine,
+    float ejectedOrigin[3],
+    float ejectedAxis[3][3],
+    bool* drawHeldMagazine,
+    float heldOrigin[3],
+    float heldAxis[3][3]);
+
+// Used by shared weapon simulation.  Automatic empty-mag reload is blocked
+// while a supported VR weapon is active; insertion briefly exposes a native
+// reload command whose ammo transfer is completed without replaying COD4's
+// canned hand animation.
+bool VR_ManualMagazineReloadSuppressesAutomaticReload(
+    int weaponIndex);
+
+bool VR_IsManualMagazineReloadCommitActive(
+    int weaponIndex);
 
 // Returns the next Touch gameplay-control set:
 // left-stick click = sprint, right-stick click = melee,

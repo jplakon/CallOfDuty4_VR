@@ -128,8 +128,15 @@ bool g_vrRightControllerWeaponFilterValid = false;
 
 bool g_vrLeftControllerForegripPoseValid = false;
 bool g_vrLeftControllerForegripPressed = false;
+bool g_vrLeftControllerSqueezePressedRaw = false;
 
 float g_vrLeftControllerForegripPosition[3] = {};
+
+float g_vrLeftControllerForegripAxis[3][3] = {
+    {1.0f, 0.0f, 0.0f},
+    {0.0f, 1.0f, 0.0f},
+    {0.0f, 0.0f, 1.0f},
+};
 
 float g_vrTwoHandWeaponBlend = 0.0f;
 bool g_vrTwoHandWeaponTargetActive = false;
@@ -471,6 +478,53 @@ bool g_vrLeftYNextWeaponHeld = false;
 
 bool g_vrLeftMenuHeld = false;
 bool g_vrLeftMenuWasHeld = false;
+
+// KISAK_SP_VR_MANUAL_MAGAZINE_RELOAD_V1
+enum class VrManualMagazineReloadStage : std::uint32_t
+{
+    Ready = 0u,
+    Ejected,
+    HoldingFresh,
+};
+
+struct VrManualMagazineReloadState
+{
+    bool settingRead = false;
+    bool enabled = true;
+    bool supported = false;
+    bool canReload = false;
+    int weaponIndex = 0;
+    VrManualMagazineReloadStage stage =
+        VrManualMagazineReloadStage::Ready;
+    bool leftTriggerWasHeld = false;
+    bool leftSqueezeWasHeld = false;
+    bool heldNearMagazineWell = false;
+    bool heldPoseValid = false;
+    std::uint32_t ejectedAtMilliseconds = 0u;
+    std::uint32_t commitUntilMilliseconds = 0u;
+    float magazineWellOrigin[3] = {};
+    float magazineWellAxis[3][3] = {
+        {1.0f, 0.0f, 0.0f},
+        {0.0f, 1.0f, 0.0f},
+        {0.0f, 0.0f, 1.0f},
+    };
+    float ejectedOrigin[3] = {};
+    float ejectedAxis[3][3] = {
+        {1.0f, 0.0f, 0.0f},
+        {0.0f, 1.0f, 0.0f},
+        {0.0f, 0.0f, 1.0f},
+    };
+    float ejectedVelocity[3] = {};
+    float heldOrigin[3] = {};
+    float heldAxis[3][3] = {
+        {1.0f, 0.0f, 0.0f},
+        {0.0f, 1.0f, 0.0f},
+        {0.0f, 0.0f, 1.0f},
+    };
+};
+
+VrManualMagazineReloadState
+    g_vrManualMagazineReload;
 
 
 std::vector<XrViewConfigurationView> g_vrViewConfigs;
@@ -6411,6 +6465,7 @@ void VR_DestroyControllerInput()
 
         g_vrLeftControllerForegripPoseValid = false;
         g_vrLeftControllerForegripPressed = false;
+        g_vrLeftControllerSqueezePressedRaw = false;
         g_vrTwoHandWeaponBlend = 0.0f;
         g_vrTwoHandWeaponTargetActive = false;
         g_vrPoseFocusAimPoseHeld = false;
@@ -6422,6 +6477,19 @@ void VR_DestroyControllerInput()
             0,
             sizeof(
                 g_vrLeftControllerForegripPosition));
+
+        std::memset(
+            g_vrLeftControllerForegripAxis,
+            0,
+            sizeof(
+                g_vrLeftControllerForegripAxis));
+
+        g_vrLeftControllerForegripAxis[0][0] = 1.0f;
+        g_vrLeftControllerForegripAxis[1][1] = 1.0f;
+        g_vrLeftControllerForegripAxis[2][2] = 1.0f;
+
+        g_vrManualMagazineReload =
+            VrManualMagazineReloadState{};
     }
 }
 
@@ -7283,6 +7351,7 @@ void VR_PublishLeftControllerForegripPose(
 
         g_vrLeftControllerForegripPoseValid = false;
         g_vrLeftControllerForegripPressed = false;
+        g_vrLeftControllerSqueezePressedRaw = false;
         return;
     }
 
@@ -7321,6 +7390,34 @@ void VR_PublishLeftControllerForegripPose(
         VR_OpenXrVectorToCod(
             controllerOffsetHeadLocal);
 
+    const XrQuaternionf controllerOrientation =
+        VR_NormalizeQuaternion(
+            controllerGripPose.orientation);
+
+    const XrQuaternionf controllerRelativeToHead =
+        VR_NormalizeQuaternion(
+            VR_MultiplyQuaternion(
+                inverseHeadOrientation,
+                controllerOrientation));
+
+    const VrHeadVector forwardCod =
+        VR_OpenXrVectorToCod(
+            VR_RotateHeadVector(
+                controllerRelativeToHead,
+                {0.0f, 0.0f, -1.0f}));
+
+    const VrHeadVector leftCod =
+        VR_OpenXrVectorToCod(
+            VR_RotateHeadVector(
+                controllerRelativeToHead,
+                {-1.0f, 0.0f, 0.0f}));
+
+    const VrHeadVector upCod =
+        VR_OpenXrVectorToCod(
+            VR_RotateHeadVector(
+                controllerRelativeToHead,
+                {0.0f, 1.0f, 0.0f}));
+
     std::lock_guard<std::mutex> lock(
         g_vrWeaponControllerPoseMutex);
 
@@ -7336,9 +7433,36 @@ void VR_PublishLeftControllerForegripPose(
         controllerPositionCod.z *
         kVrGameUnitsPerMeter;
 
+    g_vrLeftControllerForegripAxis[0][0] =
+        forwardCod.x;
+    g_vrLeftControllerForegripAxis[0][1] =
+        forwardCod.y;
+    g_vrLeftControllerForegripAxis[0][2] =
+        forwardCod.z;
+
+    g_vrLeftControllerForegripAxis[1][0] =
+        leftCod.x;
+    g_vrLeftControllerForegripAxis[1][1] =
+        leftCod.y;
+    g_vrLeftControllerForegripAxis[1][2] =
+        leftCod.z;
+
+    g_vrLeftControllerForegripAxis[2][0] =
+        upCod.x;
+    g_vrLeftControllerForegripAxis[2][1] =
+        upCod.y;
+    g_vrLeftControllerForegripAxis[2][2] =
+        upCod.z;
+
     g_vrLeftControllerForegripPoseValid = true;
-    g_vrLeftControllerForegripPressed =
+
+    g_vrLeftControllerSqueezePressedRaw =
         squeezePressed;
+
+    g_vrLeftControllerForegripPressed =
+        squeezePressed &&
+        g_vrManualMagazineReload.stage ==
+            VrManualMagazineReloadStage::Ready;
 }
 
 
@@ -7765,7 +7889,8 @@ void VR_UpdatePoseFocusAimFromControllers()
             0,
             "[VR][FOCUS] Pose ADS enabled: hold the left squeeze "
             "and shoulder the two-handed weapon near the HMD sight "
-            "line.  The left index trigger is reserved for reload.\n");
+            "line.  The left index trigger is reserved for magazine "
+            "ejection or native reload fallback.\n");
 
         loggedConfiguration = true;
     }
@@ -8137,7 +8262,8 @@ void VR_UpdateControllerActions(
 
             // VR_UpdatePoseFocusAimFromControllers publishes ADS after both
             // tracked hand poses have been evaluated.  The independent left
-            // index trigger now requests reload instead.
+            // index trigger now ejects a supported physical magazine or
+            // requests native reload for an unsupported weapon.
             g_vrLeftTriggerReloadHeld =
                 triggerActive &&
                 triggerValue >= 0.55f;
@@ -10295,6 +10421,624 @@ bool VR_GetRightControllerWeaponGripWorld(
 }
 
 
+void VR_UpdateManualMagazineReload(
+    const int weaponIndex,
+    const bool supported,
+    const bool canReload,
+    const float magazineWellOrigin[3],
+    const float magazineWellAxis[3][3],
+    const float cameraOrigin[3],
+    const float cameraAxis[3][3])
+{
+    if (magazineWellOrigin == nullptr ||
+        magazineWellAxis == nullptr ||
+        cameraOrigin == nullptr ||
+        cameraAxis == nullptr)
+    {
+        return;
+    }
+
+    if (!g_vrManualMagazineReload.settingRead)
+    {
+        const char* requestedSetting =
+            std::getenv(
+                "KISAK_VR_MANUAL_RELOAD");
+
+        if (requestedSetting != nullptr &&
+            requestedSetting[0] != '\0')
+        {
+            if (std::strcmp(
+                    requestedSetting,
+                    "0") == 0)
+            {
+                g_vrManualMagazineReload.enabled = false;
+            }
+            else if (std::strcmp(
+                         requestedSetting,
+                         "1") != 0)
+            {
+                Com_PrintWarning(
+                    0,
+                    "[VR][RELOAD] Ignoring invalid "
+                    "KISAK_VR_MANUAL_RELOAD='%s'; using 1. "
+                    "Valid values are 0 and 1.\n",
+                    requestedSetting);
+            }
+        }
+
+        g_vrManualMagazineReload.settingRead = true;
+
+        Com_Printf(
+            0,
+            "[VR][RELOAD] Physical detachable-magazine reloads "
+            "are %s.\n",
+            g_vrManualMagazineReload.enabled
+                ? "enabled"
+                : "disabled");
+    }
+
+    bool leftTriggerHeld = false;
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrHeadOrientationMutex);
+
+        leftTriggerHeld =
+            g_vrLeftTriggerReloadHeld;
+    }
+
+    const std::uint32_t nowMilliseconds =
+        static_cast<std::uint32_t>(
+            Sys_Milliseconds());
+
+    bool logEjected = false;
+    bool logDrewFresh = false;
+    bool logDroppedFresh = false;
+    bool logInserted = false;
+    bool applyInsertHaptic = false;
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrWeaponControllerPoseMutex);
+
+        const bool effectiveSupport =
+            g_vrManualMagazineReload.enabled &&
+            supported;
+
+        const bool weaponChanged =
+            g_vrManualMagazineReload.weaponIndex !=
+                weaponIndex ||
+            g_vrManualMagazineReload.supported !=
+                effectiveSupport;
+
+        if (weaponChanged)
+        {
+            g_vrManualMagazineReload.weaponIndex =
+                weaponIndex;
+
+            g_vrManualMagazineReload.supported =
+                effectiveSupport;
+
+            g_vrManualMagazineReload.stage =
+                VrManualMagazineReloadStage::Ready;
+
+            g_vrManualMagazineReload.leftTriggerWasHeld =
+                leftTriggerHeld;
+
+            g_vrManualMagazineReload.leftSqueezeWasHeld =
+                g_vrLeftControllerSqueezePressedRaw;
+
+            g_vrManualMagazineReload.heldNearMagazineWell =
+                false;
+
+            g_vrManualMagazineReload.heldPoseValid =
+                false;
+
+            g_vrManualMagazineReload.ejectedAtMilliseconds =
+                0u;
+
+            g_vrManualMagazineReload.commitUntilMilliseconds =
+                0u;
+        }
+
+        g_vrManualMagazineReload.canReload =
+            canReload;
+
+        std::memcpy(
+            g_vrManualMagazineReload.magazineWellOrigin,
+            magazineWellOrigin,
+            sizeof(
+                g_vrManualMagazineReload.magazineWellOrigin));
+
+        std::memcpy(
+            g_vrManualMagazineReload.magazineWellAxis,
+            magazineWellAxis,
+            sizeof(
+                g_vrManualMagazineReload.magazineWellAxis));
+
+        const bool leftSqueezeHeld =
+            g_vrLeftControllerSqueezePressedRaw;
+
+        const bool triggerPressedEdge =
+            leftTriggerHeld &&
+            !g_vrManualMagazineReload.leftTriggerWasHeld;
+
+        const bool squeezePressedEdge =
+            leftSqueezeHeld &&
+            !g_vrManualMagazineReload.leftSqueezeWasHeld;
+
+        const bool squeezeReleasedEdge =
+            !leftSqueezeHeld &&
+            g_vrManualMagazineReload.leftSqueezeWasHeld;
+
+        g_vrManualMagazineReload.leftTriggerWasHeld =
+            leftTriggerHeld;
+
+        g_vrManualMagazineReload.leftSqueezeWasHeld =
+            leftSqueezeHeld;
+
+        if (!effectiveSupport)
+        {
+            return;
+        }
+
+        if (!canReload &&
+            g_vrManualMagazineReload.stage !=
+                VrManualMagazineReloadStage::Ready)
+        {
+            g_vrManualMagazineReload.stage =
+                VrManualMagazineReloadStage::Ready;
+
+            g_vrManualMagazineReload.heldNearMagazineWell =
+                false;
+
+            g_vrManualMagazineReload.heldPoseValid =
+                false;
+        }
+
+        if (canReload &&
+            triggerPressedEdge &&
+            g_vrManualMagazineReload.stage ==
+                VrManualMagazineReloadStage::Ready)
+        {
+            g_vrManualMagazineReload.stage =
+                VrManualMagazineReloadStage::Ejected;
+
+            g_vrManualMagazineReload.ejectedAtMilliseconds =
+                nowMilliseconds;
+
+            std::memcpy(
+                g_vrManualMagazineReload.ejectedOrigin,
+                magazineWellOrigin,
+                sizeof(
+                    g_vrManualMagazineReload.ejectedOrigin));
+
+            std::memcpy(
+                g_vrManualMagazineReload.ejectedAxis,
+                magazineWellAxis,
+                sizeof(
+                    g_vrManualMagazineReload.ejectedAxis));
+
+            for (int component = 0;
+                 component < 3;
+                 ++component)
+            {
+                g_vrManualMagazineReload
+                    .ejectedVelocity[component] =
+                    magazineWellAxis[1][component] *
+                        5.0f -
+                    magazineWellAxis[2][component] *
+                        10.0f;
+            }
+
+            g_vrManualMagazineReload.heldNearMagazineWell =
+                false;
+
+            g_vrManualMagazineReload.heldPoseValid =
+                false;
+
+            g_vrLeftControllerForegripPressed = false;
+            g_vrTwoHandWeaponTargetActive = false;
+
+            logEjected = true;
+        }
+
+        float leftGripWorld[3] = {};
+        float leftGripWorldAxis[3][3] = {};
+
+        if (g_vrLeftControllerForegripPoseValid)
+        {
+            for (int worldComponent = 0;
+                 worldComponent < 3;
+                 ++worldComponent)
+            {
+                leftGripWorld[worldComponent] =
+                    cameraOrigin[worldComponent] +
+                    g_vrLeftControllerForegripPosition[0] *
+                        cameraAxis[0][worldComponent] +
+                    g_vrLeftControllerForegripPosition[1] *
+                        cameraAxis[1][worldComponent] +
+                    g_vrLeftControllerForegripPosition[2] *
+                        cameraAxis[2][worldComponent];
+            }
+
+            for (int axisRow = 0;
+                 axisRow < 3;
+                 ++axisRow)
+            {
+                for (int worldComponent = 0;
+                     worldComponent < 3;
+                     ++worldComponent)
+                {
+                    leftGripWorldAxis[axisRow][worldComponent] =
+                        g_vrLeftControllerForegripAxis[axisRow][0] *
+                            cameraAxis[0][worldComponent] +
+                        g_vrLeftControllerForegripAxis[axisRow][1] *
+                            cameraAxis[1][worldComponent] +
+                        g_vrLeftControllerForegripAxis[axisRow][2] *
+                            cameraAxis[2][worldComponent];
+                }
+            }
+        }
+
+        const bool leftGripAtHip =
+            g_vrLeftControllerForegripPoseValid &&
+            g_vrLeftControllerForegripPosition[0] >= -18.0f &&
+            g_vrLeftControllerForegripPosition[0] <= 24.0f &&
+            g_vrLeftControllerForegripPosition[1] >= 2.0f &&
+            g_vrLeftControllerForegripPosition[2] <= -14.0f &&
+            g_vrLeftControllerForegripPosition[2] >= -42.0f;
+
+        if (g_vrManualMagazineReload.stage ==
+                VrManualMagazineReloadStage::Ejected &&
+            squeezePressedEdge &&
+            leftGripAtHip)
+        {
+            g_vrManualMagazineReload.stage =
+                VrManualMagazineReloadStage::HoldingFresh;
+
+            g_vrManualMagazineReload.heldPoseValid =
+                true;
+
+            std::memcpy(
+                g_vrManualMagazineReload.heldOrigin,
+                leftGripWorld,
+                sizeof(
+                    g_vrManualMagazineReload.heldOrigin));
+
+            std::memcpy(
+                g_vrManualMagazineReload.heldAxis,
+                leftGripWorldAxis,
+                sizeof(
+                    g_vrManualMagazineReload.heldAxis));
+
+            logDrewFresh = true;
+        }
+
+        if (g_vrManualMagazineReload.stage ==
+                VrManualMagazineReloadStage::HoldingFresh &&
+            g_vrLeftControllerForegripPoseValid)
+        {
+            std::memcpy(
+                g_vrManualMagazineReload.heldOrigin,
+                leftGripWorld,
+                sizeof(
+                    g_vrManualMagazineReload.heldOrigin));
+
+            std::memcpy(
+                g_vrManualMagazineReload.heldAxis,
+                leftGripWorldAxis,
+                sizeof(
+                    g_vrManualMagazineReload.heldAxis));
+
+            g_vrManualMagazineReload.heldPoseValid =
+                true;
+
+            const float delta[3] = {
+                leftGripWorld[0] -
+                    magazineWellOrigin[0],
+                leftGripWorld[1] -
+                    magazineWellOrigin[1],
+                leftGripWorld[2] -
+                    magazineWellOrigin[2],
+            };
+
+            const float distanceToMagazineWell =
+                std::sqrt(
+                    delta[0] * delta[0] +
+                    delta[1] * delta[1] +
+                    delta[2] * delta[2]);
+
+            constexpr float insertionRadius = 6.5f;
+
+            g_vrManualMagazineReload.heldNearMagazineWell =
+                distanceToMagazineWell <=
+                    insertionRadius;
+
+            if (g_vrManualMagazineReload
+                    .heldNearMagazineWell)
+            {
+                // Snap only the model's orientation while the controller
+                // remains the positional authority.  This makes insertion
+                // forgiving without teleporting the user's hand.
+                std::memcpy(
+                    g_vrManualMagazineReload.heldAxis,
+                    magazineWellAxis,
+                    sizeof(
+                        g_vrManualMagazineReload.heldAxis));
+            }
+
+            if (squeezeReleasedEdge)
+            {
+                if (g_vrManualMagazineReload
+                        .heldNearMagazineWell)
+                {
+                    g_vrManualMagazineReload.stage =
+                        VrManualMagazineReloadStage::Ready;
+
+                    g_vrManualMagazineReload.heldPoseValid =
+                        false;
+
+                    g_vrManualMagazineReload
+                        .heldNearMagazineWell = false;
+
+                    g_vrManualMagazineReload
+                        .commitUntilMilliseconds =
+                        nowMilliseconds + 400u;
+
+                    logInserted = true;
+                    applyInsertHaptic = true;
+                }
+                else
+                {
+                    g_vrManualMagazineReload.stage =
+                        VrManualMagazineReloadStage::Ejected;
+
+                    g_vrManualMagazineReload.heldPoseValid =
+                        false;
+
+                    g_vrManualMagazineReload
+                        .heldNearMagazineWell = false;
+
+                    g_vrManualMagazineReload
+                        .ejectedAtMilliseconds =
+                        nowMilliseconds;
+
+                    std::memcpy(
+                        g_vrManualMagazineReload.ejectedOrigin,
+                        leftGripWorld,
+                        sizeof(
+                            g_vrManualMagazineReload
+                                .ejectedOrigin));
+
+                    std::memcpy(
+                        g_vrManualMagazineReload.ejectedAxis,
+                        leftGripWorldAxis,
+                        sizeof(
+                            g_vrManualMagazineReload
+                                .ejectedAxis));
+
+                    g_vrManualMagazineReload.ejectedVelocity[0] =
+                        0.0f;
+
+                    g_vrManualMagazineReload.ejectedVelocity[1] =
+                        0.0f;
+
+                    g_vrManualMagazineReload.ejectedVelocity[2] =
+                        -6.0f;
+
+                    logDroppedFresh = true;
+                }
+            }
+        }
+
+        if (g_vrManualMagazineReload.stage !=
+            VrManualMagazineReloadStage::Ready)
+        {
+            g_vrLeftControllerForegripPressed = false;
+            g_vrTwoHandWeaponTargetActive = false;
+        }
+    }
+
+    if (logEjected)
+    {
+        Com_Printf(
+            0,
+            "[VR][RELOAD] Ejected weapon %d magazine. "
+            "Squeeze at the left hip to draw a fresh one.\n",
+            weaponIndex);
+    }
+
+    if (logDrewFresh)
+    {
+        Com_Printf(
+            0,
+            "[VR][RELOAD] Drew a fresh weapon %d magazine. "
+            "Release squeeze inside the magazine well.\n",
+            weaponIndex);
+    }
+
+    if (logDroppedFresh)
+    {
+        Com_Printf(
+            0,
+            "[VR][RELOAD] Dropped the fresh magazine outside "
+            "the magazine well.\n");
+    }
+
+    if (logInserted)
+    {
+        Com_Printf(
+            0,
+            "[VR][RELOAD] Inserted weapon %d magazine; "
+            "committing ammo transfer.\n",
+            weaponIndex);
+    }
+
+    if (applyInsertHaptic)
+    {
+        VR_ApplyRightControllerWeaponHaptic(
+            0.35f,
+            0.045f);
+    }
+}
+
+
+bool VR_GetManualMagazineReloadRenderState(
+    const int weaponIndex,
+    bool* hideLoadedMagazine,
+    bool* drawEjectedMagazine,
+    float ejectedOrigin[3],
+    float ejectedAxis[3][3],
+    bool* drawHeldMagazine,
+    float heldOrigin[3],
+    float heldAxis[3][3])
+{
+    if (hideLoadedMagazine == nullptr ||
+        drawEjectedMagazine == nullptr ||
+        ejectedOrigin == nullptr ||
+        ejectedAxis == nullptr ||
+        drawHeldMagazine == nullptr ||
+        heldOrigin == nullptr ||
+        heldAxis == nullptr)
+    {
+        return false;
+    }
+
+    *hideLoadedMagazine = false;
+    *drawEjectedMagazine = false;
+    *drawHeldMagazine = false;
+
+    const std::uint32_t nowMilliseconds =
+        static_cast<std::uint32_t>(
+            Sys_Milliseconds());
+
+    std::lock_guard<std::mutex> lock(
+        g_vrWeaponControllerPoseMutex);
+
+    if (!g_vrManualMagazineReload.enabled ||
+        !g_vrManualMagazineReload.supported ||
+        g_vrManualMagazineReload.weaponIndex !=
+            weaponIndex)
+    {
+        return false;
+    }
+
+    *hideLoadedMagazine =
+        g_vrManualMagazineReload.stage !=
+        VrManualMagazineReloadStage::Ready;
+
+    if (g_vrManualMagazineReload.ejectedAtMilliseconds !=
+        0u)
+    {
+        const std::uint32_t ageMilliseconds =
+            nowMilliseconds -
+            g_vrManualMagazineReload
+                .ejectedAtMilliseconds;
+
+        constexpr std::uint32_t ejectedLifetimeMilliseconds =
+            1400u;
+
+        if (ageMilliseconds <=
+            ejectedLifetimeMilliseconds)
+        {
+            const float ageSeconds =
+                static_cast<float>(ageMilliseconds) /
+                1000.0f;
+
+            for (int component = 0;
+                 component < 3;
+                 ++component)
+            {
+                ejectedOrigin[component] =
+                    g_vrManualMagazineReload
+                        .ejectedOrigin[component] +
+                    g_vrManualMagazineReload
+                        .ejectedVelocity[component] *
+                        ageSeconds;
+            }
+
+            // CoD world units are inches.  A deliberately reduced visual
+            // gravity keeps the dropped model readable in the headset.
+            ejectedOrigin[2] -=
+                90.0f *
+                ageSeconds *
+                ageSeconds;
+
+            std::memcpy(
+                ejectedAxis,
+                g_vrManualMagazineReload.ejectedAxis,
+                sizeof(
+                    g_vrManualMagazineReload.ejectedAxis));
+
+            *drawEjectedMagazine = true;
+        }
+    }
+
+    if (g_vrManualMagazineReload.stage ==
+            VrManualMagazineReloadStage::HoldingFresh &&
+        g_vrManualMagazineReload.heldPoseValid)
+    {
+        std::memcpy(
+            heldOrigin,
+            g_vrManualMagazineReload.heldOrigin,
+            sizeof(
+                g_vrManualMagazineReload.heldOrigin));
+
+        std::memcpy(
+            heldAxis,
+            g_vrManualMagazineReload.heldAxis,
+            sizeof(
+                g_vrManualMagazineReload.heldAxis));
+
+        *drawHeldMagazine = true;
+    }
+
+    return true;
+}
+
+
+bool VR_ManualMagazineReloadSuppressesAutomaticReload(
+    const int weaponIndex)
+{
+    std::lock_guard<std::mutex> lock(
+        g_vrWeaponControllerPoseMutex);
+
+    return
+        g_vrManualMagazineReload.enabled &&
+        g_vrManualMagazineReload.supported &&
+        g_vrManualMagazineReload.weaponIndex ==
+            weaponIndex;
+}
+
+
+bool VR_IsManualMagazineReloadCommitActive(
+    const int weaponIndex)
+{
+    const std::uint32_t nowMilliseconds =
+        static_cast<std::uint32_t>(
+            Sys_Milliseconds());
+
+    std::lock_guard<std::mutex> lock(
+        g_vrWeaponControllerPoseMutex);
+
+    if (!g_vrManualMagazineReload.enabled ||
+        !g_vrManualMagazineReload.supported ||
+        g_vrManualMagazineReload.weaponIndex !=
+            weaponIndex ||
+        g_vrManualMagazineReload
+                .commitUntilMilliseconds == 0u)
+    {
+        return false;
+    }
+
+    return static_cast<std::int32_t>(
+               g_vrManualMagazineReload
+                   .commitUntilMilliseconds -
+               nowMilliseconds) > 0;
+}
+
+
 bool VR_ApplyRightControllerToWeaponPlacement(
     const float cameraOrigin[3],
     const float cameraAxis[3][3],
@@ -11076,20 +11820,53 @@ bool VR_GetBasicGameplayButtons(
         return false;
     }
 
-    std::lock_guard<std::mutex> lock(
-        g_vrHeadOrientationMutex);
+    bool rawLeftTriggerHeld = false;
 
-    *adsHeld =
-        g_vrPoseFocusAimHeld;
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrHeadOrientationMutex);
 
-    *jumpHeld =
-        g_vrRightAJumpHeld;
+        *adsHeld =
+            g_vrPoseFocusAimHeld;
 
-    *useHeld =
-        g_vrLeftXUseHeld;
+        *jumpHeld =
+            g_vrRightAJumpHeld;
 
-    *reloadHeld =
-        g_vrLeftTriggerReloadHeld;
+        *useHeld =
+            g_vrLeftXUseHeld;
+
+        rawLeftTriggerHeld =
+            g_vrLeftTriggerReloadHeld;
+    }
+
+    const std::uint32_t nowMilliseconds =
+        static_cast<std::uint32_t>(
+            Sys_Milliseconds());
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrWeaponControllerPoseMutex);
+
+        const bool manualReloadActive =
+            g_vrManualMagazineReload.enabled &&
+            g_vrManualMagazineReload.supported;
+
+        const bool manualCommitActive =
+            manualReloadActive &&
+            g_vrManualMagazineReload
+                    .commitUntilMilliseconds != 0u &&
+            static_cast<std::int32_t>(
+                g_vrManualMagazineReload
+                    .commitUntilMilliseconds -
+                nowMilliseconds) > 0;
+
+        // Unsupported weapons retain the original left-trigger reload.
+        // Supported magazines emit BUTTON_RELOAD only after insertion.
+        *reloadHeld =
+            manualReloadActive
+                ? manualCommitActive
+                : rawLeftTriggerHeld;
+    }
 
     return
         *adsHeld ||
@@ -11737,8 +12514,15 @@ bool VR_GetRightControllerWeaponCommand(
         aimValid =
             g_vrRightControllerFinalWeaponAimValid;
 
+        const bool manualMagazineIsOut =
+            g_vrManualMagazineReload.enabled &&
+            g_vrManualMagazineReload.supported &&
+            g_vrManualMagazineReload.stage !=
+                VrManualMagazineReloadStage::Ready;
+
         currentAttackPressed =
-            g_vrRightControllerAttackPressed;
+            g_vrRightControllerAttackPressed &&
+            !manualMagazineIsOut;
 
         forward[0] =
             g_vrRightControllerFinalWeaponForward[0];

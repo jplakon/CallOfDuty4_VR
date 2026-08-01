@@ -12,6 +12,7 @@
 #include <cgame_mp/cg_local_mp.h>
 #elif KISAK_SP
 #include <game/g_local.h>
+#include "vr/vr_openxr.h"
 #endif
 
 //struct WeaponDef **bg_weaponDefs 82800908     bg_weapons.obj
@@ -2121,6 +2122,7 @@ void __cdecl PM_Weapon_CheckForReload(pmove_t *pm)
     WeaponDef *weapDef; // [esp+18h] [ebp-Ch]
     playerState_s *ps; // [esp+1Ch] [ebp-8h]
     bool reloadRequested; // [esp+20h] [ebp-4h]
+    bool suppressAutomaticReload;
 
     doReload = 0;
     ps = pm->ps;
@@ -2176,12 +2178,51 @@ void __cdecl PM_Weapon_CheckForReload(pmove_t *pm)
         default:
             clipWeap = BG_ClipForWeapon(ps->weapon);
             ammoWeap = BG_AmmoForWeapon(ps->weapon);
+            suppressAutomaticReload = false;
+#ifdef KISAK_SP
+            suppressAutomaticReload =
+                VR_ManualMagazineReloadSuppressesAutomaticReload(
+                    ps->weapon);
+
+            if (reloadRequested &&
+                VR_IsManualMagazineReloadCommitActive(
+                    ps->weapon) &&
+                PM_Weapon_AllowReload(ps))
+            {
+                ps->weaponShotCount = 0;
+
+                PM_AddEvent(
+                    ps,
+                    EV_RESET_ADS);
+
+                PM_AddEvent(
+                    ps,
+                    EV_RELOAD_START_NOTIFY);
+
+                // The player's physical insertion replaces the canned
+                // first-person hand animation.  Perform the same ammo move
+                // deterministically in prediction and server simulation.
+                PM_ReloadClip(ps);
+
+                ps->weaponTime = 0;
+                ps->weaponDelay = 0;
+                ps->weaponstate = WEAPON_READY;
+
+                PM_StartWeaponAnim(
+                    ps,
+                    0);
+
+                return;
+            }
+#endif
             if (reloadRequested && PM_Weapon_AllowReload(ps))
                 doReload = 1;
             if (!ps->ammoclip[clipWeap]
                 && ps->ammo[ammoWeap]
                     && ps->weaponstate != 5
-                        && (ps->weaponstate < 22 || ps->weaponstate > 24))
+                        && (ps->weaponstate < 22 || ps->weaponstate > 24)
+                        && !suppressAutomaticReload
+                )
             {
                 doReload = 1;
             }
@@ -2773,6 +2814,7 @@ int __cdecl PM_Weapon_CheckFiringAmmo(playerState_s *ps)
 {
     int v1; // eax
     bool reloadingW; // [esp+4h] [ebp-10h]
+    bool suppressAutomaticReload;
     int ammoNeeded; // [esp+8h] [ebp-Ch]
     WeaponDef *weapDef; // [esp+Ch] [ebp-8h]
 
@@ -2795,9 +2837,32 @@ int __cdecl PM_Weapon_CheckFiringAmmo(playerState_s *ps)
     if (weapDef->weapType != WEAPTYPE_GRENADE && ammoNeeded > ps->ammo[v1])
         PM_AddEvent(ps, EV_NOAMMO);
 
+    suppressAutomaticReload = false;
+#ifdef KISAK_SP
+    suppressAutomaticReload =
+        VR_ManualMagazineReloadSuppressesAutomaticReload(
+            ps->weapon);
+#endif
+
     if (reloadingW)
     {
-        PM_BeginWeaponReload(ps);
+        if (suppressAutomaticReload)
+        {
+            // The physical magazine is still in the player's hands.  Keep
+            // the weapon empty and responsive instead of silently starting
+            // COD4's canned reload animation.
+            Com_BitClearAssert(
+                ps->weaponrechamber,
+                ps->weapon,
+                16);
+
+            PM_ContinueWeaponAnim(ps, 0);
+            ps->weaponTime += 250;
+        }
+        else
+        {
+            PM_BeginWeaponReload(ps);
+        }
     }
     else
     {
