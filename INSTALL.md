@@ -36,7 +36,7 @@ developer's current Quest 3 configuration:
 - GPU bridge enabled
 - Native output scale
 - FSR disabled
-- Brightness: `0.60`
+- Brightness: `1.00` (neutral after sRGB correction)
 - Synchronized shadows enabled
 - Physical scope capture: `1024`
 

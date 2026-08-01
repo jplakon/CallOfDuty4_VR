@@ -336,6 +336,23 @@ ComPtr<ID3D11Texture2D>
 ComPtr<ID3D11ShaderResourceView>
     g_vrCapturedStereoView;
 
+// KISAK_SP_VR_SRGB_CAPTURE_DECODE_V1
+// COD4's D3D9 backbuffer contains display-referred sRGB values, although
+// D3D9Ex exposes the shared resource to D3D11 as plain BGRA UNORM.  Keep one
+// typeless copy per producer slot so an sRGB SRV can perform the required
+// hardware decode before the sRGB OpenXR swapchain encodes the result once.
+std::array<
+    ComPtr<ID3D11Texture2D>,
+    kVrD3D9SharedFrameSlotCount>
+    g_vrSrgbDecodedSharedTextures = {};
+
+std::array<
+    ComPtr<ID3D11ShaderResourceView>,
+    kVrD3D9SharedFrameSlotCount>
+    g_vrSrgbDecodedSharedViews = {};
+
+bool g_vrLoggedSrgbCaptureDecode = false;
+
 std::uint32_t g_vrCapturedStereoWidth = 0u;
 std::uint32_t g_vrCapturedStereoHeight = 0u;
 std::uint64_t g_vrUploadedStereoSerial = 0u;
@@ -3091,9 +3108,15 @@ bool VR_OpenGpuSharedStereoFrame(
     D3D11_TEXTURE2D_DESC description = {};
     sharedTexture->GetDesc(&description);
 
-    if (description.Width != frame.width ||
+    if (frame.slotIndex >=
+            kVrD3D9SharedFrameSlotCount ||
+        description.Width != frame.width ||
         description.Height != frame.height ||
-        description.SampleDesc.Count != 1u)
+        description.MipLevels != 1u ||
+        description.ArraySize != 1u ||
+        description.SampleDesc.Count != 1u ||
+        description.Format !=
+            DXGI_FORMAT_B8G8R8A8_UNORM)
     {
         Com_PrintWarning(
             0,
@@ -3103,23 +3126,89 @@ bool VR_OpenGpuSharedStereoFrame(
         return false;
     }
 
-    ComPtr<ID3D11ShaderResourceView> sharedView;
+    ComPtr<ID3D11Texture2D>& decodedTexture =
+        g_vrSrgbDecodedSharedTextures[
+            frame.slotIndex];
 
-    hr =
-        g_vrD3dDevice->CreateShaderResourceView(
-            sharedTexture.Get(),
-            nullptr,
-            sharedView.GetAddressOf());
+    ComPtr<ID3D11ShaderResourceView>& decodedView =
+        g_vrSrgbDecodedSharedViews[
+            frame.slotIndex];
 
-    if (FAILED(hr) ||
-        sharedView == nullptr)
+    bool recreateDecodedTexture =
+        decodedTexture == nullptr ||
+        decodedView == nullptr;
+
+    if (!recreateDecodedTexture)
     {
-        VR_LogHrFailure(
-            "CreateShaderResourceView("
-            "D3D9Ex shared stereo frame)",
-            hr);
+        D3D11_TEXTURE2D_DESC decodedDescription = {};
+        decodedTexture->GetDesc(&decodedDescription);
 
-        return false;
+        recreateDecodedTexture =
+            decodedDescription.Width != frame.width ||
+            decodedDescription.Height != frame.height ||
+            decodedDescription.Format !=
+                DXGI_FORMAT_B8G8R8A8_TYPELESS;
+    }
+
+    if (recreateDecodedTexture)
+    {
+        decodedView.Reset();
+        decodedTexture.Reset();
+
+        D3D11_TEXTURE2D_DESC decodedDescription =
+            description;
+
+        decodedDescription.Format =
+            DXGI_FORMAT_B8G8R8A8_TYPELESS;
+        decodedDescription.Usage =
+            D3D11_USAGE_DEFAULT;
+        decodedDescription.BindFlags =
+            D3D11_BIND_SHADER_RESOURCE;
+        decodedDescription.CPUAccessFlags = 0u;
+        decodedDescription.MiscFlags = 0u;
+
+        hr =
+            g_vrD3dDevice->CreateTexture2D(
+                &decodedDescription,
+                nullptr,
+                decodedTexture.GetAddressOf());
+
+        if (FAILED(hr) ||
+            decodedTexture == nullptr)
+        {
+            VR_LogHrFailure(
+                "CreateTexture2D(sRGB capture decode)",
+                hr);
+
+            return false;
+        }
+
+        D3D11_SHADER_RESOURCE_VIEW_DESC
+            decodedViewDescription = {};
+
+        decodedViewDescription.Format =
+            DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+        decodedViewDescription.ViewDimension =
+            D3D11_SRV_DIMENSION_TEXTURE2D;
+        decodedViewDescription.Texture2D.MostDetailedMip = 0u;
+        decodedViewDescription.Texture2D.MipLevels = 1u;
+
+        hr =
+            g_vrD3dDevice->CreateShaderResourceView(
+                decodedTexture.Get(),
+                &decodedViewDescription,
+                decodedView.GetAddressOf());
+
+        if (FAILED(hr) ||
+            decodedView == nullptr)
+        {
+            VR_LogHrFailure(
+                "CreateShaderResourceView(sRGB capture decode)",
+                hr);
+
+            decodedTexture.Reset();
+            return false;
+        }
     }
 
     if (!VR_RetireCurrentSharedFrame())
@@ -3127,10 +3216,28 @@ bool VR_OpenGpuSharedStereoFrame(
         return false;
     }
 
+    // Copying within the BGRA8 format family preserves the encoded bytes.
+    // Sampling the typeless destination through its sRGB view then decodes
+    // those bytes to linear light without a per-pixel pow() shader cost.
+    g_vrD3dContext->CopyResource(
+        decodedTexture.Get(),
+        sharedTexture.Get());
+
     g_vrCapturedStereoTexture =
-        sharedTexture;
+        decodedTexture;
     g_vrCapturedStereoView =
-        sharedView;
+        decodedView;
+
+    if (!g_vrLoggedSrgbCaptureDecode)
+    {
+        Com_Printf(
+            0,
+            "[VR] D3D9 capture is now sampled as sRGB before "
+            "the sRGB OpenXR swapchain; double-gamma "
+            "brightness is removed.\n");
+
+        g_vrLoggedSrgbCaptureDecode = true;
+    }
 
     g_vrCapturedStereoWidth =
         frame.width;
@@ -3240,8 +3347,10 @@ bool VR_UpdateCapturedStereoTexture()
         textureDescription.Height = height;
         textureDescription.MipLevels = 1;
         textureDescription.ArraySize = 1;
+        // Upload the gamma-encoded D3D9 bytes into a typeless
+        // texture so the SRV can decode them as sRGB during sampling.
         textureDescription.Format =
-            DXGI_FORMAT_B8G8R8A8_UNORM;
+            DXGI_FORMAT_B8G8R8A8_TYPELESS;
         textureDescription.SampleDesc.Count = 1;
         textureDescription.Usage =
             D3D11_USAGE_DEFAULT;
@@ -3264,10 +3373,20 @@ bool VR_UpdateCapturedStereoTexture()
             return false;
         }
 
+        D3D11_SHADER_RESOURCE_VIEW_DESC
+            capturedViewDescription = {};
+
+        capturedViewDescription.Format =
+            DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+        capturedViewDescription.ViewDimension =
+            D3D11_SRV_DIMENSION_TEXTURE2D;
+        capturedViewDescription.Texture2D.MostDetailedMip = 0u;
+        capturedViewDescription.Texture2D.MipLevels = 1u;
+
         hr =
             g_vrD3dDevice->CreateShaderResourceView(
                 g_vrCapturedStereoTexture.Get(),
-                nullptr,
+                &capturedViewDescription,
                 g_vrCapturedStereoView
                     .GetAddressOf());
 
@@ -12746,6 +12865,20 @@ void VR_Shutdown()
 
     g_vrCapturedStereoView.Reset();
     g_vrCapturedStereoTexture.Reset();
+
+    for (auto& decodedView :
+         g_vrSrgbDecodedSharedViews)
+    {
+        decodedView.Reset();
+    }
+
+    for (auto& decodedTexture :
+         g_vrSrgbDecodedSharedTextures)
+    {
+        decodedTexture.Reset();
+    }
+
+    g_vrLoggedSrgbCaptureDecode = false;
 
     for (VrRetiredSharedFrame& retired :
          g_vrRetiredSharedFrames)
