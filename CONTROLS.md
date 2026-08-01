@@ -3,6 +3,12 @@
 This controller map applies to Meta Quest Touch controllers. Other OpenXR
 controllers may use different runtime bindings.
 
+The experimental tracked-hands build hides COD4's original weapon-attached
+hands and places separate stock glove surfaces on the left and right OpenXR
+grip poses. Set `KISAK_VR_TRACKED_HANDS=0` in `VR-Settings.bat` to restore the
+original attached hands. This first pass does not yet include forearm IK or
+finger curling.
+
 | Action | Controller binding |
 |---|---|
 | Move | Left thumbstick; movement follows HMD direction |

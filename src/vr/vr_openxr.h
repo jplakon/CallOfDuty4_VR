@@ -114,6 +114,19 @@ bool VR_ApplyRightControllerToWeaponPlacement(
     float weaponOrigin[3],
     float weaponAxis[3][3]);
 
+// KISAK_SP_VR_TRACKED_HANDS_V1
+// Returns the latest OpenXR grip pose in CoD world space.  The left hand
+// uses the raw grip pose; the right hand uses the filtered grip position but
+// retains the runtime's grip-space orientation instead of its aim-space
+// orientation.  This keeps independently rendered gloves attached to the
+// physical controllers without changing weapon aiming.
+bool VR_GetTrackedControllerGripPoseWorld(
+    bool leftHand,
+    const float cameraOrigin[3],
+    const float cameraAxis[3][3],
+    float gripOrigin[3],
+    float gripAxis[3][3]);
+
 // Returns the final rendered right-hand weapon direction as CoD pitch/yaw
 // and the current right index-trigger state. The direction is taken from
 // the transformed viewmodel axis, keeping shots aligned with the visible gun.

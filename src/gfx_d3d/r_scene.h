@@ -217,6 +217,17 @@ void __cdecl R_AddDObjToScene(
     uint32_t renderFxFlags,
     float *lightingOrigin,
     float materialTime);
+
+// KISAK_SP_VR_TRACKED_HANDS_V1
+// Adds a first-person-only DObj without claiming the one scene lookup slot
+// associated with ENTITYNUM_NONE.  Multiple independent tracked-hand DObjs
+// can therefore coexist with the ordinary weapon viewmodel in one eye pass.
+void __cdecl R_AddDObjToSceneUntracked(
+    const DObj_s *obj,
+    const cpose_t *pose,
+    uint32_t renderFxFlags,
+    float *lightingOrigin,
+    float materialTime);
 GfxParticleCloud *__cdecl R_AddParticleCloudToScene(Material *material);
 void __cdecl R_AddOmniLightToScene(const float *org, float radius, float r, float g, float b);
 void __cdecl R_AddSpotLightToScene(const float *org, const float *dir, float radius, float r, float g, float b);

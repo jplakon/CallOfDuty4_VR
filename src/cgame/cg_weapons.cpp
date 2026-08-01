@@ -1,6 +1,9 @@
 #include <qcommon/qcommon.h>
 #include "vr/vr_openxr.h"
 
+#include <cstdlib>
+#include <cstring>
+
 #include "cg_local.h"
 #include "cg_public.h"
 #include <script/scr_stringlist.h>
@@ -83,6 +86,652 @@ struct VrManualReloadClipRenderObject
 static VrManualReloadClipRenderObject
     s_vrManualReloadClipObjects[128] = {};
 
+// KISAK_SP_VR_TRACKED_HANDS_V1
+// COD4's hand XModel normally supplies both animated arms to the weapon
+// DObj.  These two one-model DObjs reuse that stock asset, retain only the
+// surfaces belonging exclusively to one wrist branch, and place that wrist
+// directly on its OpenXR grip pose.
+enum VrTrackedHandSide : int
+{
+    VR_TRACKED_HAND_LEFT = 0,
+    VR_TRACKED_HAND_RIGHT = 1,
+    VR_TRACKED_HAND_COUNT = 2,
+};
+
+struct VrTrackedHandRenderObject
+{
+    DObj_s object = {};
+    XModel* model = nullptr;
+    cpose_t pose = {};
+    DObjAnimMat wristBasePose = {};
+    int wristBoneIndex = -1;
+    int exclusiveSurfaceCount = 0;
+    bool created = false;
+    bool separable = false;
+};
+
+static VrTrackedHandRenderObject
+    s_vrTrackedHandObjects[VR_TRACKED_HAND_COUNT] = {};
+
+static XModel* s_vrLoggedTrackedHandModel = nullptr;
+static bool s_vrTrackedHandsSettingRead = false;
+static bool s_vrTrackedHandsEnabled = true;
+
+static bool VR_TrackedHandsEnabled()
+{
+    if (!s_vrTrackedHandsSettingRead)
+    {
+        const char* requestedSetting =
+            std::getenv("KISAK_VR_TRACKED_HANDS");
+
+        if (requestedSetting != nullptr &&
+            requestedSetting[0] != '\0')
+        {
+            if (std::strcmp(requestedSetting, "0") == 0)
+            {
+                s_vrTrackedHandsEnabled = false;
+            }
+            else if (std::strcmp(requestedSetting, "1") != 0)
+            {
+                Com_PrintWarning(
+                    0,
+                    "[VR][HANDS] Ignoring invalid "
+                    "KISAK_VR_TRACKED_HANDS='%s'; using 1. "
+                    "Valid values are 0 and 1.\n",
+                    requestedSetting);
+            }
+        }
+
+        s_vrTrackedHandsSettingRead = true;
+
+        Com_Printf(
+            0,
+            "[VR][HANDS] Independent controller-tracked "
+            "hands are %s.\n",
+            s_vrTrackedHandsEnabled
+                ? "enabled"
+                : "disabled");
+    }
+
+    return s_vrTrackedHandsEnabled;
+}
+
+static void VR_FreeTrackedHandRenderObjects()
+{
+    for (VrTrackedHandRenderObject& handObject :
+         s_vrTrackedHandObjects)
+    {
+        if (handObject.created)
+        {
+            DObjFree(&handObject.object);
+        }
+
+        handObject = VrTrackedHandRenderObject{};
+    }
+
+    s_vrLoggedTrackedHandModel = nullptr;
+}
+
+static int VR_GetModelBoneParentIndex(
+    const XModel* model,
+    const int boneIndex)
+{
+    if (model == nullptr ||
+        boneIndex < 0 ||
+        boneIndex >= model->numBones ||
+        boneIndex < model->numRootBones ||
+        model->parentList == nullptr)
+    {
+        return -1;
+    }
+
+    const int parentOffset =
+        model->parentList[
+            boneIndex - model->numRootBones];
+
+    if (parentOffset <= 0 ||
+        parentOffset > boneIndex)
+    {
+        return -1;
+    }
+
+    return boneIndex - parentOffset;
+}
+
+static int VR_FindModelBoneIndex(
+    const XModel* model,
+    const char* requestedName)
+{
+    if (model == nullptr ||
+        requestedName == nullptr ||
+        requestedName[0] == '\0')
+    {
+        return -1;
+    }
+
+    for (int boneIndex = 0;
+         boneIndex < model->numBones;
+         ++boneIndex)
+    {
+        const char* boneName =
+            SL_ConvertToString(
+                model->boneNames[boneIndex]);
+
+        if (boneName != nullptr &&
+            I_stricmp(boneName, requestedName) == 0)
+        {
+            return boneIndex;
+        }
+    }
+
+    return -1;
+}
+
+static bool VR_ModelBoneDescendsFrom(
+    const XModel* model,
+    int boneIndex,
+    const int ancestorIndex)
+{
+    for (int depth = 0;
+         boneIndex >= 0 &&
+             depth < DOBJ_MAX_PARTS;
+         ++depth)
+    {
+        if (boneIndex == ancestorIndex)
+        {
+            return true;
+        }
+
+        boneIndex =
+            VR_GetModelBoneParentIndex(
+                model,
+                boneIndex);
+    }
+
+    return false;
+}
+
+static void VR_SetTrackedHandPartBit(
+    uint32_t partBits[4],
+    const int boneIndex)
+{
+    if (partBits == nullptr ||
+        boneIndex < 0 ||
+        boneIndex >= DOBJ_MAX_PARTS)
+    {
+        return;
+    }
+
+    partBits[boneIndex >> 5] |=
+        0x80000000u >>
+        (boneIndex & 0x1F);
+}
+
+static bool VR_SurfaceTouchesPartBits(
+    const XSurface& surface,
+    const uint32_t partBits[4])
+{
+    for (int wordIndex = 0;
+         wordIndex < 4;
+         ++wordIndex)
+    {
+        if ((static_cast<uint32_t>(
+                 surface.partBits[wordIndex]) &
+             partBits[wordIndex]) != 0u)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static void VR_LogTrackedHandModelBones(
+    XModel* handModel)
+{
+    if (handModel == nullptr ||
+        s_vrLoggedTrackedHandModel == handModel)
+    {
+        return;
+    }
+
+    Com_Printf(
+        0,
+        "[VR][HANDS] Inspecting stock hand model '%s': "
+        "%u bones, %u roots, %u LOD0 surfaces.\n",
+        XModelGetName(handModel),
+        static_cast<unsigned int>(handModel->numBones),
+        static_cast<unsigned int>(handModel->numRootBones),
+        static_cast<unsigned int>(
+            handModel->lodInfo[0].numsurfs));
+
+    for (int boneIndex = 0;
+         boneIndex < handModel->numBones;
+         ++boneIndex)
+    {
+        const int parentIndex =
+            VR_GetModelBoneParentIndex(
+                handModel,
+                boneIndex);
+
+        const char* boneName =
+            SL_ConvertToString(
+                handModel->boneNames[boneIndex]);
+
+        Com_Printf(
+            0,
+            "[VR][HANDS] bone %d '%s', parent %d.\n",
+            boneIndex,
+            boneName != nullptr ? boneName : "<null>",
+            parentIndex);
+    }
+
+    s_vrLoggedTrackedHandModel = handModel;
+}
+
+static VrTrackedHandRenderObject*
+VR_GetTrackedHandRenderObject(
+    const VrTrackedHandSide side,
+    XModel* handModel)
+{
+    if (side < VR_TRACKED_HAND_LEFT ||
+        side >= VR_TRACKED_HAND_COUNT ||
+        handModel == nullptr ||
+        handModel->numBones == 0u ||
+        handModel->numBones > DOBJ_MAX_PARTS ||
+        handModel->baseMat == nullptr ||
+        handModel->surfs == nullptr ||
+        handModel->numLods <= 0)
+    {
+        return nullptr;
+    }
+
+    VrTrackedHandRenderObject& handObject =
+        s_vrTrackedHandObjects[side];
+
+    if (handObject.created &&
+        handObject.model != handModel)
+    {
+        DObjFree(&handObject.object);
+        handObject = VrTrackedHandRenderObject{};
+    }
+
+    if (handObject.created)
+    {
+        return handObject.separable
+            ? &handObject
+            : nullptr;
+    }
+
+    DObjModel_s modelDescription = {};
+    modelDescription.model = handModel;
+    modelDescription.boneName = 0;
+    modelDescription.ignoreCollision = false;
+
+    DObjCreate(
+        &modelDescription,
+        1u,
+        nullptr,
+        &handObject.object,
+        0);
+
+    handObject.model = handModel;
+    handObject.created = true;
+    handObject.pose.eType = ET_GENERAL;
+
+    VR_LogTrackedHandModelBones(handModel);
+
+    const int leftWristIndex =
+        VR_FindModelBoneIndex(
+            handModel,
+            "j_wrist_le");
+
+    const int rightWristIndex =
+        VR_FindModelBoneIndex(
+            handModel,
+            "j_wrist_ri");
+
+    const int targetWristIndex =
+        side == VR_TRACKED_HAND_LEFT
+            ? leftWristIndex
+            : rightWristIndex;
+
+    const int oppositeWristIndex =
+        side == VR_TRACKED_HAND_LEFT
+            ? rightWristIndex
+            : leftWristIndex;
+
+    handObject.wristBoneIndex =
+        targetWristIndex;
+
+    if (targetWristIndex < 0 ||
+        oppositeWristIndex < 0)
+    {
+        Com_PrintWarning(
+            0,
+            "[VR][HANDS] Stock model '%s' lacks the "
+            "j_wrist_le/j_wrist_ri pair; retaining COD4's "
+            "original attached hands.\n",
+            XModelGetName(handModel));
+
+        return nullptr;
+    }
+
+    uint32_t targetSubtreeBits[4] = {};
+    uint32_t oppositeSubtreeBits[4] = {};
+
+    for (int boneIndex = 0;
+         boneIndex < handModel->numBones;
+         ++boneIndex)
+    {
+        if (VR_ModelBoneDescendsFrom(
+                handModel,
+                boneIndex,
+                targetWristIndex))
+        {
+            VR_SetTrackedHandPartBit(
+                targetSubtreeBits,
+                boneIndex);
+        }
+
+        if (VR_ModelBoneDescendsFrom(
+                handModel,
+                boneIndex,
+                oppositeWristIndex))
+        {
+            VR_SetTrackedHandPartBit(
+                oppositeSubtreeBits,
+                boneIndex);
+        }
+    }
+
+    uint32_t keepPartBits[4] = {};
+
+    for (int rootIndex = 0;
+         rootIndex < handModel->numRootBones;
+         ++rootIndex)
+    {
+        VR_SetTrackedHandPartBit(
+            keepPartBits,
+            rootIndex);
+    }
+
+    const XModelLodInfo& lodInfo =
+        handModel->lodInfo[0];
+
+    for (int surfaceOffset = 0;
+         surfaceOffset < lodInfo.numsurfs;
+         ++surfaceOffset)
+    {
+        const XSurface& surface =
+            handModel->surfs[
+                lodInfo.surfIndex +
+                surfaceOffset];
+
+        const bool touchesTarget =
+            VR_SurfaceTouchesPartBits(
+                surface,
+                targetSubtreeBits);
+
+        const bool touchesOpposite =
+            VR_SurfaceTouchesPartBits(
+                surface,
+                oppositeSubtreeBits);
+
+        if (touchesTarget &&
+            !touchesOpposite)
+        {
+            ++handObject.exclusiveSurfaceCount;
+
+            for (int wordIndex = 0;
+                 wordIndex < 4;
+                 ++wordIndex)
+            {
+                keepPartBits[wordIndex] |=
+                    static_cast<uint32_t>(
+                        surface.partBits[wordIndex]);
+            }
+        }
+    }
+
+    if (handObject.exclusiveSurfaceCount <= 0)
+    {
+        Com_PrintWarning(
+            0,
+            "[VR][HANDS] Stock model '%s' does not expose "
+            "separate %s-hand surfaces; retaining COD4's "
+            "original attached hands.\n",
+            XModelGetName(handModel),
+            side == VR_TRACKED_HAND_LEFT
+                ? "left"
+                : "right");
+
+        return nullptr;
+    }
+
+    uint32_t hidePartBits[4] = {};
+
+    for (int boneIndex = 0;
+         boneIndex < handModel->numBones;
+         ++boneIndex)
+    {
+        const uint32_t boneBit =
+            0x80000000u >>
+            (boneIndex & 0x1F);
+
+        if ((keepPartBits[boneIndex >> 5] &
+             boneBit) == 0u)
+        {
+            hidePartBits[boneIndex >> 5] |=
+                boneBit;
+        }
+    }
+
+    DObjSetHidePartBits(
+        &handObject.object,
+        hidePartBits);
+
+    handObject.wristBasePose =
+        handModel->baseMat[
+            targetWristIndex];
+
+    handObject.separable = true;
+
+    Com_Printf(
+        0,
+        "[VR][HANDS] Prepared %s wrist bone %d with "
+        "%d exclusive LOD0 surface(s).\n",
+        side == VR_TRACKED_HAND_LEFT
+            ? "left"
+            : "right",
+        targetWristIndex,
+        handObject.exclusiveSurfaceCount);
+
+    return &handObject;
+}
+
+static bool VR_SetTrackedHandPose(
+    VrTrackedHandRenderObject* handObject,
+    const bool leftHand,
+    const float cameraOrigin[3],
+    const float cameraAxis[3][3])
+{
+    if (handObject == nullptr ||
+        cameraOrigin == nullptr ||
+        cameraAxis == nullptr)
+    {
+        return false;
+    }
+
+    float controllerOrigin[3] = {};
+    float controllerAxis[3][3] = {};
+
+    if (!VR_GetTrackedControllerGripPoseWorld(
+            leftHand,
+            cameraOrigin,
+            cameraAxis,
+            controllerOrigin,
+            controllerAxis))
+    {
+        return false;
+    }
+
+    float wristBaseAxis[3][3] = {};
+    float inverseWristBaseAxis[3][3] = {};
+    float handPlacementAxis[3][3] = {};
+
+    QuatToAxis(
+        handObject->wristBasePose.quat,
+        *reinterpret_cast<mat3x3*>(
+            wristBaseAxis));
+
+    for (int rowIndex = 0;
+         rowIndex < 3;
+         ++rowIndex)
+    {
+        for (int columnIndex = 0;
+             columnIndex < 3;
+             ++columnIndex)
+        {
+            inverseWristBaseAxis[
+                rowIndex][columnIndex] =
+                wristBaseAxis[
+                    columnIndex][rowIndex];
+        }
+    }
+
+    MatrixMultiply(
+        *reinterpret_cast<const mat3x3*>(
+            inverseWristBaseAxis),
+        *reinterpret_cast<const mat3x3*>(
+            controllerAxis),
+        *reinterpret_cast<mat3x3*>(
+            handPlacementAxis));
+
+    float wristOffsetWorld[3] = {};
+
+    AxisTransformVec3(
+        *reinterpret_cast<const mat3x3*>(
+            handPlacementAxis),
+        handObject->wristBasePose.trans,
+        wristOffsetWorld);
+
+    for (int component = 0;
+         component < 3;
+         ++component)
+    {
+        handObject->pose.origin[component] =
+            controllerOrigin[component] -
+            wristOffsetWorld[component];
+    }
+
+    AxisToAngles(
+        *reinterpret_cast<const mat3x3*>(
+            handPlacementAxis),
+        handObject->pose.angles);
+
+    return true;
+}
+
+static bool VR_AddTrackedHandsToScene(
+    XModel* handModel,
+    const float cameraOrigin[3],
+    const float cameraAxis[3][3],
+    const float lightingOrigin[3])
+{
+    if (!VR_TrackedHandsEnabled() ||
+        handModel == nullptr ||
+        cameraOrigin == nullptr ||
+        cameraAxis == nullptr ||
+        lightingOrigin == nullptr)
+    {
+        return false;
+    }
+
+    VrTrackedHandRenderObject* leftHand =
+        VR_GetTrackedHandRenderObject(
+            VR_TRACKED_HAND_LEFT,
+            handModel);
+
+    VrTrackedHandRenderObject* rightHand =
+        VR_GetTrackedHandRenderObject(
+            VR_TRACKED_HAND_RIGHT,
+            handModel);
+
+    if (leftHand == nullptr ||
+        rightHand == nullptr ||
+        !VR_SetTrackedHandPose(
+            leftHand,
+            true,
+            cameraOrigin,
+            cameraAxis) ||
+        !VR_SetTrackedHandPose(
+            rightHand,
+            false,
+            cameraOrigin,
+            cameraAxis))
+    {
+        return false;
+    }
+
+    float mutableLightingOrigin[3] = {
+        lightingOrigin[0],
+        lightingOrigin[1],
+        lightingOrigin[2],
+    };
+
+    // Use the same first-person render flags as the weapon viewmodel, while
+    // bypassing ENTITYNUM_NONE's single lookup slot for these extra DObjs.
+    R_AddDObjToSceneUntracked(
+        &leftHand->object,
+        &leftHand->pose,
+        3u,
+        mutableLightingOrigin,
+        0.0f);
+
+    R_AddDObjToSceneUntracked(
+        &rightHand->object,
+        &rightHand->pose,
+        3u,
+        mutableLightingOrigin,
+        0.0f);
+
+    static bool loggedFirstTrackedHandSubmission = false;
+
+    if (!loggedFirstTrackedHandSubmission)
+    {
+        Com_Printf(
+            0,
+            "[VR][HANDS] Submitted independently tracked "
+            "left and right stock glove surfaces.\n");
+
+        loggedFirstTrackedHandSubmission = true;
+    }
+
+    return true;
+}
+
+static void VR_HideOriginalViewmodelHands(
+    const XModel* handModel,
+    uint32_t hidePartBits[4])
+{
+    if (handModel == nullptr ||
+        hidePartBits == nullptr)
+    {
+        return;
+    }
+
+    for (int boneIndex = 0;
+         boneIndex < handModel->numBones &&
+             boneIndex < DOBJ_MAX_PARTS;
+         ++boneIndex)
+    {
+        VR_SetTrackedHandPartBit(
+            hidePartBits,
+            boneIndex);
+    }
+}
+
 static void VR_FreeManualReloadClipRenderObjects()
 {
     for (VrManualReloadClipRenderObject& clipObject :
@@ -101,6 +750,7 @@ static void VR_FreeManualReloadClipRenderObjects()
 void VR_FreeManualReloadClipRenderObjectsForShutdown()
 {
     VR_FreeManualReloadClipRenderObjects();
+    VR_FreeTrackedHandRenderObjects();
 }
 
 static VrManualReloadClipRenderObject*
@@ -1211,6 +1861,20 @@ void __cdecl CG_AddPlayerWeapon(
 #ifdef KISAK_SP
             if (bDrawGun)
             {
+                float trackedHandLightingOrigin[3] = {
+                    ps->origin[0],
+                    ps->origin[1],
+                    ps->origin[2] +
+                        ps->viewHeightCurrent,
+                };
+
+                const bool trackedHandsRendered =
+                    VR_AddTrackedHandsToScene(
+                        weapInfo->handModel,
+                        cgameGlob->refdef.vieworg,
+                        cgameGlob->refdef.viewaxis,
+                        trackedHandLightingOrigin);
+
                 const bool detachableMagazineClass =
                     weapDef->weapClass == WEAPCLASS_RIFLE ||
                     weapDef->weapClass == WEAPCLASS_SMG ||
@@ -1319,6 +1983,13 @@ void __cdecl CG_AddPlayerWeapon(
                     weapInfo->partBits[2],
                     weapInfo->partBits[3],
                 };
+
+                if (trackedHandsRendered)
+                {
+                    VR_HideOriginalViewmodelHands(
+                        weapInfo->handModel,
+                        manualHidePartBits);
+                }
 
                 if (hideLoadedMagazine &&
                     foundMagazineWell)

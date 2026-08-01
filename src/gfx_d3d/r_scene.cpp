@@ -152,13 +152,15 @@ void __cdecl R_AddBrushModelToSceneFromAngles(
     }
 }
 
-void __cdecl R_AddDObjToScene(
+static void R_AddDObjToSceneInternal(
     const DObj_s *obj,
     const cpose_t *pose,
     uint32_t entnum,
     uint32_t renderFxFlags,
     float *lightingOrigin,
-    float materialTime)
+    float materialTime,
+    const bool linkToSceneIndex,
+    const bool forceDObj)
 {
     float s; // [esp+0h] [ebp-38h]
     GfxSceneModel *sceneModel; // [esp+10h] [ebp-28h]
@@ -178,7 +180,13 @@ void __cdecl R_AddDObjToScene(
 
     if (r_drawEntities->current.enabled)
     {
-        iassert(scene.dpvs.sceneDObjIndex[entnum] == (65535));
+        if (linkToSceneIndex)
+        {
+            iassert(
+                scene.dpvs.sceneDObjIndex[entnum] ==
+                    (65535));
+        }
+
         if (materialTime == 0.0f && !renderFxFlags)
         {
             gfxEntIndex = 0;
@@ -196,7 +204,10 @@ void __cdecl R_AddDObjToScene(
             frontEndDataOut->gfxEnts[gfxEntIndex].materialTime = materialTime;
             gfxEnt->renderFxFlags = renderFxFlags;
         }
-        if ((renderFxFlags & 4) != 0 || DObjGetTree(obj) || DObjGetNumModels(obj) != 1)
+        if (forceDObj ||
+            (renderFxFlags & 4) != 0 ||
+            DObjGetTree(obj) ||
+            DObjGetNumModels(obj) != 1)
         {
             sceneEntIndex = R_AllocSceneDObj();
             if (sceneEntIndex < 0x200)
@@ -204,7 +215,13 @@ void __cdecl R_AddDObjToScene(
                 sceneEnt = &scene.sceneDObj[sceneEntIndex];
                 sceneEnt->obj = obj;
                 sceneEnt->entnum = entnum;
-                scene.dpvs.sceneDObjIndex[entnum] = sceneEntIndex;
+
+                if (linkToSceneIndex)
+                {
+                    scene.dpvs.sceneDObjIndex[entnum] =
+                        sceneEntIndex;
+                }
+
                 sceneEnt->info.pose = (cpose_t*)pose;
                 iassert(sceneEnt->cull.state == CULL_STATE_OUT);
                 radiusa = DObjGetRadius(obj);
@@ -232,7 +249,13 @@ void __cdecl R_AddDObjToScene(
                 sceneModel->model = model;
                 sceneModel->obj = obj;
                 sceneModel->entnum = entnum;
-                scene.dpvs.sceneXModelIndex[entnum] = sceneEntIndex;
+
+                if (linkToSceneIndex)
+                {
+                    scene.dpvs.sceneXModelIndex[entnum] =
+                        sceneEntIndex;
+                }
+
                 sceneModel->cachedLightingHandle = (uint16_t *)LongNoSwap((uint32_t)pose);
                 radius = XModelGetRadius(model);
                 CG_GetPoseOrigin(pose, sceneModel->placement.base.origin);
@@ -247,6 +270,43 @@ void __cdecl R_AddDObjToScene(
             }
         }
     }
+}
+
+void __cdecl R_AddDObjToScene(
+    const DObj_s *obj,
+    const cpose_t *pose,
+    uint32_t entnum,
+    uint32_t renderFxFlags,
+    float *lightingOrigin,
+    float materialTime)
+{
+    R_AddDObjToSceneInternal(
+        obj,
+        pose,
+        entnum,
+        renderFxFlags,
+        lightingOrigin,
+        materialTime,
+        true,
+        false);
+}
+
+void __cdecl R_AddDObjToSceneUntracked(
+    const DObj_s *obj,
+    const cpose_t *pose,
+    uint32_t renderFxFlags,
+    float *lightingOrigin,
+    float materialTime)
+{
+    R_AddDObjToSceneInternal(
+        obj,
+        pose,
+        ENTITYNUM_NONE,
+        renderFxFlags,
+        lightingOrigin,
+        materialTime,
+        false,
+        true);
 }
 
 GfxParticleCloud *__cdecl R_AddParticleCloudToScene(Material *material)
@@ -2433,4 +2493,3 @@ void __cdecl R_UnlinkDynEnt(uint32_t dynEntId, DynEntityDrawType drawType)
     R_UnfilterDynEntFromCells(dynEntId, drawType);
     R_UnlinkDynEntFromPrimaryLights(dynEntId, drawType);
 }
-

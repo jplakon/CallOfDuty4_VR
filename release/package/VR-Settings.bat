@@ -25,6 +25,10 @@ rem Left trigger ejects; squeeze at the left hip draws; release at the
 rem magazine well inserts. Set to 0 to restore trigger-to-reload.
 set "KISAK_VR_MANUAL_RELOAD=1"
 
+rem Experimental stock-glove rendering at the physical OpenXR grip poses.
+rem Set to 0 to restore COD4's weapon-attached animated hands.
+set "KISAK_VR_TRACKED_HANDS=1"
+
 rem Set to 0 if synchronized shadows cause corruption or poor performance.
 set "KISAK_VR_SHADOWS=1"
 

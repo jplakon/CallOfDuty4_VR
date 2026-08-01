@@ -161,6 +161,16 @@ XrQuaternionf g_vrRightControllerFilteredAimOrientation = {
 float g_vrRightControllerWeaponPosition[3] = {};
 float g_vrRightControllerWeaponAxis[3][3] = {};
 
+// KISAK_SP_VR_TRACKED_HANDS_V1
+// The weapon uses OpenXR aim-space orientation, while a visible glove must
+// use grip-space orientation.  Both remain HMD-local until cgame combines
+// them with the current camera basis.
+float g_vrRightControllerGripAxis[3][3] = {
+    {1.0f, 0.0f, 0.0f},
+    {0.0f, 1.0f, 0.0f},
+    {0.0f, 0.0f, 1.0f},
+};
+
 // KISAK_SP_VR_MOUNTED_TURRET_AIM_V1
 // The raw controller axis above is HMD-local.  Snapshot the completed
 // camera world axis so mounted weapons can recover live controller aim even
@@ -6408,6 +6418,15 @@ void VR_DestroyControllerInput()
             0,
             sizeof(g_vrRightControllerWeaponAxis));
 
+        std::memset(
+            g_vrRightControllerGripAxis,
+            0,
+            sizeof(g_vrRightControllerGripAxis));
+
+        g_vrRightControllerGripAxis[0][0] = 1.0f;
+        g_vrRightControllerGripAxis[1][1] = 1.0f;
+        g_vrRightControllerGripAxis[2][2] = 1.0f;
+
         memset(
             g_vrRightControllerFinalWeaponAxisCameraLocal,
             0,
@@ -7624,11 +7643,21 @@ void VR_PublishRightControllerWeaponPose(
     const XrQuaternionf controllerOrientation =
         filteredAimOrientation;
 
+    const XrQuaternionf gripOrientation =
+        VR_NormalizeQuaternion(
+            controllerGripPose.orientation);
+
     const XrQuaternionf controllerRelativeToHead =
         VR_NormalizeQuaternion(
             VR_MultiplyQuaternion(
                 inverseHeadOrientation,
                 controllerOrientation));
+
+    const XrQuaternionf gripRelativeToHead =
+        VR_NormalizeQuaternion(
+            VR_MultiplyQuaternion(
+                inverseHeadOrientation,
+                gripOrientation));
 
     const VrHeadVector forwardCod =
         VR_OpenXrVectorToCod(
@@ -7646,6 +7675,24 @@ void VR_PublishRightControllerWeaponPose(
         VR_OpenXrVectorToCod(
             VR_RotateHeadVector(
                 controllerRelativeToHead,
+                {0.0f, 1.0f, 0.0f}));
+
+    const VrHeadVector gripForwardCod =
+        VR_OpenXrVectorToCod(
+            VR_RotateHeadVector(
+                gripRelativeToHead,
+                {0.0f, 0.0f, -1.0f}));
+
+    const VrHeadVector gripLeftCod =
+        VR_OpenXrVectorToCod(
+            VR_RotateHeadVector(
+                gripRelativeToHead,
+                {-1.0f, 0.0f, 0.0f}));
+
+    const VrHeadVector gripUpCod =
+        VR_OpenXrVectorToCod(
+            VR_RotateHeadVector(
+                gripRelativeToHead,
                 {0.0f, 1.0f, 0.0f}));
 
     std::lock_guard<std::mutex> lock(
@@ -7683,6 +7730,27 @@ void VR_PublishRightControllerWeaponPose(
         upCod.y;
     g_vrRightControllerWeaponAxis[2][2] =
         upCod.z;
+
+    g_vrRightControllerGripAxis[0][0] =
+        gripForwardCod.x;
+    g_vrRightControllerGripAxis[0][1] =
+        gripForwardCod.y;
+    g_vrRightControllerGripAxis[0][2] =
+        gripForwardCod.z;
+
+    g_vrRightControllerGripAxis[1][0] =
+        gripLeftCod.x;
+    g_vrRightControllerGripAxis[1][1] =
+        gripLeftCod.y;
+    g_vrRightControllerGripAxis[1][2] =
+        gripLeftCod.z;
+
+    g_vrRightControllerGripAxis[2][0] =
+        gripUpCod.x;
+    g_vrRightControllerGripAxis[2][1] =
+        gripUpCod.y;
+    g_vrRightControllerGripAxis[2][2] =
+        gripUpCod.z;
 
     g_vrRightControllerWeaponPoseValid = true;
 }
@@ -10415,6 +10483,89 @@ bool VR_GetRightControllerWeaponGripWorld(
                 cameraAxis[1][worldComponent] +
             gripCameraLocal[2] *
                 cameraAxis[2][worldComponent];
+    }
+
+    return true;
+}
+
+
+bool VR_GetTrackedControllerGripPoseWorld(
+    const bool leftHand,
+    const float cameraOrigin[3],
+    const float cameraAxis[3][3],
+    float gripOrigin[3],
+    float gripAxis[3][3])
+{
+    if (cameraOrigin == nullptr ||
+        cameraAxis == nullptr ||
+        gripOrigin == nullptr ||
+        gripAxis == nullptr)
+    {
+        return false;
+    }
+
+    float gripCameraLocal[3] = {};
+    float gripAxisCameraLocal[3][3] = {};
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrWeaponControllerPoseMutex);
+
+        const bool poseValid =
+            leftHand
+                ? g_vrLeftControllerForegripPoseValid
+                : g_vrRightControllerWeaponPoseValid;
+
+        if (!poseValid)
+        {
+            return false;
+        }
+
+        std::memcpy(
+            gripCameraLocal,
+            leftHand
+                ? g_vrLeftControllerForegripPosition
+                : g_vrRightControllerWeaponPosition,
+            sizeof(gripCameraLocal));
+
+        std::memcpy(
+            gripAxisCameraLocal,
+            leftHand
+                ? g_vrLeftControllerForegripAxis
+                : g_vrRightControllerGripAxis,
+            sizeof(gripAxisCameraLocal));
+    }
+
+    for (int worldComponent = 0;
+         worldComponent < 3;
+         ++worldComponent)
+    {
+        gripOrigin[worldComponent] =
+            cameraOrigin[worldComponent] +
+            gripCameraLocal[0] *
+                cameraAxis[0][worldComponent] +
+            gripCameraLocal[1] *
+                cameraAxis[1][worldComponent] +
+            gripCameraLocal[2] *
+                cameraAxis[2][worldComponent];
+    }
+
+    for (int axisRow = 0;
+         axisRow < 3;
+         ++axisRow)
+    {
+        for (int worldComponent = 0;
+             worldComponent < 3;
+             ++worldComponent)
+        {
+            gripAxis[axisRow][worldComponent] =
+                gripAxisCameraLocal[axisRow][0] *
+                    cameraAxis[0][worldComponent] +
+                gripAxisCameraLocal[axisRow][1] *
+                    cameraAxis[1][worldComponent] +
+                gripAxisCameraLocal[axisRow][2] *
+                    cameraAxis[2][worldComponent];
+        }
     }
 
     return true;
