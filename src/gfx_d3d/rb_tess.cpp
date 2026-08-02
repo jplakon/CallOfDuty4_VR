@@ -895,11 +895,38 @@ void __cdecl R_DrawXModelSkinnedCached(GfxCmdBufContext context, const GfxModelS
     args.vertexCount = xsurf->vertCount;
     args.triCount = xsurf->triCount;
     g_frameStatsCur.geoIndexCount += 3 * args.triCount;
-    DB_GetIndexBufferAndBase(xsurf->zoneHandle, xsurf->triIndices, (void **)&ib, &args.baseIndex);
-    iassert(ib);
+    // KISAK_SP_VR_TRACKED_HANDS_V7_RUNTIME_SPLIT_INDICES
+    // Runtime-split hand surfaces reuse the stock CPU vertices and weights but
+    // own filtered triangle lists that do not live in a fast-file zone index
+    // buffer.  Upload only those small index lists through the dynamic path.
+    if (xsurf->zoneHandle == 0xFFu)
+    {
+        args.baseIndex =
+            R_SetIndexData(
+                &context.state->prim,
+                reinterpret_cast<uint8_t*>(
+                    xsurf->triIndices),
+                args.triCount);
+    }
+    else
+    {
+        DB_GetIndexBufferAndBase(
+            xsurf->zoneHandle,
+            xsurf->triIndices,
+            reinterpret_cast<void**>(&ib),
+            &args.baseIndex);
+
+        iassert(ib);
+
+        if (context.state->prim.indexBuffer != ib)
+        {
+            R_ChangeIndices(
+                &context.state->prim,
+                ib);
+        }
+    }
+
     data = context.source->input.data;
-    if (context.state->prim.indexBuffer != ib)
-        R_ChangeIndices(&context.state->prim, ib);
     R_SetStreamSource(&context.state->prim, data->skinnedCacheVb->buffer, modelSurf->skinnedCachedOffset, 0x20u);
     R_DrawIndexedPrimitive(&context.state->prim, &args);
     iassert(g_primStats);

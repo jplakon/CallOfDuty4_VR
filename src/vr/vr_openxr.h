@@ -127,6 +127,42 @@ bool VR_GetTrackedControllerGripPoseWorld(
     float gripOrigin[3],
     float gripAxis[3][3]);
 
+// KISAK_SP_VR_TRACKED_HANDS_V24_DIRECT_OPENXR_GRIP_QUATERNION
+// Returns the left grip origin in CoD world space plus the normalized OpenXR
+// grip orientation relative to the current HMD.  The free-hand renderer uses
+// this quaternion to reproduce the same rigid pose as the compositor proxy,
+// bypassing the legacy shared foregrip matrix without changing reload or
+// two-hand weapon consumers of that matrix.
+bool VR_GetTrackedLeftControllerGripQuaternionWorld(
+    const float cameraOrigin[3],
+    const float cameraAxis[3][3],
+    float gripOrigin[3],
+    float gripOrientationHeadLocalOpenXr[4]);
+
+// KISAK_SP_VR_TRACKED_HANDS_V25_OPENXR_PALM_SURFACE_POSE
+// Returns XR_EXT_palm_pose when the runtime exposes it.  Unlike grip/pose,
+// this controller-specific pose is defined at the physical palm surface and
+// oriented for visual hand registration.  Callers must retain the V24 grip
+// getter as a fallback for runtimes that do not publish the optional pose.
+bool VR_GetTrackedLeftControllerPalmQuaternionWorld(
+    const float cameraOrigin[3],
+    const float cameraAxis[3][3],
+    float palmOrigin[3],
+    float palmOrientationHeadLocalOpenXr[4]);
+
+// KISAK_SP_VR_TRACKED_HANDS_V22_CONTROLLER_SPACE_DIAGNOSTICS
+// Enables the temporary in-game transform measurements and the compositor-
+// true left-grip origin/axis overlay.  KISAK_VR_HAND_DIAGNOSTICS=0 disables
+// both without changing tracked-hand behavior.
+bool VR_TrackedHandDiagnosticsEnabled();
+
+// KISAK_SP_VR_TRACKED_HANDS_V14_QUATERNION_WEAPON_GRIP
+// Returns the left squeeze state already gated by controller tracking and the
+// manual-magazine reload state.  Rendering can therefore attach a support hand
+// without duplicating or interfering with OpenXR input ownership.
+bool VR_GetLeftControllerSupportGripPressed(
+    bool* supportGripPressed);
+
 // Returns the final rendered right-hand weapon direction as CoD pitch/yaw
 // and the current right index-trigger state. The direction is taken from
 // the transformed viewmodel axis, keeping shots aligned with the visible gun.

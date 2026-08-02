@@ -50,6 +50,7 @@ enum VrControllerHand : std::uint32_t
 XrActionSet g_vrControllerActionSet = XR_NULL_HANDLE;
 
 XrAction g_vrGripPoseAction = XR_NULL_HANDLE;
+XrAction g_vrPalmPoseAction = XR_NULL_HANDLE;
 XrAction g_vrAimPoseAction = XR_NULL_HANDLE;
 XrAction g_vrTriggerValueAction = XR_NULL_HANDLE;
 XrAction g_vrSqueezeValueAction = XR_NULL_HANDLE;
@@ -78,6 +79,12 @@ std::array<XrSpace, kVrControllerCount>
     };
 
 std::array<XrSpace, kVrControllerCount>
+    g_vrControllerPalmSpaces = {
+        XR_NULL_HANDLE,
+        XR_NULL_HANDLE,
+    };
+
+std::array<XrSpace, kVrControllerCount>
     g_vrControllerAimSpaces = {
         XR_NULL_HANDLE,
         XR_NULL_HANDLE,
@@ -86,9 +93,13 @@ std::array<XrSpace, kVrControllerCount>
 bool g_vrControllerActionsCreated = false;
 bool g_vrControllerActionsAttached = false;
 bool g_vrControllerSpacesCreated = false;
+bool g_vrPalmPoseExtensionEnabled = false;
 
 std::array<bool, kVrControllerCount>
     g_vrLoggedFirstGripPose = {};
+
+std::array<bool, kVrControllerCount>
+    g_vrLoggedFirstPalmPose = {};
 
 std::array<bool, kVrControllerCount>
     g_vrLoggedFirstAimPose = {};
@@ -104,8 +115,13 @@ std::uint64_t g_vrControllerDiagnosticFrame = 0u;
 struct VrControllerRenderPose
 {
     bool gripValid = false;
+    bool palmValid = false;
     bool aimValid = false;
     XrPosef gripPose = {
+        {0.0f, 0.0f, 0.0f, 1.0f},
+        {0.0f, 0.0f, 0.0f},
+    };
+    XrPosef palmPose = {
         {0.0f, 0.0f, 0.0f, 1.0f},
         {0.0f, 0.0f, 0.0f},
     };
@@ -136,6 +152,34 @@ float g_vrLeftControllerForegripAxis[3][3] = {
     {1.0f, 0.0f, 0.0f},
     {0.0f, 1.0f, 0.0f},
     {0.0f, 0.0f, 1.0f},
+};
+
+// KISAK_SP_VR_TRACKED_HANDS_V24_DIRECT_OPENXR_GRIP_QUATERNION
+// Keep the normalized OpenXR grip orientation as a quaternion until cgame
+// consumes it.  The compositor proxy renders this same runtime pose directly;
+// carrying four scalar components avoids reconstructing the free hand from the
+// legacy shared foregrip matrix, which V23 diagnostics proved can arrive
+// scaled/sheared even though the underlying OpenXR pose is a rigid rotation.
+XrQuaternionf g_vrLeftControllerGripOrientationHeadLocalOpenXr = {
+    0.0f,
+    0.0f,
+    0.0f,
+    1.0f,
+};
+
+// KISAK_SP_VR_TRACKED_HANDS_V25_OPENXR_PALM_SURFACE_POSE
+// XR_EXT_palm_pose (promoted to grip_surface/pose in OpenXR 1.1) is the
+// controller-specific hand-registration pose.  Keep it separate from the
+// legacy grip pose because weapons, two-hand aiming, and manual reloads still
+// require the physical controller grip while the standalone glove requires
+// the user's palm centroid and palm-oriented frame.
+bool g_vrLeftControllerPalmPoseValid = false;
+float g_vrLeftControllerPalmPosition[3] = {};
+XrQuaternionf g_vrLeftControllerPalmOrientationHeadLocalOpenXr = {
+    0.0f,
+    0.0f,
+    0.0f,
+    1.0f,
 };
 
 float g_vrTwoHandWeaponBlend = 0.0f;
@@ -4835,6 +4879,37 @@ float4 PSMain(
     return true;
 }
 
+bool VR_TrackedHandDiagnosticsEnabledInternal()
+{
+    static const bool enabled = []()
+    {
+        const char* setting =
+            std::getenv(
+                "KISAK_VR_HAND_DIAGNOSTICS");
+
+        const bool diagnosticsEnabled =
+            setting == nullptr ||
+            std::strcmp(setting, "0") != 0;
+
+        if (diagnosticsEnabled)
+        {
+            Com_Printf(
+                0,
+                "[VR][HANDS][DIAG] Left-hand transform diagnostics remain enabled; V28 removed the colored controller origin/axis overlay.\n");
+        }
+        else
+        {
+            Com_Printf(
+                0,
+                "[VR][HANDS][DIAG] Left-hand transform diagnostics are disabled by KISAK_VR_HAND_DIAGNOSTICS=0.\n");
+        }
+
+        return diagnosticsEnabled;
+    }();
+
+    return enabled;
+}
+
 void VR_RenderControllerProxies(
     const std::uint32_t eyeIndex,
     const int32_t viewportWidth,
@@ -4850,7 +4925,8 @@ void VR_RenderControllerProxies(
         }
     }
 
-    if (!g_vrControllerProxyResourcesReady ||
+    if (!VR_TrackedHandDiagnosticsEnabledInternal() ||
+        !g_vrControllerProxyResourcesReady ||
         eyeIndex >= g_vrViews.size() ||
         viewportWidth <= 0 ||
         viewportHeight <= 0)
@@ -4877,97 +4953,100 @@ void VR_RenderControllerProxies(
         2.5f /
         static_cast<float>(viewportHeight);
 
-    for (std::uint32_t handIndex = 0u;
-         handIndex < kVrControllerCount;
-         ++handIndex)
+    const VrControllerRenderPose& controller =
+        g_vrControllerRenderPoses[
+            VR_CONTROLLER_LEFT];
+
+    const bool handSurfaceValid =
+        controller.palmValid ||
+        controller.gripValid;
+
+    const XrPosef& handSurfacePose =
+        controller.palmValid
+            ? controller.palmPose
+            : controller.gripPose;
+
+    if (handSurfaceValid)
     {
-        const VrControllerRenderPose& controller =
-            g_vrControllerRenderPoses[handIndex];
+        float gripX = 0.0f;
+        float gripY = 0.0f;
 
-        const float red =
-            handIndex == VR_CONTROLLER_LEFT
-                ? 0.1f
-                : 1.0f;
+        const bool gripVisible =
+            VR_ProjectAppSpacePointToEye(
+                handSurfacePose.position,
+                g_vrViews[eyeIndex],
+                &gripX,
+                &gripY);
 
-        const float green =
-            handIndex == VR_CONTROLLER_LEFT
-                ? 0.85f
-                : 0.45f;
-
-        const float blue =
-            handIndex == VR_CONTROLLER_LEFT
-                ? 1.0f
-                : 0.05f;
-
-        if (controller.gripValid)
+        if (gripVisible)
         {
-            float gripX = 0.0f;
-            float gripY = 0.0f;
-
-            if (VR_ProjectAppSpacePointToEye(
-                    controller.gripPose.position,
-                    g_vrViews[eyeIndex],
-                    &gripX,
-                    &gripY))
-            {
-                VR_AppendControllerProxyDiamond(
-                    vertices,
-                    &vertexCount,
-                    gripX,
-                    gripY,
-                    markerHalfWidth,
-                    markerHalfHeight,
-                    red,
-                    green,
-                    blue);
-            }
+            VR_AppendControllerProxyDiamond(
+                vertices,
+                &vertexCount,
+                gripX,
+                gripY,
+                markerHalfWidth,
+                markerHalfHeight,
+                0.1f,
+                0.85f,
+                1.0f);
         }
 
-        if (controller.aimValid)
+        const VrHeadVector gripDirections[3] = {
+            VR_RotateHeadVector(
+                handSurfacePose.orientation,
+                {0.0f, 0.0f, -1.0f}),
+            VR_RotateHeadVector(
+                handSurfacePose.orientation,
+                {-1.0f, 0.0f, 0.0f}),
+            VR_RotateHeadVector(
+                handSurfacePose.orientation,
+                {0.0f, 1.0f, 0.0f}),
+        };
+
+        const float axisColors[3][3] = {
+            {1.0f, 0.05f, 0.05f},
+            {0.05f, 1.0f, 0.15f},
+            {0.1f, 0.35f, 1.0f},
+        };
+
+        constexpr float axisLengthMeters =
+            0.14f;
+
+        for (int axisIndex = 0;
+             axisIndex < 3;
+             ++axisIndex)
         {
-            const VrHeadVector aimForward =
-                VR_RotateHeadVector(
-                    controller.aimPose.orientation,
-                    {0.0f, 0.0f, -1.0f});
-
-            const XrVector3f aimEnd =
+            const XrVector3f axisEnd =
                 VR_ControllerAddScaled(
-                    controller.aimPose.position,
-                    aimForward,
-                    0.75f);
+                    handSurfacePose.position,
+                    gripDirections[axisIndex],
+                    axisLengthMeters);
 
-            float aimStartX = 0.0f;
-            float aimStartY = 0.0f;
-            float aimEndX = 0.0f;
-            float aimEndY = 0.0f;
+            float axisEndX = 0.0f;
+            float axisEndY = 0.0f;
 
-            const bool startVisible =
+            const bool axisEndVisible =
                 VR_ProjectAppSpacePointToEye(
-                    controller.aimPose.position,
+                    axisEnd,
                     g_vrViews[eyeIndex],
-                    &aimStartX,
-                    &aimStartY);
+                    &axisEndX,
+                    &axisEndY);
 
-            const bool endVisible =
-                VR_ProjectAppSpacePointToEye(
-                    aimEnd,
-                    g_vrViews[eyeIndex],
-                    &aimEndX,
-                    &aimEndY);
-
-            if (startVisible && endVisible)
+            if (gripVisible &&
+                axisEndVisible)
             {
                 VR_AppendControllerProxyRay(
                     vertices,
                     &vertexCount,
-                    aimStartX,
-                    aimStartY,
-                    aimEndX,
-                    aimEndY,
+                    gripX,
+                    gripY,
+                    axisEndX,
+                    axisEndY,
                     rayHalfThickness,
-                    red,
-                    green,
-                    blue);
+                    axisColors[axisIndex][0],
+                    axisColors[axisIndex][1],
+                    axisColors[axisIndex][2]);
             }
         }
     }
@@ -5058,8 +5137,8 @@ void VR_RenderControllerProxies(
     {
         Com_Printf(
             0,
-            "[VR] Rendered first visible OpenXR "
-            "controller proxies.\n");
+            "[VR][HANDS][DIAG] Rendered first compositor-true "
+            "left-grip origin/axis proxy.\n");
 
         g_vrLoggedFirstControllerProxyDraw = true;
     }
@@ -6231,6 +6310,16 @@ void VR_DestroyControllerInput()
         }
     }
 
+    for (XrSpace& space :
+         g_vrControllerPalmSpaces)
+    {
+        if (space != XR_NULL_HANDLE)
+        {
+            xrDestroySpace(space);
+            space = XR_NULL_HANDLE;
+        }
+    }
+
     if (g_vrHapticOutputAction != XR_NULL_HANDLE)
     {
         xrDestroyAction(g_vrHapticOutputAction);
@@ -6321,6 +6410,12 @@ void VR_DestroyControllerInput()
         g_vrGripPoseAction = XR_NULL_HANDLE;
     }
 
+    if (g_vrPalmPoseAction != XR_NULL_HANDLE)
+    {
+        xrDestroyAction(g_vrPalmPoseAction);
+        g_vrPalmPoseAction = XR_NULL_HANDLE;
+    }
+
     if (g_vrControllerActionSet != XR_NULL_HANDLE)
     {
         xrDestroyActionSet(g_vrControllerActionSet);
@@ -6337,6 +6432,7 @@ void VR_DestroyControllerInput()
     g_vrControllerSpacesCreated = false;
 
     g_vrLoggedFirstGripPose.fill(false);
+    g_vrLoggedFirstPalmPose.fill(false);
     g_vrLoggedFirstAimPose.fill(false);
     g_vrControllerTriggerPressed.fill(false);
     g_vrControllerSqueezePressed.fill(false);
@@ -6483,6 +6579,7 @@ void VR_DestroyControllerInput()
             g_vrWeaponControllerPoseMutex);
 
         g_vrLeftControllerForegripPoseValid = false;
+        g_vrLeftControllerPalmPoseValid = false;
         g_vrLeftControllerForegripPressed = false;
         g_vrLeftControllerSqueezePressedRaw = false;
         g_vrTwoHandWeaponBlend = 0.0f;
@@ -6506,6 +6603,26 @@ void VR_DestroyControllerInput()
         g_vrLeftControllerForegripAxis[0][0] = 1.0f;
         g_vrLeftControllerForegripAxis[1][1] = 1.0f;
         g_vrLeftControllerForegripAxis[2][2] = 1.0f;
+
+        g_vrLeftControllerGripOrientationHeadLocalOpenXr = {
+            0.0f,
+            0.0f,
+            0.0f,
+            1.0f,
+        };
+
+        std::memset(
+            g_vrLeftControllerPalmPosition,
+            0,
+            sizeof(
+                g_vrLeftControllerPalmPosition));
+
+        g_vrLeftControllerPalmOrientationHeadLocalOpenXr = {
+            0.0f,
+            0.0f,
+            0.0f,
+            1.0f,
+        };
 
         g_vrManualMagazineReload =
             VrManualMagazineReloadState{};
@@ -6580,9 +6697,9 @@ bool VR_SuggestControllerBindings()
         return false;
     }
 
-    std::array<XrPath, 20> touchBindingPaths = {};
+    std::array<XrPath, 22> touchBindingPaths = {};
 
-    const std::array<const char*, 20>
+    const std::array<const char*, 22>
         touchBindingStrings = {
             "/user/hand/left/input/grip/pose",
             "/user/hand/right/input/grip/pose",
@@ -6604,10 +6721,18 @@ bool VR_SuggestControllerBindings()
             "/user/hand/left/input/y/click",
             "/user/hand/left/input/menu/click",
             "/user/hand/right/input/thumbrest/touch",
+            "/user/hand/left/input/palm_ext/pose",
+            "/user/hand/right/input/palm_ext/pose",
         };
 
+    const std::uint32_t touchBindingCount =
+        g_vrPalmPoseExtensionEnabled
+            ? static_cast<std::uint32_t>(
+                  touchBindingPaths.size())
+            : 20u;
+
     for (std::uint32_t bindingIndex = 0u;
-         bindingIndex < touchBindingPaths.size();
+         bindingIndex < touchBindingCount;
          ++bindingIndex)
     {
         if (!VR_ControllerStringToPath(
@@ -6618,7 +6743,7 @@ bool VR_SuggestControllerBindings()
         }
     }
 
-    const std::array<XrActionSuggestedBinding, 20>
+    const std::array<XrActionSuggestedBinding, 22>
         touchBindings = {{
             {
                 g_vrGripPoseAction,
@@ -6700,6 +6825,14 @@ bool VR_SuggestControllerBindings()
                 g_vrRightThumbrestTouchAction,
                 touchBindingPaths[19],
             },
+            {
+                g_vrPalmPoseAction,
+                touchBindingPaths[20],
+            },
+            {
+                g_vrPalmPoseAction,
+                touchBindingPaths[21],
+            },
         }};
 
     XrInteractionProfileSuggestedBinding
@@ -6711,8 +6844,7 @@ bool VR_SuggestControllerBindings()
         touchProfile;
 
     touchSuggestion.countSuggestedBindings =
-        static_cast<std::uint32_t>(
-            touchBindings.size());
+        touchBindingCount;
 
     touchSuggestion.suggestedBindings =
         touchBindings.data();
@@ -6739,9 +6871,9 @@ bool VR_SuggestControllerBindings()
             "simple_controller",
             &simpleProfile))
     {
-        std::array<XrPath, 6> simpleBindingPaths = {};
+        std::array<XrPath, 8> simpleBindingPaths = {};
 
-        const std::array<const char*, 6>
+        const std::array<const char*, 8>
             simpleBindingStrings = {
                 "/user/hand/left/input/grip/pose",
                 "/user/hand/right/input/grip/pose",
@@ -6749,12 +6881,20 @@ bool VR_SuggestControllerBindings()
                 "/user/hand/right/input/aim/pose",
                 "/user/hand/left/output/haptic",
                 "/user/hand/right/output/haptic",
+                "/user/hand/left/input/palm_ext/pose",
+                "/user/hand/right/input/palm_ext/pose",
             };
+
+        const std::uint32_t simpleBindingCount =
+            g_vrPalmPoseExtensionEnabled
+                ? static_cast<std::uint32_t>(
+                      simpleBindingPaths.size())
+                : 6u;
 
         bool simplePathsValid = true;
 
         for (std::uint32_t bindingIndex = 0u;
-             bindingIndex < simpleBindingPaths.size();
+             bindingIndex < simpleBindingCount;
              ++bindingIndex)
         {
             simplePathsValid =
@@ -6768,7 +6908,7 @@ bool VR_SuggestControllerBindings()
         {
             const std::array<
                 XrActionSuggestedBinding,
-                6>
+                8>
                 simpleBindings = {{
                     {
                         g_vrGripPoseAction,
@@ -6794,6 +6934,14 @@ bool VR_SuggestControllerBindings()
                         g_vrHapticOutputAction,
                         simpleBindingPaths[5],
                     },
+                    {
+                        g_vrPalmPoseAction,
+                        simpleBindingPaths[6],
+                    },
+                    {
+                        g_vrPalmPoseAction,
+                        simpleBindingPaths[7],
+                    },
                 }};
 
             XrInteractionProfileSuggestedBinding
@@ -6805,8 +6953,7 @@ bool VR_SuggestControllerBindings()
                 simpleProfile;
 
             simpleSuggestion.countSuggestedBindings =
-                static_cast<std::uint32_t>(
-                    simpleBindings.size());
+                simpleBindingCount;
 
             simpleSuggestion.suggestedBindings =
                 simpleBindings.data();
@@ -6829,7 +6976,10 @@ bool VR_SuggestControllerBindings()
     Com_Printf(
         0,
         "[VR] Suggested Oculus Touch controller "
-        "pose, analog, and haptic bindings.\n");
+        "pose, analog, and haptic bindings%s.\n",
+        g_vrPalmPoseExtensionEnabled
+            ? " including XR_EXT_palm_pose"
+            : "");
 
     return true;
 }
@@ -6973,6 +7123,17 @@ bool VR_CreateControllerActions()
         return false;
     }
 
+    if (g_vrPalmPoseExtensionEnabled &&
+        !VR_CreateControllerAction(
+            XR_ACTION_TYPE_POSE_INPUT,
+            "palm_pose",
+            "Palm Surface Pose",
+            &g_vrPalmPoseAction))
+    {
+        VR_DestroyControllerInput();
+        return false;
+    }
+
     if (!VR_SuggestControllerBindings())
     {
         VR_DestroyControllerInput();
@@ -7021,6 +7182,38 @@ bool VR_CreateControllerActionSpaces()
                 result);
 
             return false;
+        }
+
+        if (g_vrPalmPoseAction != XR_NULL_HANDLE)
+        {
+            XrActionSpaceCreateInfo palmSpaceInfo{
+                XR_TYPE_ACTION_SPACE_CREATE_INFO
+            };
+
+            palmSpaceInfo.action =
+                g_vrPalmPoseAction;
+
+            palmSpaceInfo.subactionPath =
+                g_vrControllerHandPaths[handIndex];
+
+            palmSpaceInfo.poseInActionSpace.orientation.w =
+                1.0f;
+
+            result =
+                xrCreateActionSpace(
+                    g_vrSession,
+                    &palmSpaceInfo,
+                    &g_vrControllerPalmSpaces[
+                        handIndex]);
+
+            if (XR_FAILED(result))
+            {
+                VR_LogXrFailure(
+                    "xrCreateActionSpace(palm_ext)",
+                    result);
+
+                return false;
+            }
         }
 
         XrActionSpaceCreateInfo aimSpaceInfo{
@@ -7473,6 +7666,9 @@ void VR_PublishLeftControllerForegripPose(
     g_vrLeftControllerForegripAxis[2][2] =
         upCod.z;
 
+    g_vrLeftControllerGripOrientationHeadLocalOpenXr =
+        controllerRelativeToHead;
+
     g_vrLeftControllerForegripPoseValid = true;
 
     g_vrLeftControllerSqueezePressedRaw =
@@ -7482,6 +7678,87 @@ void VR_PublishLeftControllerForegripPose(
         squeezePressed &&
         g_vrManualMagazineReload.stage ==
             VrManualMagazineReloadStage::Ready;
+}
+
+
+void VR_PublishLeftControllerPalmPose(
+    const XrPosef& controllerPalmPose,
+    const bool palmValid)
+{
+    if (!palmValid ||
+        g_vrViews.size() < kVrStereoEyeCount)
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrWeaponControllerPoseMutex);
+
+        g_vrLeftControllerPalmPoseValid = false;
+        return;
+    }
+
+    const XrQuaternionf headOrientation =
+        VR_NormalizeQuaternion(
+            g_vrViews[0].pose.orientation);
+
+    const XrQuaternionf inverseHeadOrientation =
+        VR_ConjugateQuaternion(
+            headOrientation);
+
+    const XrVector3f headCenter = {
+        (g_vrViews[0].pose.position.x +
+         g_vrViews[1].pose.position.x) * 0.5f,
+        (g_vrViews[0].pose.position.y +
+         g_vrViews[1].pose.position.y) * 0.5f,
+        (g_vrViews[0].pose.position.z +
+         g_vrViews[1].pose.position.z) * 0.5f,
+    };
+
+    const VrHeadVector palmOffsetOpenXr = {
+        controllerPalmPose.position.x -
+            headCenter.x,
+        controllerPalmPose.position.y -
+            headCenter.y,
+        controllerPalmPose.position.z -
+            headCenter.z,
+    };
+
+    const VrHeadVector palmOffsetHeadLocal =
+        VR_RotateHeadVector(
+            inverseHeadOrientation,
+            palmOffsetOpenXr);
+
+    const VrHeadVector palmPositionCod =
+        VR_OpenXrVectorToCod(
+            palmOffsetHeadLocal);
+
+    const XrQuaternionf palmOrientation =
+        VR_NormalizeQuaternion(
+            controllerPalmPose.orientation);
+
+    const XrQuaternionf palmRelativeToHead =
+        VR_NormalizeQuaternion(
+            VR_MultiplyQuaternion(
+                inverseHeadOrientation,
+                palmOrientation));
+
+    std::lock_guard<std::mutex> lock(
+        g_vrWeaponControllerPoseMutex);
+
+    g_vrLeftControllerPalmPosition[0] =
+        palmPositionCod.x *
+        kVrGameUnitsPerMeter;
+
+    g_vrLeftControllerPalmPosition[1] =
+        palmPositionCod.y *
+        kVrGameUnitsPerMeter;
+
+    g_vrLeftControllerPalmPosition[2] =
+        palmPositionCod.z *
+        kVrGameUnitsPerMeter;
+
+    g_vrLeftControllerPalmOrientationHeadLocalOpenXr =
+        palmRelativeToHead;
+
+    g_vrLeftControllerPalmPoseValid = true;
 }
 
 
@@ -8066,6 +8343,7 @@ void VR_UpdateControllerActions(
             g_vrControllerHandPaths[handIndex];
 
         bool gripActive = false;
+        bool palmActive = false;
         bool aimActive = false;
 
         VR_GetControllerPoseState(
@@ -8078,7 +8356,19 @@ void VR_UpdateControllerActions(
             handPath,
             &aimActive);
 
+        if (g_vrPalmPoseAction != XR_NULL_HANDLE)
+        {
+            VR_GetControllerPoseState(
+                g_vrPalmPoseAction,
+                handPath,
+                &palmActive);
+        }
+
         XrSpaceLocation gripLocation{
+            XR_TYPE_SPACE_LOCATION
+        };
+
+        XrSpaceLocation palmLocation{
             XR_TYPE_SPACE_LOCATION
         };
 
@@ -8094,6 +8384,16 @@ void VR_UpdateControllerActions(
                 displayTime,
                 &gripLocation);
 
+        const bool palmValid =
+            palmActive &&
+            g_vrControllerPalmSpaces[handIndex] !=
+                XR_NULL_HANDLE &&
+            VR_LocateControllerSpace(
+                g_vrControllerPalmSpaces[
+                    handIndex],
+                displayTime,
+                &palmLocation);
+
         const bool aimValid =
             aimActive &&
             VR_LocateControllerSpace(
@@ -8106,12 +8406,19 @@ void VR_UpdateControllerActions(
             g_vrControllerRenderPoses[handIndex];
 
         renderPose.gripValid = gripValid;
+        renderPose.palmValid = palmValid;
         renderPose.aimValid = aimValid;
 
         if (gripValid)
         {
             renderPose.gripPose =
                 gripLocation.pose;
+        }
+
+        if (palmValid)
+        {
+            renderPose.palmPose =
+                palmLocation.pose;
         }
 
         if (aimValid)
@@ -8139,6 +8446,19 @@ void VR_UpdateControllerActions(
                 VR_ControllerHandName(handIndex));
 
             g_vrLoggedFirstGripPose[handIndex] =
+                true;
+        }
+
+        if (palmValid &&
+            !g_vrLoggedFirstPalmPose[handIndex])
+        {
+            Com_Printf(
+                0,
+                "[VR][HANDS] Located first valid %s controller "
+                "XR_EXT_palm_pose surface.\n",
+                VR_ControllerHandName(handIndex));
+
+            g_vrLoggedFirstPalmPose[handIndex] =
                 true;
         }
 
@@ -8288,6 +8608,10 @@ void VR_UpdateControllerActions(
                 gripLocation.pose,
                 gripValid,
                 squeezePressed);
+
+            VR_PublishLeftControllerPalmPose(
+                palmLocation.pose,
+                palmValid);
 
             bool usePressed = false;
             bool useActive = false;
@@ -10312,8 +10636,20 @@ bool VR_RenderSolidColorFrame(
                 eyeSwapchain.width,
                 eyeSwapchain.height);
 
-            // The colored controller diamonds and rays were development diagnostics.
-            // Keep controller tracking active without drawing the proxy overlay.
+            // KISAK_SP_VR_TRACKED_HANDS_V28_REMOVE_CONTROLLER_AXIS_OVERLAY
+            // V22's compositor-space origin/axis proxy was temporary
+            // calibration instrumentation.  The tracked-hand diagnostics
+            // remain available, but no colored proxy geometry is submitted.
+            static bool loggedControllerAxisOverlayRemoval = false;
+
+            if (!loggedControllerAxisOverlayRemoval)
+            {
+                Com_Printf(
+                    0,
+                    "[VR][HANDS] V28 removed the colored controller origin/axis overlay while preserving V27 hand tracking and grip behavior.\n");
+
+                loggedControllerAxisOverlayRemoval = true;
+            }
         }
 
         g_vrD3dContext->Flush();
@@ -10416,6 +10752,7 @@ void VR_ResetState()
     g_vrInitialized = false;
     g_vrSessionRunning = false;
     g_vrExitRequested = false;
+    g_vrPalmPoseExtensionEnabled = false;
 
     {
         std::lock_guard<std::mutex> lock(
@@ -10434,6 +10771,12 @@ void VR_ResetState()
         g_vrLoggedFixedScopedTurretFsrBypass = false;
     }
 }
+}
+
+
+bool VR_TrackedHandDiagnosticsEnabled()
+{
+    return VR_TrackedHandDiagnosticsEnabledInternal();
 }
 
 
@@ -10567,6 +10910,191 @@ bool VR_GetTrackedControllerGripPoseWorld(
                     cameraAxis[2][worldComponent];
         }
     }
+
+    return true;
+}
+
+
+bool VR_GetTrackedLeftControllerPalmQuaternionWorld(
+    const float cameraOrigin[3],
+    const float cameraAxis[3][3],
+    float palmOrigin[3],
+    float palmOrientationHeadLocalOpenXr[4])
+{
+    if (cameraOrigin == nullptr ||
+        cameraAxis == nullptr ||
+        palmOrigin == nullptr ||
+        palmOrientationHeadLocalOpenXr == nullptr)
+    {
+        return false;
+    }
+
+    float palmCameraLocal[3] = {};
+    XrQuaternionf orientation = {
+        0.0f,
+        0.0f,
+        0.0f,
+        1.0f,
+    };
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrWeaponControllerPoseMutex);
+
+        if (!g_vrLeftControllerPalmPoseValid)
+        {
+            return false;
+        }
+
+        std::memcpy(
+            palmCameraLocal,
+            g_vrLeftControllerPalmPosition,
+            sizeof(palmCameraLocal));
+
+        orientation =
+            g_vrLeftControllerPalmOrientationHeadLocalOpenXr;
+    }
+
+    orientation =
+        VR_NormalizeQuaternion(
+            orientation);
+
+    if (!std::isfinite(orientation.x) ||
+        !std::isfinite(orientation.y) ||
+        !std::isfinite(orientation.z) ||
+        !std::isfinite(orientation.w))
+    {
+        return false;
+    }
+
+    for (int worldComponent = 0;
+         worldComponent < 3;
+         ++worldComponent)
+    {
+        palmOrigin[worldComponent] =
+            cameraOrigin[worldComponent] +
+            palmCameraLocal[0] *
+                cameraAxis[0][worldComponent] +
+            palmCameraLocal[1] *
+                cameraAxis[1][worldComponent] +
+            palmCameraLocal[2] *
+                cameraAxis[2][worldComponent];
+    }
+
+    palmOrientationHeadLocalOpenXr[0] =
+        orientation.x;
+    palmOrientationHeadLocalOpenXr[1] =
+        orientation.y;
+    palmOrientationHeadLocalOpenXr[2] =
+        orientation.z;
+    palmOrientationHeadLocalOpenXr[3] =
+        orientation.w;
+
+    return true;
+}
+
+
+bool VR_GetTrackedLeftControllerGripQuaternionWorld(
+    const float cameraOrigin[3],
+    const float cameraAxis[3][3],
+    float gripOrigin[3],
+    float gripOrientationHeadLocalOpenXr[4])
+{
+    if (cameraOrigin == nullptr ||
+        cameraAxis == nullptr ||
+        gripOrigin == nullptr ||
+        gripOrientationHeadLocalOpenXr == nullptr)
+    {
+        return false;
+    }
+
+    float gripCameraLocal[3] = {};
+    XrQuaternionf orientation = {
+        0.0f,
+        0.0f,
+        0.0f,
+        1.0f,
+    };
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrWeaponControllerPoseMutex);
+
+        if (!g_vrLeftControllerForegripPoseValid)
+        {
+            return false;
+        }
+
+        std::memcpy(
+            gripCameraLocal,
+            g_vrLeftControllerForegripPosition,
+            sizeof(gripCameraLocal));
+
+        orientation =
+            g_vrLeftControllerGripOrientationHeadLocalOpenXr;
+    }
+
+    orientation =
+        VR_NormalizeQuaternion(
+            orientation);
+
+    if (!std::isfinite(orientation.x) ||
+        !std::isfinite(orientation.y) ||
+        !std::isfinite(orientation.z) ||
+        !std::isfinite(orientation.w))
+    {
+        return false;
+    }
+
+    for (int worldComponent = 0;
+         worldComponent < 3;
+         ++worldComponent)
+    {
+        gripOrigin[worldComponent] =
+            cameraOrigin[worldComponent] +
+            gripCameraLocal[0] *
+                cameraAxis[0][worldComponent] +
+            gripCameraLocal[1] *
+                cameraAxis[1][worldComponent] +
+            gripCameraLocal[2] *
+                cameraAxis[2][worldComponent];
+    }
+
+    gripOrientationHeadLocalOpenXr[0] =
+        orientation.x;
+    gripOrientationHeadLocalOpenXr[1] =
+        orientation.y;
+    gripOrientationHeadLocalOpenXr[2] =
+        orientation.z;
+    gripOrientationHeadLocalOpenXr[3] =
+        orientation.w;
+
+    return true;
+}
+
+
+bool VR_GetLeftControllerSupportGripPressed(
+    bool* supportGripPressed)
+{
+    if (supportGripPressed == nullptr)
+    {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(
+        g_vrWeaponControllerPoseMutex);
+
+    if (!g_vrLeftControllerForegripPoseValid)
+    {
+        *supportGripPressed = false;
+        return false;
+    }
+
+    // This state is already suppressed while physical magazine handling owns
+    // the left squeeze, so the rendered hand cannot attach to the rifle during
+    // a magazine draw or insertion.
+    *supportGripPressed =
+        g_vrLeftControllerForegripPressed;
 
     return true;
 }
@@ -13242,9 +13770,22 @@ bool VR_Init()
         return false;
     }
 
-    const char* enabledExtensions[] = {
+    const bool palmPoseExtensionAvailable =
+        VR_HasInstanceExtension(
+            "XR_EXT_palm_pose");
+
+    std::array<const char*, 2> enabledExtensions = {
         XR_KHR_D3D11_ENABLE_EXTENSION_NAME,
+        nullptr,
     };
+
+    std::uint32_t enabledExtensionCount = 1u;
+
+    if (palmPoseExtensionAvailable)
+    {
+        enabledExtensions[enabledExtensionCount++] =
+            "XR_EXT_palm_pose";
+    }
 
     XrInstanceCreateInfo createInfo{
         XR_TYPE_INSTANCE_CREATE_INFO
@@ -13268,8 +13809,10 @@ bool VR_Init()
     createInfo.applicationInfo.apiVersion =
         XR_MAKE_VERSION(1, 0, 0);
 
-    createInfo.enabledExtensionCount = 1;
-    createInfo.enabledExtensionNames = enabledExtensions;
+    createInfo.enabledExtensionCount =
+        enabledExtensionCount;
+    createInfo.enabledExtensionNames =
+        enabledExtensions.data();
 
     XrResult result =
         xrCreateInstance(&createInfo, &g_vrInstance);
@@ -13280,6 +13823,19 @@ bool VR_Init()
         VR_ResetState();
         return false;
     }
+
+    g_vrPalmPoseExtensionEnabled =
+        palmPoseExtensionAvailable;
+
+    Com_Printf(
+        0,
+        "[VR][HANDS] XR_EXT_palm_pose %s; the free left hand will %s.\n",
+        g_vrPalmPoseExtensionEnabled
+            ? "is enabled"
+            : "is unavailable",
+        g_vrPalmPoseExtensionEnabled
+            ? "use the runtime's controller-specific palm surface pose"
+            : "fall back to V24's rigid grip pose");
 
     XrInstanceProperties runtimeProperties{
         XR_TYPE_INSTANCE_PROPERTIES
