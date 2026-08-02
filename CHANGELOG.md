@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.10.0-beta.1
+
+Tracked-hands and physical-reloading beta.
+
+### Added
+
+- Controller-tracked left hand with free, rifle-support, and magazine-grip poses
+- Physical manual reloading for detachable-magazine rifles, SMGs, and
+  pistols: eject with right A, draw from the left hip with the left grip,
+  and release at the magazine well to insert
+
+### Changed
+
+- Moved jump to the left index trigger and magazine ejection/native reload to
+  the right A button
+- Removed the colored controller-axis diagnostic overlay
+
 ## v0.9.0-beta.1
 
 Initial public beta release target.

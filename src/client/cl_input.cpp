@@ -1562,8 +1562,8 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
                 Com_Printf(
                     0,
                     "[VR][INPUT] Separated Touch actions: left X = "
-                    "pickup/activate, left trigger = magazine eject "
-                    "or native reload fallback.\n");
+                    "pickup/activate, left trigger = jump, right A = "
+                    "magazine eject or native reload fallback.\n");
 
                 loggedVrBasicButtons = true;
             }
@@ -1572,7 +1572,7 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
         // KISAK_SP_VR_SCRIPTED_JUMP_BRIDGE_V1
         // Mission scripts can listen for +gostand through notifyOnCommand.
         // Directly setting BUTTON_JUMP bypasses that notification, so replay
-        // one native command edge for every Touch A press.
+        // one native command edge for every left-trigger press.
         static bool vrJumpCommandWasHeld = false;
 
         const bool vrJumpCommandPressed =
@@ -1614,8 +1614,8 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
             {
                 Com_Printf(
                     0,
-                    "[VR][JUMP] Routed Touch A through the native "
-                    "+gostand command path.\n");
+                    "[VR][JUMP] Routed the left Touch trigger through "
+                    "the native +gostand command path.\n");
 
                 loggedVrScriptedJumpBridge = true;
             }

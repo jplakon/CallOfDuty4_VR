@@ -57,7 +57,7 @@ XrAction g_vrSqueezeValueAction = XR_NULL_HANDLE;
 XrAction g_vrMoveThumbstickAction = XR_NULL_HANDLE;
 XrAction g_vrTurnThumbstickAction = XR_NULL_HANDLE;
 XrAction g_vrRightThumbrestTouchAction = XR_NULL_HANDLE;
-XrAction g_vrJumpButtonAction = XR_NULL_HANDLE;
+XrAction g_vrRightAButtonAction = XR_NULL_HANDLE;
 XrAction g_vrUseReloadButtonAction = XR_NULL_HANDLE;
 XrAction g_vrSprintButtonAction = XR_NULL_HANDLE;
 XrAction g_vrMeleeButtonAction = XR_NULL_HANDLE;
@@ -514,13 +514,16 @@ bool g_vrModifierDpadArmed = true;
 
 // KISAK_SP_VR_POSE_FOCUS_AIM_V1
 // ADS is published by the two-hand eye-level pose detector instead of the
-// left index trigger, leaving that trigger available for a separate action.
+// left index trigger, leaving that trigger available for jump.
 bool g_vrPoseFocusAimHeld = false;
 
 // KISAK_SP_VR_SEPARATE_USE_RELOAD_V1
 // Keep pickup/activate and reload on independent usercmd bits.
-bool g_vrLeftTriggerReloadHeld = false;
-bool g_vrRightAJumpHeld = false;
+// KISAK_SP_VR_CONTROLS_V29_A_EJECT_LEFT_TRIGGER_JUMP
+// Right A owns magazine ejection/native reload and remains menu confirm;
+// the left index trigger now owns jump.
+bool g_vrLeftTriggerJumpHeld = false;
+bool g_vrRightAButtonHeld = false;
 bool g_vrLeftXUseHeld = false;
 
 bool g_vrLeftStickSprintHeld = false;
@@ -550,7 +553,7 @@ struct VrManualMagazineReloadState
     int weaponIndex = 0;
     VrManualMagazineReloadStage stage =
         VrManualMagazineReloadStage::Ready;
-    bool leftTriggerWasHeld = false;
+    bool ejectButtonWasHeld = false;
     bool leftSqueezeWasHeld = false;
     bool heldNearMagazineWell = false;
     bool heldPoseValid = false;
@@ -6362,10 +6365,10 @@ void VR_DestroyControllerInput()
         g_vrUseReloadButtonAction = XR_NULL_HANDLE;
     }
 
-    if (g_vrJumpButtonAction != XR_NULL_HANDLE)
+    if (g_vrRightAButtonAction != XR_NULL_HANDLE)
     {
-        xrDestroyAction(g_vrJumpButtonAction);
-        g_vrJumpButtonAction = XR_NULL_HANDLE;
+        xrDestroyAction(g_vrRightAButtonAction);
+        g_vrRightAButtonAction = XR_NULL_HANDLE;
     }
 
     if (g_vrRightThumbrestTouchAction != XR_NULL_HANDLE)
@@ -6456,8 +6459,8 @@ void VR_DestroyControllerInput()
         g_vrModifierDpadArmed = true;
 
         g_vrPoseFocusAimHeld = false;
-        g_vrLeftTriggerReloadHeld = false;
-        g_vrRightAJumpHeld = false;
+        g_vrLeftTriggerJumpHeld = false;
+        g_vrRightAButtonHeld = false;
         g_vrLeftXUseHeld = false;
 
         g_vrLeftStickSprintHeld = false;
@@ -6794,7 +6797,7 @@ bool VR_SuggestControllerBindings()
                 touchBindingPaths[11],
             },
             {
-                g_vrJumpButtonAction,
+                g_vrRightAButtonAction,
                 touchBindingPaths[12],
             },
             {
@@ -7080,9 +7083,9 @@ bool VR_CreateControllerActions()
             &g_vrRightThumbrestTouchAction) ||
         !VR_CreateControllerAction(
             XR_ACTION_TYPE_BOOLEAN_INPUT,
-            "jump_button",
-            "Jump Button",
-            &g_vrJumpButtonAction) ||
+            "right_a_button",
+            "Right A Button",
+            &g_vrRightAButtonAction) ||
         !VR_CreateControllerAction(
             XR_ACTION_TYPE_BOOLEAN_INPUT,
             "use_reload_button",
@@ -8234,8 +8237,8 @@ void VR_UpdatePoseFocusAimFromControllers()
             0,
             "[VR][FOCUS] Pose ADS enabled: hold the left squeeze "
             "and shoulder the two-handed weapon near the HMD sight "
-            "line.  The left index trigger is reserved for magazine "
-            "ejection or native reload fallback.\n");
+            "line.  The left index trigger jumps; right A ejects a "
+            "supported magazine or requests native reload fallback.\n");
 
         loggedConfiguration = true;
     }
@@ -8654,9 +8657,8 @@ void VR_UpdateControllerActions(
 
             // VR_UpdatePoseFocusAimFromControllers publishes ADS after both
             // tracked hand poses have been evaluated.  The independent left
-            // index trigger now ejects a supported physical magazine or
-            // requests native reload for an unsupported weapon.
-            g_vrLeftTriggerReloadHeld =
+            // index trigger now drives jump.
+            g_vrLeftTriggerJumpHeld =
                 triggerActive &&
                 triggerValue >= 0.55f;
 
@@ -8717,14 +8719,14 @@ void VR_UpdateControllerActions(
 
         if (handIndex == VR_CONTROLLER_RIGHT)
         {
-            bool jumpPressed = false;
-            bool jumpActive = false;
+            bool rightAPressed = false;
+            bool rightAActive = false;
 
             VR_GetControllerBooleanState(
-                g_vrJumpButtonAction,
+                g_vrRightAButtonAction,
                 handPath,
-                &jumpPressed,
-                &jumpActive);
+                &rightAPressed,
+                &rightAActive);
 
             bool meleePressed = false;
             bool meleeActive = false;
@@ -8748,9 +8750,9 @@ void VR_UpdateControllerActions(
                 std::lock_guard<std::mutex> lock(
                     g_vrHeadOrientationMutex);
 
-                g_vrRightAJumpHeld =
-                    jumpActive &&
-                    jumpPressed;
+                g_vrRightAButtonHeld =
+                    rightAActive &&
+                    rightAPressed;
 
                 g_vrRightStickMeleeHeld =
                     meleeActive &&
@@ -8762,6 +8764,17 @@ void VR_UpdateControllerActions(
 
                 g_vrRightGripOffhandHeld =
                     squeezePressed;
+            }
+
+            static bool loggedV29ControlSwap = false;
+
+            if (!loggedV29ControlSwap)
+            {
+                Com_Printf(
+                    0,
+                    "[VR][CONTROLS] V29 controls: left index trigger jumps; right A ejects or reloads.\n");
+
+                loggedV29ControlSwap = true;
             }
 
             const bool attackPressed =
@@ -9819,7 +9832,7 @@ void VR_UpdateMenuControllerNavigation()
         }
 
         confirmHeld =
-            g_vrRightAJumpHeld;
+            g_vrRightAButtonHeld;
 
         backHeld =
             g_vrRightBStanceHeld;
@@ -11156,14 +11169,14 @@ void VR_UpdateManualMagazineReload(
                 : "disabled");
     }
 
-    bool leftTriggerHeld = false;
+    bool ejectButtonHeld = false;
 
     {
         std::lock_guard<std::mutex> lock(
             g_vrHeadOrientationMutex);
 
-        leftTriggerHeld =
-            g_vrLeftTriggerReloadHeld;
+        ejectButtonHeld =
+            g_vrRightAButtonHeld;
     }
 
     const std::uint32_t nowMilliseconds =
@@ -11201,8 +11214,8 @@ void VR_UpdateManualMagazineReload(
             g_vrManualMagazineReload.stage =
                 VrManualMagazineReloadStage::Ready;
 
-            g_vrManualMagazineReload.leftTriggerWasHeld =
-                leftTriggerHeld;
+            g_vrManualMagazineReload.ejectButtonWasHeld =
+                ejectButtonHeld;
 
             g_vrManualMagazineReload.leftSqueezeWasHeld =
                 g_vrLeftControllerSqueezePressedRaw;
@@ -11238,9 +11251,9 @@ void VR_UpdateManualMagazineReload(
         const bool leftSqueezeHeld =
             g_vrLeftControllerSqueezePressedRaw;
 
-        const bool triggerPressedEdge =
-            leftTriggerHeld &&
-            !g_vrManualMagazineReload.leftTriggerWasHeld;
+        const bool ejectButtonPressedEdge =
+            ejectButtonHeld &&
+            !g_vrManualMagazineReload.ejectButtonWasHeld;
 
         const bool squeezePressedEdge =
             leftSqueezeHeld &&
@@ -11250,8 +11263,8 @@ void VR_UpdateManualMagazineReload(
             !leftSqueezeHeld &&
             g_vrManualMagazineReload.leftSqueezeWasHeld;
 
-        g_vrManualMagazineReload.leftTriggerWasHeld =
-            leftTriggerHeld;
+        g_vrManualMagazineReload.ejectButtonWasHeld =
+            ejectButtonHeld;
 
         g_vrManualMagazineReload.leftSqueezeWasHeld =
             leftSqueezeHeld;
@@ -11276,7 +11289,7 @@ void VR_UpdateManualMagazineReload(
         }
 
         if (canReload &&
-            triggerPressedEdge &&
+            ejectButtonPressedEdge &&
             g_vrManualMagazineReload.stage ==
                 VrManualMagazineReloadStage::Ready)
         {
@@ -12499,7 +12512,7 @@ bool VR_GetBasicGameplayButtons(
         return false;
     }
 
-    bool rawLeftTriggerHeld = false;
+    bool rawReloadButtonHeld = false;
 
     {
         std::lock_guard<std::mutex> lock(
@@ -12509,13 +12522,13 @@ bool VR_GetBasicGameplayButtons(
             g_vrPoseFocusAimHeld;
 
         *jumpHeld =
-            g_vrRightAJumpHeld;
+            g_vrLeftTriggerJumpHeld;
 
         *useHeld =
             g_vrLeftXUseHeld;
 
-        rawLeftTriggerHeld =
-            g_vrLeftTriggerReloadHeld;
+        rawReloadButtonHeld =
+            g_vrRightAButtonHeld;
     }
 
     const std::uint32_t nowMilliseconds =
@@ -12539,12 +12552,12 @@ bool VR_GetBasicGameplayButtons(
                     .commitUntilMilliseconds -
                 nowMilliseconds) > 0;
 
-        // Unsupported weapons retain the original left-trigger reload.
+        // Unsupported weapons use right A for the original native reload.
         // Supported magazines emit BUTTON_RELOAD only after insertion.
         *reloadHeld =
             manualReloadActive
                 ? manualCommitActive
-                : rawLeftTriggerHeld;
+                : rawReloadButtonHeld;
     }
 
     return

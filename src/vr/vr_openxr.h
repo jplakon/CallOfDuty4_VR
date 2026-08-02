@@ -227,7 +227,7 @@ bool VR_ConsumeSnapTurn(
 
 // Returns the first Touch gameplay-control set:
 // a left-squeeze two-hand weapon pose near the HMD sight line = ADS,
-// right A = jump, left X = pickup/activate, and left trigger = magazine
+// left index trigger = jump, left X = pickup/activate, and right A = magazine
 // eject for supported weapons (native reload fallback otherwise).
 bool VR_GetBasicGameplayButtons(
     bool* adsHeld,
@@ -237,9 +237,9 @@ bool VR_GetBasicGameplayButtons(
 
 // KISAK_SP_VR_MANUAL_MAGAZINE_RELOAD_V1
 // Publishes the current weapon's physical magazine well and advances the
-// OpenXR manual-reload state machine.  Detachable-magazine weapons use the
-// left trigger to eject, left squeeze near the hip to draw a fresh magazine,
-// and release at the magazine well to insert it.
+// OpenXR manual-reload state machine.  Detachable-magazine weapons use right A
+// to eject, left squeeze near the hip to draw a fresh magazine, and release at
+// the magazine well to insert it.
 void VR_UpdateManualMagazineReload(
     int weaponIndex,
     bool supported,
