@@ -64,9 +64,9 @@ This checklist is for `v0.9.0-beta.1`.
 - Verify the ZIP on a second clean COD4 directory or Windows account.
 - Confirm `SOURCE.txt` points to the exact tag and commit.
 - Confirm `SHA256SUMS.txt` matches all package files.
-- Confirm the package contains the allowlisted `steam_api.dll` redistributable
-  and no other `.dll`, `.pdb`, `.iwd`, `.ff`, save, log, or original game
-  executable.
+- Confirm the package contains only the allowlisted Steamworks, Bink, and
+  Miles runtime files from the KisakCOD dependency tree, and no `.pdb`, `.iwd`,
+  `.ff`, save, log, or original game executable.
 
 ## Publish
 

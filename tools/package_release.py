@@ -33,7 +33,11 @@ PACKAGE_TEMPLATES = (
     "README-FIRST.txt",
     "licenses/Tracy-LICENSE.txt",
 )
-ALLOWED_RUNTIME_DLLS = {"steam_api.dll"}
+ALLOWED_RUNTIME_DLLS = {
+    "steam_api.dll",
+    "binkw32.dll",
+    "mss32.dll",
+}
 
 RELEASE_BLOCKERS = (
     "GITHUB_USERNAME_HERE",
@@ -203,9 +207,25 @@ def main() -> int:
         )
 
     payload["KisakCOD-sp.exe"] = binary
-    payload["steam_api.dll"] = read_required(
-        root / "deps" / "steamsdk" / "steam_api.dll"
-    )
+    runtime_files = {
+        "steam_api.dll": root / "deps" / "steamsdk" / "steam_api.dll",
+        "binkw32.dll": root / "deps" / "binklib" / "binkw32.dll",
+        "mss32.dll": root / "deps" / "msslib" / "dlls" / "mss32.dll",
+        "miles/milesEq.flt": root / "deps" / "msslib" / "dlls" / "miles" / "milesEq.flt",
+        "miles/mssdolby.flt": root / "deps" / "msslib" / "dlls" / "miles" / "mssdolby.flt",
+        "miles/mssds3d.flt": root / "deps" / "msslib" / "dlls" / "miles" / "mssds3d.flt",
+        "miles/mssdsp.flt": root / "deps" / "msslib" / "dlls" / "miles" / "mssdsp.flt",
+        "miles/msseax.flt": root / "deps" / "msslib" / "dlls" / "miles" / "msseax.flt",
+        "miles/mssmp3.asi": root / "deps" / "msslib" / "dlls" / "miles" / "mssmp3.asi",
+        "miles/msssrs.flt": root / "deps" / "msslib" / "dlls" / "miles" / "msssrs.flt",
+        "miles/mssvoice.asi": root / "deps" / "msslib" / "dlls" / "miles" / "mssvoice.asi",
+    }
+    for destination, source in runtime_files.items():
+        payload[destination] = read_required(source)
+
+    if b"_AIL_sample_stage_property@28" not in payload["mss32.dll"]:
+        fail("packaged mss32.dll lacks the required Miles entry point")
+
     payload["LICENSE-GPLv3.txt"] = read_required(root / "LICENSE")
     payload["THIRD-PARTY-NOTICES.txt"] = read_required(
         root / "THIRD-PARTY-NOTICES.md"

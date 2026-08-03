@@ -17,12 +17,12 @@ package.
 Tracy Profiler is distributed under the 3-clause BSD license. Its license text
 is included in each binary package.
 
-The binary package includes the 32-bit `steam_api.dll` redistributable that
-the executable links against, as required by Valve's Steamworks runtime
-documentation. It intentionally does not include Call of Duty 4 data,
-`iw3sp.exe`, Bink/Miles libraries, DirectX runtime files, maps, fastfiles,
-saves, or other files copied from the user's game installation. Users provide
-those files through their own legitimate COD4 installation.
+The binary package includes the 32-bit Steamworks, Bink, and Miles runtime
+files retained in the upstream KisakCOD dependency tree and linked by the
+rebuilt executable. Those components remain the property of their respective
+rightsholders. The package intentionally does not include `iw3sp.exe`, DirectX
+runtime files, maps, fastfiles, saves, or other Call of Duty game data. Users
+provide the game data through their own legitimate COD4 installation.
 
 Call of Duty, Call of Duty 4, Infinity Ward, Activision, Steam, OpenXR, Meta,
 Virtual Desktop, and other marks belong to their respective owners. Listing a

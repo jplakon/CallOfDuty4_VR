@@ -34,9 +34,9 @@ See [KNOWN-ISSUES.md](KNOWN-ISSUES.md) before downloading.
 - A VR-capable GPU
 
 The precompiled package is an overlay for an existing COD4 installation. It
-includes the Steamworks `steam_api.dll` redistributable required by the mod,
-but does not include `iw3sp.exe`, COD4 maps, fastfiles, Miles/Bink DLLs, or
-other proprietary game files.
+includes the exact 32-bit Steamworks, Bink, and Miles runtime files linked by
+KisakCOD. It does not include `iw3sp.exe`, COD4 maps, fastfiles, saves, or
+other Call of Duty game data.
 
 ## Install a precompiled build
 
