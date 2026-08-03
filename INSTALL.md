@@ -3,8 +3,9 @@
 ## Before you start
 
 You need the original 2007 Windows version of Call of Duty 4: Modern Warfare.
-The remastered game is not a substitute. The KisakCOD VR package does not
-contain COD4 game data or proprietary runtime DLLs.
+The remastered game is not a substitute. The KisakCOD VR package includes
+the required Steamworks `steam_api.dll` redistributable, but it does not
+contain COD4 game data or the game's other proprietary runtime DLLs.
 
 The first beta is tested primarily with:
 
@@ -87,8 +88,10 @@ Downloads subfolder.
 
 ### A required DLL is missing
 
-Verify the original COD4 files in Steam. The mod package deliberately does not
-redistribute the game's Miles, Bink, Steam, or DirectX DLLs.
+Confirm that `steam_api.dll` was extracted beside `KisakCOD-sp.exe`. The mod
+package includes that required Steamworks redistributable. For missing Miles,
+Bink, or DirectX DLLs, verify the original COD4 files in Steam and install the
+official DirectX runtime; do not download individual DLLs from third-party sites.
 
 ### The game opens but no image appears in the headset
 

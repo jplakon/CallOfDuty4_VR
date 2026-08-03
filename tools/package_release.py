@@ -33,6 +33,8 @@ PACKAGE_TEMPLATES = (
     "README-FIRST.txt",
     "licenses/Tracy-LICENSE.txt",
 )
+ALLOWED_RUNTIME_DLLS = {"steam_api.dll"}
+
 RELEASE_BLOCKERS = (
     "GITHUB_USERNAME_HERE",
     "PATREON_URL_HERE",
@@ -201,6 +203,9 @@ def main() -> int:
         )
 
     payload["KisakCOD-sp.exe"] = binary
+    payload["steam_api.dll"] = read_required(
+        root / "deps" / "steamsdk" / "steam_api.dll"
+    )
     payload["LICENSE-GPLv3.txt"] = read_required(root / "LICENSE")
     payload["THIRD-PARTY-NOTICES.txt"] = read_required(
         root / "THIRD-PARTY-NOTICES.md"
@@ -247,7 +252,7 @@ Executable SHA-256: {sha256(binary)}
     expected_names = set(payload)
     for name in expected_names:
         suffix = Path(name).suffix.lower()
-        if suffix in FORBIDDEN_SUFFIXES:
+        if suffix in FORBIDDEN_SUFFIXES and name not in ALLOWED_RUNTIME_DLLS:
             fail(f"forbidden package type reached the allowlist: {name}")
         if Path(name).name.lower() == "iw3sp.exe":
             fail("the original COD4 executable must never be packaged")
