@@ -15,6 +15,21 @@ if not exist "%~dp0KisakCOD-sp.exe" (
   exit /b 1
 )
 
+set "VR_D3DX9_43_FOUND=0"
+if exist "%~dp0d3dx9_43.dll" set "VR_D3DX9_43_FOUND=1"
+if exist "%SystemRoot%\SysWOW64\d3dx9_43.dll" set "VR_D3DX9_43_FOUND=1"
+if not exist "%SystemRoot%\SysWOW64\" if exist "%SystemRoot%\System32\d3dx9_43.dll" set "VR_D3DX9_43_FOUND=1"
+
+if "%VR_D3DX9_43_FOUND%"=="0" (
+  echo ERROR: Microsoft DirectX runtime file d3dx9_43.dll is missing.
+  echo Install DirectX End-User Runtimes ^(June 2010^) from Microsoft:
+  echo https://www.microsoft.com/en-us/download/details.aspx?id=8109
+  echo.
+  echo Do not rename d3dx9_34.dll and do not download loose DLL files.
+  pause
+  exit /b 1
+)
+
 if not exist "%~dp0VR-Settings.bat" (
   echo ERROR: VR-Settings.bat is missing from the package.
   pause
@@ -27,6 +42,77 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
+
+rem KISAK_SP_VR_PACKED_MODE_PREFLIGHT_V32
+if /I "%VR_CUSTOM_MODE%"=="3072x1536" (
+  echo ERROR: VR_CUSTOM_MODE=3072x1536 is incompatible with the packed renderer.
+  echo It cannot hold two rectangular eye images plus the dedicated scope panel.
+  echo Use either:
+  echo   VR_CUSTOM_MODE=6016x2688 with KISAK_VR_OUTPUT_SCALE=1.0
+  echo or:
+  echo   VR_CUSTOM_MODE=4768x2016 with KISAK_VR_OUTPUT_SCALE=0.75
+  pause
+  exit /b 1
+)
+
+if /I "%VR_CUSTOM_MODE%"=="4768x2016" if "%KISAK_VR_OUTPUT_SCALE%"=="1.0" (
+  echo ERROR: 4768x2016 is too small for KISAK_VR_OUTPUT_SCALE=1.0.
+  echo Set KISAK_VR_OUTPUT_SCALE=0.75 for the lower packed preset.
+  pause
+  exit /b 1
+)
+
+rem KISAK_SP_VR_OPENXR_STARTUP_DIAGNOSTICS_V31
+rem Capture the 32-bit runtime selected for this 32-bit game, registered API
+rem layers, and the Khronos loader's own messages before creating an instance.
+set "VR_OPENXR_STARTUP_LOG=%~dp0OpenXR-Startup.log"
+set "KISAK_VR_LOADER_LOG=%VR_OPENXR_STARTUP_LOG%"
+set "XR_LOADER_DEBUG=all"
+set "VR_ACTIVE_RUNTIME_32="
+
+for /f "tokens=2,*" %%A in ('reg query "HKLM\SOFTWARE\Khronos\OpenXR\1" /v ActiveRuntime /reg:32 2^>nul ^| findstr /i "ActiveRuntime"') do set "VR_ACTIVE_RUNTIME_32=%%B"
+
+>"%VR_OPENXR_STARTUP_LOG%" echo KisakCOD VR OpenXR startup diagnostics V31
+>>"%VR_OPENXR_STARTUP_LOG%" echo Date: %DATE% %TIME%
+>>"%VR_OPENXR_STARTUP_LOG%" echo Game binary: 32-bit x86
+>>"%VR_OPENXR_STARTUP_LOG%" echo Windows architecture: %PROCESSOR_ARCHITECTURE%
+>>"%VR_OPENXR_STARTUP_LOG%" echo ==== OpenXR environment overrides ====
+>>"%VR_OPENXR_STARTUP_LOG%" set XR_RUNTIME_JSON 2>&1
+>>"%VR_OPENXR_STARTUP_LOG%" set XR_API_LAYER_PATH 2>&1
+>>"%VR_OPENXR_STARTUP_LOG%" set XR_ENABLE_API_LAYERS 2>&1
+>>"%VR_OPENXR_STARTUP_LOG%" echo.
+>>"%VR_OPENXR_STARTUP_LOG%" echo ==== 32-bit active runtime ====
+>>"%VR_OPENXR_STARTUP_LOG%" reg query "HKLM\SOFTWARE\Khronos\OpenXR\1" /v ActiveRuntime /reg:32 2>&1
+
+setlocal EnableDelayedExpansion
+if defined VR_ACTIVE_RUNTIME_32 (
+  >>"%VR_OPENXR_STARTUP_LOG%" echo Resolved manifest: !VR_ACTIVE_RUNTIME_32!
+  if exist "!VR_ACTIVE_RUNTIME_32!" (
+    >>"%VR_OPENXR_STARTUP_LOG%" echo Manifest exists: YES
+  ) else (
+    >>"%VR_OPENXR_STARTUP_LOG%" echo Manifest exists: NO
+  )
+) else (
+  >>"%VR_OPENXR_STARTUP_LOG%" echo No 32-bit ActiveRuntime value was found.
+)
+endlocal
+
+>>"%VR_OPENXR_STARTUP_LOG%" echo.
+>>"%VR_OPENXR_STARTUP_LOG%" echo ==== 64-bit active runtime for comparison ====
+>>"%VR_OPENXR_STARTUP_LOG%" reg query "HKLM\SOFTWARE\Khronos\OpenXR\1" /v ActiveRuntime /reg:64 2>&1
+>>"%VR_OPENXR_STARTUP_LOG%" echo.
+>>"%VR_OPENXR_STARTUP_LOG%" echo ==== 32-bit implicit API layers: HKLM ====
+>>"%VR_OPENXR_STARTUP_LOG%" reg query "HKLM\SOFTWARE\Khronos\OpenXR\1\ApiLayers\Implicit" /reg:32 2>&1
+>>"%VR_OPENXR_STARTUP_LOG%" echo.
+>>"%VR_OPENXR_STARTUP_LOG%" echo ==== 32-bit implicit API layers: HKCU ====
+>>"%VR_OPENXR_STARTUP_LOG%" reg query "HKCU\SOFTWARE\Khronos\OpenXR\1\ApiLayers\Implicit" /reg:32 2>&1
+>>"%VR_OPENXR_STARTUP_LOG%" echo.
+>>"%VR_OPENXR_STARTUP_LOG%" echo ==== 32-bit explicit API layers: HKLM ====
+>>"%VR_OPENXR_STARTUP_LOG%" reg query "HKLM\SOFTWARE\Khronos\OpenXR\1\ApiLayers\Explicit" /reg:32 2>&1
+>>"%VR_OPENXR_STARTUP_LOG%" echo.
+>>"%VR_OPENXR_STARTUP_LOG%" echo ==== 32-bit explicit API layers: HKCU ====
+>>"%VR_OPENXR_STARTUP_LOG%" reg query "HKCU\SOFTWARE\Khronos\OpenXR\1\ApiLayers\Explicit" /reg:32 2>&1
+>>"%VR_OPENXR_STARTUP_LOG%" echo.
 
 set "VR_DEVELOPER=0"
 set "VR_ERROR_TIME=0"
@@ -63,8 +149,13 @@ if "%KISAK_VR_DIAGNOSTICS%"=="1" (
 set "VR_EXIT_CODE=%ERRORLEVEL%"
 if not "%VR_EXIT_CODE%"=="0" (
   echo.
-  echo KisakCOD VR exited with code %VR_EXIT_CODE%.
-  echo See main\console.log for details.
+  if "%VR_EXIT_CODE%"=="31" (
+    echo KisakCOD VR stopped because OpenXR initialization failed.
+    echo See OpenXR-Startup.log and main\console.log for the exact cause.
+  ) else (
+    echo KisakCOD VR exited with code %VR_EXIT_CODE%.
+    echo See OpenXR-Startup.log and main\console.log for details.
+  )
   pause
 )
 

@@ -42,8 +42,10 @@ if (WIN32)
 
     # Example: C:\Users\USERNAME\.nuget\packages\microsoft.dxsdk.d3dx\9.29.952.8\build\native
     set(DXSDK_INC_DIR ${DXSDK_DIR}/include)
-    set(DXSDK_LIB_DIR ${DXSDK_DIR}/${CMAKE_BUILD_TYPE}/lib/x86)
-    message("DXSDK_LIB_DIR: ${DXSDK_LIB_DIR}")
+    set(DXSDK_DEBUG_LIB_DIR ${DXSDK_DIR}/debug/lib/x86)
+    set(DXSDK_RELEASE_LIB_DIR ${DXSDK_DIR}/release/lib/x86)
+    message("DXSDK_DEBUG_LIB_DIR: ${DXSDK_DEBUG_LIB_DIR}")
+    message("DXSDK_RELEASE_LIB_DIR: ${DXSDK_RELEASE_LIB_DIR}")
   else()
     message("===== BUILDING FOR LOCAL DXSDK =====")
     set(DXSDK_DIR $ENV{DXSDK_DIR})
@@ -51,12 +53,15 @@ if (WIN32)
     set(DXSDK_LIB_DIR ${DXSDK_DIR}/lib/x86)
   endif() # DEFINED CICD
   
-  # Set the required library
-  if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-    set(D3DX_LIB d3dx9d.lib)
-  else()
-    set(D3DX_LIB d3dx9.lib)
-  endif() # CMAKE_BUILD_TYPE Debug
+  # Visual Studio is a multi-config generator.  CMAKE_BUILD_TYPE records the
+  # value used while generating the solution, not necessarily the configuration
+  # selected later by `cmake --build --config`.  Select D3DX at link time so a
+  # Release build can never inherit the debug-only d3dx9d import library from a
+  # solution that happened to be generated as Debug.
+  set(D3DX_LIB
+      "$<$<CONFIG:Debug>:d3dx9d.lib>"
+      "$<$<NOT:$<CONFIG:Debug>>:d3dx9.lib>"
+  )
 
 endif() # WIN32
 
@@ -65,7 +70,16 @@ target_include_directories(${PROJECT_NAME} PUBLIC ${DEPS_DIR})
 
 target_include_directories(${PROJECT_NAME} PUBLIC ${DXSDK_INC_DIR})
 
-target_link_directories(${PROJECT_NAME} PUBLIC ${DXSDK_LIB_DIR})
+if (DEFINED CICD)
+  target_link_directories(
+      ${PROJECT_NAME}
+      PUBLIC
+          "$<$<CONFIG:Debug>:${DXSDK_DEBUG_LIB_DIR}>"
+          "$<$<NOT:$<CONFIG:Debug>>:${DXSDK_RELEASE_LIB_DIR}>"
+  )
+else()
+  target_link_directories(${PROJECT_NAME} PUBLIC ${DXSDK_LIB_DIR})
+endif()
 target_link_directories(${PROJECT_NAME} PUBLIC "${DEPS_DIR}/msslib")
 target_link_directories(${PROJECT_NAME} PUBLIC "${DEPS_DIR}/steamsdk")
 target_link_directories(${PROJECT_NAME} PUBLIC "${DEPS_DIR}/binklib")

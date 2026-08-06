@@ -1,6 +1,6 @@
 # Release checklist
 
-This checklist is for `v0.9.0-beta.1`.
+This checklist is for `v0.10.0-beta.2`.
 
 ## Documentation blockers
 
@@ -47,16 +47,33 @@ This checklist is for `v0.9.0-beta.1`.
 - Start a new campaign.
 - Test save/resume and at least one checkpoint reload.
 - Test ordinary rifles, grenades, use, reload, sprint, crouch/prone, and melee.
+- Test right-stick up jump/stand, right-stick down crouch, horizontal snap
+  turning, neutral re-arming, and right-stick-click melee.
+- Test ejecting, hip-drawing, rotating, inserting, and dropping a physical
+  magazine on supported rifles, SMGs, and pistols.
+- Test the tracked left hand in free, rifle-grip, and magazine-grip states.
+- Confirm physical body turns and snap turns do not change hand alignment.
 - Test the physical sniper scope.
+- Confirm `3072x1536` is rejected and both documented packed presets retain the
+  dedicated physical-scope source.
+- Confirm gameplay `[VR][PERF]` lines report exact-pose matches without fallback
+  and identify any bridge misses, consumer skips, or long reuse streaks.
+- Confirm normal play produces no per-stage Javelin trace or periodic
+  controller/hand diagnostics unless `KISAK_VR_VERBOSE_DIAGNOSTICS=1` is set.
 - Test fixed Barrett, Javelin, Stinger, mounted turret, and vehicle weapon.
+- Test Blackout rappel and One Shot, One Kill sprint-direction changes for a
+  level horizon while confirming physical HMD pitch and roll still work.
 - Test the One Shot, One Kill helicopter sequence.
+- Test the Airlift helicopter sequence and other long looping sounds for
+  scratchy, metallic, doubled, or corrupted playback.
 - Confirm the normal launcher hides developer errors and the red FPS marker.
 - Confirm shadows can be toggled in `VR-Settings.bat`.
 - Confirm the documented Death From Above skip method reaches the next mission.
 
 ## Tag and package
 
-- Create annotated tag `v0.9.0-beta.1` on the tested source commit.
+- Create annotated tag `v0.10.0-beta.2` only after the cumulative frame, camera,
+  audio, tracked-hand, reload, and controller state is validated.
 - Run `tools/package_release.py`.
 - The packager must refuse to run if any documentation placeholder or
   controller-map `VERIFY` marker remains.
@@ -73,8 +90,8 @@ This checklist is for `v0.9.0-beta.1`.
 - Push `main` and the annotated tag to the public GitHub repository.
 - Create a GitHub release entry containing release notes, source tag, Patreon
   link, requirements, and known issues.
-- Do not attach the patron-only Windows ZIP to the public GitHub release.
-- Upload the ZIP and its `.sha256` sidecar to the paid Patreon post.
-- Include the public source tag URL in the Patreon post.
+- Attach the verified Windows ZIP and `.sha256` sidecar to the GitHub
+  release.
+- Link the GitHub release and exact public source tag from Discord and Patreon.
 - Keep an offline copy of the exact ZIP, checksum, commit, tag, and permission
   correspondence.

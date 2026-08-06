@@ -35,7 +35,9 @@ static uint32_t s_vrJavelinFrameDiagnosticSequence = 0;
 
 static bool VR_JavelinFrameDiagnosticActive()
 {
-    return BG_GetViewmodelWeaponIndex(
+    return
+        VR_VerboseDiagnosticsEnabled() &&
+        BG_GetViewmodelWeaponIndex(
                &cgArray[0].predictedPlayerState) == 7;
 }
 
@@ -508,6 +510,94 @@ void __cdecl CG_AddGroundTiltToAngles(int localClientNum, float *angles, const c
         MatrixMultiply(v5, v4, v6);
         AxisToAngles(v6, angles);
     }
+}
+
+// KISAK_SP_VR_ARTIFICIAL_ROLL_STABILIZATION_V34
+// KISAK_SP_VR_YAW_ONLY_CAMERA_BASE_V35
+// V34 removed CoD4's explicit camera roll, but retained authored pitch.  A
+// pitched game-camera basis is still unsafe in VR: when the HMD or player body
+// changes yaw, that pitch can be resolved as a visible horizon bank.  This is
+// especially apparent when sprint changes direction after linked/scripted
+// sequences such as the Blackout rappel and the One Shot, One Kill sniper exit.
+//
+// Reduce the completed game camera to yaw only.  This helper runs once before
+// viewmodel camera processing and again at the final pre-HMD boundary so no
+// later game perturbation can restore artificial pitch or roll.  OpenXR then
+// supplies the player's full physical pitch, yaw, roll, and translation.
+static void VR_StabilizeArtificialCameraTilt(cg_s *cgameGlob)
+{
+    if (!VR_IsInitialized())
+    {
+        return;
+    }
+
+    float gameCameraAngles[3] = {};
+
+    AxisToAngles(
+        (const mat3x3 &)cgameGlob->refdef.viewaxis,
+        gameCameraAngles);
+
+    const float gameCameraPitch =
+        gameCameraAngles[0];
+
+    const float gameCameraRoll =
+        gameCameraAngles[2];
+
+    const bool artificialTiltWasVisible =
+        gameCameraPitch > 0.01f ||
+        gameCameraPitch < -0.01f ||
+        gameCameraRoll > 0.01f ||
+        gameCameraRoll < -0.01f;
+
+    static bool loggedYawOnlyCameraBase = false;
+    static bool loggedArtificialTilt = false;
+
+    if (!loggedYawOnlyCameraBase)
+    {
+        Com_Printf(
+            0,
+            "[VR][CAMERA] V35 yaw-only game-camera base active; "
+            "physical HMD pitch/yaw/roll remains enabled.\n");
+
+        loggedYawOnlyCameraBase = true;
+    }
+
+    if (artificialTiltWasVisible &&
+        !loggedArtificialTilt)
+    {
+        Com_Printf(
+            0,
+            "[VR][CAMERA] V35 leveled final game-camera pitch %.3f "
+            "roll %.3f (yaw %.3f; pm_type %d; pm_flags 0x%x; "
+            "player pitch/roll %.3f %.3f; ground tilt %.3f %.3f "
+            "%.3f; link pitch/roll %.3f %.3f).\n",
+            gameCameraPitch,
+            gameCameraRoll,
+            gameCameraAngles[1],
+            cgameGlob->predictedPlayerState.pm_type,
+            static_cast<unsigned int>(
+                cgameGlob->predictedPlayerState.pm_flags),
+            cgameGlob->predictedPlayerState.viewangles[0],
+            cgameGlob->predictedPlayerState.viewangles[2],
+            cgameGlob->predictedPlayerState.groundTiltAngles[0],
+            cgameGlob->predictedPlayerState.groundTiltAngles[1],
+            cgameGlob->predictedPlayerState.groundTiltAngles[2],
+            cgameGlob->predictedPlayerState.linkAngles[0],
+            cgameGlob->predictedPlayerState.linkAngles[2]);
+
+        loggedArtificialTilt = true;
+    }
+
+    gameCameraAngles[0] = 0.0f;
+    gameCameraAngles[2] = 0.0f;
+
+    AnglesToAxis(
+        gameCameraAngles,
+        cgameGlob->refdef.viewaxis);
+
+    // Preserve V34's downstream invariant for legacy systems that consume
+    // refdefViewAngles after the render axis has been constructed.
+    cgameGlob->refdefViewAngles[2] = 0.0f;
 }
 
 void __cdecl OffsetFirstPersonView(int localClientNum, cg_s *cgameGlob)
@@ -1614,11 +1704,14 @@ void __cdecl CG_CalcViewValues(int localClientNum)
         cgameGlob->refdefViewAngles,
         cgameGlob->refdef.viewaxis);
 
+    VR_StabilizeArtificialCameraTilt(cgameGlob);
+
     // Keep CoD4's weapon/viewmodel camera animation and perturbation on the
     // original game camera. Apply the headset only after those systems have
     // finished constructing the final render camera.
     CG_ApplyViewAnimation(localClientNum);
     CG_PerturbCamera(cgArray);
+    VR_StabilizeArtificialCameraTilt(cgameGlob);
     CG_CalcFov(localClientNum);
 
     static bool vrSpGameplayTranslationRecentered = false;
@@ -1952,4 +2045,3 @@ int __cdecl CG_DrawActiveFrame(
     //Profile_EndInternal(0);
     return 1;
 }
-

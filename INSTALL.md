@@ -8,7 +8,7 @@ the matching 32-bit Steamworks, Bink, and Miles runtime files required by the
 rebuilt executable, but it does not contain COD4 maps, fastfiles, saves, or
 other Call of Duty game data.
 
-The first beta is tested primarily with:
+This beta is tested primarily with:
 
 - Meta Quest 3
 - Virtual Desktop using its OpenXR runtime
@@ -41,10 +41,20 @@ developer's current Quest 3 configuration:
 - Brightness: `1.00` (neutral after sRGB correction)
 - Synchronized shadows enabled
 - Physical scope capture: `1024`
+- Physical magazine reloading enabled
+- Controller-tracked hands enabled
 
-If performance is poor, use the documented lower development fallback
-`3072x1536` first. Fully close and restart the game after changing environment
-settings.
+If performance is poor, change both packed-render settings to the supported
+lower preset:
+
+```bat
+set "VR_CUSTOM_MODE=4768x2016"
+set "KISAK_VR_OUTPUT_SCALE=0.75"
+```
+
+Do not use `3072x1536`. It cannot contain both rectangular eye images and the
+dedicated physical-scope panel. Fully close and restart the game after changing
+environment settings.
 
 The HUD controls are also in `VR-Settings.bat`. Lowering
 `KISAK_VR_HUD_SAFE_X` moves the left-side ammo/action information farther
@@ -65,7 +75,7 @@ main\console.log
 
 ## Known campaign limitation
 
-**Death From Above is not supported in `v0.9.0-beta.1`.**
+**Death From Above is not supported in `v0.10.0-beta.2`.**
 
 To skip **Death From Above**:
 
@@ -103,8 +113,8 @@ runtime. Then restart both the runtime and the game.
 ### Performance is poor
 
 Edit `VR-Settings.bat`, change `VR_CUSTOM_MODE` from `6016x2688` to
-`3072x1536`, save, and fully restart the game. Shadows can also be disabled by
-changing:
+`4768x2016`, change `KISAK_VR_OUTPUT_SCALE` from `1.0` to `0.75`, save, and
+fully restart the game. Shadows can also be disabled by changing:
 
 ```bat
 set "KISAK_VR_SHADOWS=1"

@@ -3611,6 +3611,13 @@ void __cdecl SND_Init()
     // LWSS: disable EQ by default. There is a rare crash within MSS that can't be cleanly worked around afaik. 
     // to repro go to `coup` and set timescale to 10, then mash alt-tab
     snd_enableEq = Dvar_RegisterBool("snd_enableEq", 0, DVAR_ARCHIVE, "Enable equalization filter (KISAK: note this can cause a rare crash)");
+    // KISAK_SP_VR_MSS_DRY_LEVEL_FIX_V36
+    // A retail profile can retain snd_enableEq=1 even though KisakCOD changed
+    // the default to off.  Keep this private repair deterministic while the
+    // legacy Miles EQ path remains known to be unstable.
+    if (snd_enableEq->current.enabled)
+        Com_Printf(9, "[VR][AUDIO] V36 disabled archived snd_enableEq=1 for stable Miles playback\n");
+    Dvar_SetBool(snd_enableEq, false);
     snd_draw3D = Dvar_RegisterEnum("snd_draw3D", snd_draw3DNames, 0, DVAR_CHEAT, "Draw the position and info of world sounds");
     snd_levelFadeTime = Dvar_RegisterInt(
         "snd_levelFadeTime",

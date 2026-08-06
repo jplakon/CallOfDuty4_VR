@@ -22,7 +22,9 @@ static bool VR_JavelinReticleDiagnosticActive(int32_t localClientNum)
     const cg_s *cgameGlob =
         CG_GetLocalClientGlobals(localClientNum);
 
-    return BG_GetViewmodelWeaponIndex(
+    return
+        VR_VerboseDiagnosticsEnabled() &&
+        BG_GetViewmodelWeaponIndex(
                &cgameGlob->predictedPlayerState) == 7;
 }
 
@@ -1013,4 +1015,3 @@ void __cdecl CG_CalcReticleImageOffset(const float *drawSize, float *imageTexelO
     *imageTexelOffset = *drawSize / 8.0;
     imageTexelOffset[1] = drawSize[1] / 8.0;
 }
-

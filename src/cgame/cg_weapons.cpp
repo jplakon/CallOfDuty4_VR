@@ -62,7 +62,8 @@ static void VR_JavelinDiagnostic(
     uint32_t weaponNum,
     const void *object = nullptr)
 {
-    if (weaponNum != 7)
+    if (!VR_VerboseDiagnosticsEnabled() ||
+        weaponNum != 7)
         return;
 
     Com_Printf(

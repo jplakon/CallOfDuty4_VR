@@ -3,7 +3,11 @@
 This controller map applies to Meta Quest Touch controllers. Other OpenXR
 controllers may use different runtime bindings.
 
-The experimental tracked-hands build keeps COD4's original combined hand mesh
+Right-stick vertical gestures trigger once and must return near neutral before
+they can trigger again. Vertically dominant input is required, so they do not
+interfere with horizontal snap turning.
+
+The tracked-hands build keeps COD4's original combined hand mesh
 and uses two-bone shoulder/elbow IK to place the left wrist at the left OpenXR
 grip pose without stretching the stock arm. The right hand follows the rifle,
 which is already rigidly attached to the right controller. Set
@@ -16,19 +20,17 @@ animation. Touch-driven finger curling is not implemented yet.
 | Snap turn | Right thumbstick left or right |
 | Fire | Right index trigger |
 | Aim / scope | Hold the left grip and physically shoulder the weapon near the headset sight line |
-| Jump | Left index trigger |
+| Jump / stand | Flick right thumbstick up; left index trigger also remains available |
 | Manual magazine reload | Right A to eject or reload; squeeze the left grip at the left hip to draw; release at the magazine well to insert |
 | Use / interact | Left X button |
 | Sprint | Click left thumbstick |
-| Crouch | Tap right B button |
+| Crouch | Flick right thumbstick down; tapping right B also remains available |
 | Prone | Hold right B button |
 | Melee | Click right thumbstick |
 | Frag grenade | Hold left Y for at least 0.3 seconds, then release to throw |
 | Flashbang / tactical grenade | Right grip |
 | Next weapon | Tap left Y |
 | Pause / menu | Left controller menu button |
-| Night vision | Right thumbstick down |
-| Rifle grenade launcher | Right thumbstick up |
 
 ## Right-thumbrest mission controls
 

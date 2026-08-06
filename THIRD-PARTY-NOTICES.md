@@ -17,6 +17,10 @@ package.
 Tracy Profiler is distributed under the 3-clause BSD license. Its license text
 is included in each binary package.
 
+The retained audio-diagnostic path uses `dr_mp3` 0.7.4 from David Reid's
+`dr_libs` project. The source header includes its public-domain dedication and
+alternative MIT No Attribution license statement.
+
 The binary package includes the 32-bit Steamworks, Bink, and Miles runtime
 files retained in the upstream KisakCOD dependency tree and linked by the
 rebuilt executable. Those components remain the property of their respective

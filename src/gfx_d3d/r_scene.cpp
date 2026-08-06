@@ -1946,7 +1946,35 @@ void __cdecl R_GenerateSortedDrawSurfs(
     }
     viewInfo->pointLightCount = pointLightCount;
     if (!viewInfo->localClientNum)
-        CL_UpdateSound();
+    {
+#if defined(XR_USE_GRAPHICS_API_D3D11)
+        // KISAK_SP_VR_RENDERER_SOUND_UPDATE_DEDUP_V43
+        // Retail's renderer reaches this point once for the single camera
+        // view. Same-frame VR reaches it once per scope/eye view. Replaying
+        // CL_UpdateSound for those additional views replays the uncleared FX
+        // queue and advances the looping-sound epoch without another cgame
+        // entity pass, which can duplicate one-shots and stop/restart loops.
+        // Preserve the retail one-renderer-update cadence by using only the
+        // first view in a same-frame stereo frame.
+        if (VR_D3D9IsSameFrameStereoEnabled() && viewInfoIndex > 0)
+        {
+            static bool loggedVrRendererSoundUpdateDedup = false;
+
+            if (!loggedVrRendererSoundUpdateDedup)
+            {
+                Com_Printf(
+                    9,
+                    "[VR][AUDIO] V43 renderer sound-update dedup active: "
+                    "first view updates sound; additional stereo/scope views are skipped.\n");
+                loggedVrRendererSoundUpdateDedup = true;
+            }
+        }
+        else
+#endif
+        {
+            CL_UpdateSound();
+        }
+    }
     FX_RunPhysics(viewInfo->localClientNum);
     DynEntCl_ProcessEntities(viewInfo->localClientNum);
     R_WaitWorkerCmdsOfType(WRKCMD_GENERATE_MARK_VERTS);

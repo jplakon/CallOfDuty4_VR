@@ -9,11 +9,17 @@ This project is based on [KisakCOD](https://github.com/SwagSoftware/KisakCOD).
 It contains no Call of Duty game data and requires a legitimately installed
 copy of the original game.
 
-[Get the current precompiled beta and supporter updates](https://www.patreon.com/c/J_Play)
+- [Download the current beta from GitHub](https://github.com/jplakon/CallOfDuty4_VR/releases)
+- [Read supporter updates on Patreon](https://www.patreon.com/c/J_Play)
 
 ## Current status
 
-The first public target is `v0.9.0-beta.1`.
+The current public beta is `v0.10.0-beta.2`.
+
+This update substantially improves frame delivery and head-turn stability,
+keeps the VR horizon level during game-authored camera motion, fixes corrupted
+looping audio, and adds right-stick jump/crouch gestures. It includes the
+tracked-hand and physical-reloading features introduced in `v0.10.0-beta.1`.
 
 - The single-player campaign is playable from beginning to end when
   **Death From Above** is skipped.

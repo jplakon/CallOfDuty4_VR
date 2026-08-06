@@ -596,8 +596,11 @@ void __cdecl RB_DrawText3DCmd(GfxRenderCommandExecState *execState);
 void __cdecl RB_ProjectionSetCmd(GfxRenderCommandExecState *execState);
 void __cdecl RB_ResetStatTracking();
 void __cdecl RB_BeginFrame(const GfxBackEndData *data);
-void __cdecl RB_EndFrame(char drawType);
-GfxIndexBufferState *RB_SwapBuffers();
+void __cdecl RB_EndFrame(
+    char drawType,
+    uint32_t renderFrameId);
+GfxIndexBufferState *RB_SwapBuffers(
+    uint32_t renderFrameId);
 void RB_UpdateBackEndDvarOptions();
 void __cdecl RB_ExecuteRenderCommandsLoop(const void *cmds);
 void __cdecl RB_Draw3D();

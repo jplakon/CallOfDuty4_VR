@@ -38,14 +38,57 @@ uint32_t __stdcall MSS_FileReadCallback(UINTa hFileHandle, void *pBuffer, uint32
     return FS_Read((unsigned char *)pBuffer, bytes, hFileHandle);
 }
 
+#define KISAK_SP_VR_MILES_OUTPUT_PATH_ISOLATION_V40 1
+
+static int MSS_GetVROutputMode()
+{
+  int mode = Dvar_GetInt("snd_vrMilesOutputMode");
+  if ( mode < 0 || mode > 2 )
+    mode = 0;
+  return mode;
+}
+
+static const char *MSS_GetVROutputModeName(int mode)
+{
+  if ( mode == 1 )
+    return "WaveOut";
+  if ( mode == 2 )
+    return "buffered DirectSound";
+  return "DirectSound defaults";
+}
+
+static void MSS_ApplyVROutputPreferences(int mode)
+{
+  // Reapply a complete preference set before every driver open. SND_InitDriver
+  // opens a probe driver before the real 44.1 kHz driver, and Miles preferences
+  // survive driver closes within the process.
+  AIL_set_preference(DIG_USE_WAVEOUT, mode == 1);
+  AIL_set_preference(DIG_DS_FRAGMENT_SIZE, mode == 2 ? 16 : 8);
+  AIL_set_preference(DIG_DS_MIX_FRAGMENT_CNT, mode == 2 ? 16 : 8);
+  AIL_set_preference(DIG_DS_SECONDARY_SIZE, mode == 2 ? 131072 : 32768);
+}
+
 _DIG_DRIVER *__cdecl MSS_open_digital_driver(int hertz, int bits, int channels)
 {
   bool v4; // [esp+0h] [ebp-10h]
   int outputChannels; // [esp+4h] [ebp-Ch] BYREF
   _DIG_DRIVER *driver; // [esp+8h] [ebp-8h]
   MSS_MC_SPEC mcSpec; // [esp+Ch] [ebp-4h] BYREF
+  int outputMode;
 
+  outputMode = MSS_GetVROutputMode();
+  MSS_ApplyVROutputPreferences(outputMode);
   AIL_set_preference(1, 53);
+  Com_Printf(
+    9,
+    "[VR][AUDIO][OUTPUT] V40 opening %s: %i Hz; bits %i; speaker spec %i; DS fragment %i ms; mix-ahead %i; secondary %i bytes\n",
+    MSS_GetVROutputModeName(outputMode),
+    hertz,
+    bits,
+    channels,
+    AIL_get_preference(DIG_DS_FRAGMENT_SIZE),
+    AIL_get_preference(DIG_DS_MIX_FRAGMENT_CNT),
+    AIL_get_preference(DIG_DS_SECONDARY_SIZE));
   driver = (_DIG_DRIVER *)AIL_open_digital_driver(hertz, bits, channels, 0);
   if ( driver )
   {
@@ -60,6 +103,7 @@ _DIG_DRIVER *__cdecl MSS_open_digital_driver(int hertz, int bits, int channels)
         MSS_InitFailed();
         return 0;
       }
+      MSS_ApplyVROutputPreferences(outputMode);
       AIL_set_preference(1, 53);
       return (_DIG_DRIVER *)AIL_open_digital_driver(hertz, bits, 32, 0);
     }
@@ -129,6 +173,13 @@ LABEL_8:
       g_snd.playback_rate = 0x7FFFFFFF;
     g_snd.playback_channels = (mss_spec[snd_outputConfiguration->current.integer] != MSS_MC_MONO) + 1;
     g_snd.timescale = 1.0;
+    Com_Printf(
+      9,
+      "[VR][AUDIO] V36 normalized Miles dry level active: dry %.3f; %i Hz; output %s; multichannel %s\n",
+      MSS_GetDryLevel(),
+      hertz,
+      snd_outputConfigurationStrings[snd_outputConfiguration->current.integer],
+      milesGlob.isMultiChannel ? "yes" : "no");
     return 1;
   }
   else
@@ -211,21 +262,24 @@ void MSS_ShutdownCleanup()
   memset((uint8_t *)&milesGlob, 0, sizeof(milesGlob));
 }
 
-double __cdecl MSS_GetWetLevel(const snd_alias_t *pAlias)
+float MSS_GetDryLevel()
 {
-  if ( g_snd.effect->wetlevel < 0.0 || g_snd.effect->wetlevel > 1.0 )
-    MyAssertHandler(
-      ".\\win32\\snd_driver.cpp",
-      188,
-      0,
-      "%s\n\t(g_snd.effect->wetlevel) = %g",
-      "(g_snd.effect->wetlevel >= 0 && g_snd.effect->wetlevel <= 1)",
-      g_snd.effect->wetlevel);
-  if ( !pAlias )
-    return g_snd.effect->wetlevel;
-  if ( !snd_enableReverb->current.enabled || (pAlias->flags & 0x10) != 0 )
-    return (float)0.0;
-  else
+    // KISAK_SP_VR_MSS_DRY_LEVEL_FIX_V36
+    // Upstream KisakCOD fix b19e686: dry level is a normalized audio gain,
+    // not CG_BannerScoreboardScaleMultiplier from the UI layout code.
+    return 1.0f;
+}
+
+float MSS_GetWetLevel(const snd_alias_t *pAlias)
+{
+    iassert(g_snd.effect->wetlevel >= 0.0f && g_snd.effect->wetlevel <= 1.0f);
+
+    if (!pAlias)
+        return g_snd.effect->wetlevel;
+
+    if (!snd_enableReverb->current.enabled || (pAlias->flags & 0x10) != 0)
+        return 0.0f;
+
     return g_snd.effect->wetlevel;
 }
 
@@ -335,4 +389,3 @@ uint32_t *__cdecl MSS_Alloc_FastFile(int bytes)
 {
   return (uint32_t *)Z_Malloc(bytes, "MSS_Alloc", 15);
 }
-

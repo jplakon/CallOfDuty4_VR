@@ -2626,13 +2626,15 @@ void __cdecl RB_BeginFrame(const GfxBackEndData *data)
     }
 }
 
-void __cdecl RB_EndFrame(char drawType)
+void __cdecl RB_EndFrame(
+    char drawType,
+    const uint32_t renderFrameId)
 {
     if ((drawType & 2) != 0)
     {
         if (r_logFile->current.integer)
             RB_LogPrint("***************** RB_SwapBuffers *****************\n\n\n");
-        RB_SwapBuffers();
+        RB_SwapBuffers(renderFrameId);
         RB_UpdateLogging();
         iassert( r_gamma );
         iassert( r_ignoreHwGamma );
@@ -2646,7 +2648,8 @@ void __cdecl RB_EndFrame(char drawType)
     }
 }
 
-GfxIndexBufferState *RB_SwapBuffers()
+GfxIndexBufferState *RB_SwapBuffers(
+    const uint32_t renderFrameId)
 {
     GfxIndexBufferState *result;
     int hr;
@@ -2654,7 +2657,9 @@ GfxIndexBufferState *RB_SwapBuffers()
     iassert(dx.targetWindowIndex >= 0 && dx.targetWindowIndex < dx.windowCount);
 
     {
-        VR_D3D9CaptureFrame(dx.device);
+        VR_D3D9CaptureFrame(
+            dx.device,
+            renderFrameId);
         PROF_SCOPED("Present");
         hr = dx.windows[dx.targetWindowIndex].swapChain->Present(0, 0, 0, 0, 0);
     }
@@ -3403,7 +3408,9 @@ void __cdecl RB_RenderCommandFrame(const GfxBackEndData *data)
     if (allowRendering)
     {
         KISAK_NULLSUB();
-        RB_EndFrame(drawType);
+        RB_EndFrame(
+            drawType,
+            data->frameCount);
     }
     //Profile_Begin(172);
 }
@@ -3531,4 +3538,3 @@ void __cdecl RB_RegisterBackendAssets()
 {
     backEnd.debugFont = R_RegisterFont("fonts/smalldevfont", 1);
 }
-

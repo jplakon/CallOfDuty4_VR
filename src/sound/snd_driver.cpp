@@ -7,6 +7,7 @@
 #include <gfx_d3d/r_cinematic.h>
 #include <universal/com_sndalias.h>
 #include <universal/profile.h>
+#include <dr_libs/dr_mp3.h>
 
 #ifdef KISAK_MP
 #include <cgame_mp/cg_local_mp.h>
@@ -18,6 +19,316 @@ MssLocal milesGlob;
 
 const dvar_t *snd_khz;
 const dvar_t *snd_outputConfiguration;
+static const dvar_t *snd_vrHelicopterStemMode;
+static const dvar_t *snd_vrMilesOutputMode;
+static const dvar_t *snd_vrMp3PredecodeMode;
+
+static int s_vrHelicopterStreamTraceTime[13];
+static bool s_vrMp3PredecodeCacheReported[3];
+
+static bool SND_IsVRAirliftHelicopterAlias(const snd_alias_t *alias)
+{
+    if (!alias || !alias->aliasName)
+        return false;
+
+    return !I_stricmp(alias->aliasName, "ambient_airlift_helicopter5")
+        || !I_stricmp(alias->aliasName, "ambient_airlift_helicopter5_sur");
+}
+
+static float SND_GetVRAirliftHelicopterStemScale(const snd_alias_t *alias)
+{
+    if (!snd_vrHelicopterStemMode || !SND_IsVRAirliftHelicopterAlias(alias))
+        return 1.0f;
+
+    const bool surroundStem = !I_stricmp(alias->aliasName, "ambient_airlift_helicopter5_sur");
+    // V42 compares only the front stem. Keep that isolation deterministic across
+    // the required restart even though the older V39 stem dvar is not archived.
+    if (snd_vrMp3PredecodeMode
+        && snd_vrMp3PredecodeMode->current.integer >= 1
+        && snd_vrMp3PredecodeMode->current.integer <= 2)
+    {
+        return surroundStem ? 0.0f : 1.0f;
+    }
+
+    switch (snd_vrHelicopterStemMode->current.integer)
+    {
+    case 1: // Front L/R stem only.
+        return surroundStem ? 0.0f : 1.0f;
+    case 2: // Surround Ls/Rs stem only.
+        return surroundStem ? 1.0f : 0.0f;
+    default: // Retail-style mix, including the V37 speaker-map gains.
+        return 1.0f;
+    }
+}
+
+static bool SND_IsVRAirliftFrontHelicopterAlias(const snd_alias_t *alias)
+{
+    return alias && alias->aliasName
+        && !I_stricmp(alias->aliasName, "ambient_airlift_helicopter5");
+}
+
+static const char *SND_GetVRMp3PredecodeModeName(int mode)
+{
+    if (mode == 1)
+        return "Miles offline decode";
+    if (mode == 2)
+        return "dr_mp3 offline decode";
+    return "original live MP3 stream";
+}
+
+static void SND_VRWriteLE16(unsigned char *destination, unsigned int value)
+{
+    destination[0] = (unsigned char)(value & 0xFF);
+    destination[1] = (unsigned char)((value >> 8) & 0xFF);
+}
+
+static void SND_VRWriteLE32(unsigned char *destination, unsigned int value)
+{
+    destination[0] = (unsigned char)(value & 0xFF);
+    destination[1] = (unsigned char)((value >> 8) & 0xFF);
+    destination[2] = (unsigned char)((value >> 16) & 0xFF);
+    destination[3] = (unsigned char)((value >> 24) & 0xFF);
+}
+
+static void SND_VRReportPcm16(const char *decoder, const short *samples, unsigned int sampleCount)
+{
+    unsigned int clipped = 0;
+    int peak = 0;
+
+    for (unsigned int i = 0; i < sampleCount; ++i)
+    {
+        const int value = samples[i];
+        const int magnitude = value < 0 ? -value : value;
+        if (magnitude > peak)
+            peak = magnitude;
+        if (value == -32768 || value == 32767)
+            ++clipped;
+    }
+
+    Com_Printf(
+        9,
+        "[VR][AUDIO][PREDECODE] V42 %s PCM: samples %u; peak %i; clipped %u\n",
+        decoder,
+        sampleCount,
+        peak,
+        clipped);
+}
+
+static bool SND_VRWritePcm16Wave(
+    const char *cachePath,
+    const short *samples,
+    unsigned int frameCount,
+    unsigned int channels,
+    unsigned int sampleRate)
+{
+    unsigned char header[44];
+    const unsigned __int64 dataBytes64 =
+        (unsigned __int64)frameCount * channels * sizeof(short);
+
+    if (!samples || !frameCount || !channels || channels > 2 || !sampleRate || dataBytes64 > 0xFFFFFFD7ULL)
+        return false;
+
+    const unsigned int dataBytes = (unsigned int)dataBytes64;
+    memset(header, 0, sizeof(header));
+    memcpy(header + 0, "RIFF", 4);
+    SND_VRWriteLE32(header + 4, 36 + dataBytes);
+    memcpy(header + 8, "WAVE", 4);
+    memcpy(header + 12, "fmt ", 4);
+    SND_VRWriteLE32(header + 16, 16);
+    SND_VRWriteLE16(header + 20, 1);
+    SND_VRWriteLE16(header + 22, channels);
+    SND_VRWriteLE32(header + 24, sampleRate);
+    SND_VRWriteLE32(header + 28, sampleRate * channels * sizeof(short));
+    SND_VRWriteLE16(header + 32, channels * sizeof(short));
+    SND_VRWriteLE16(header + 34, 16);
+    memcpy(header + 36, "data", 4);
+    SND_VRWriteLE32(header + 40, dataBytes);
+
+    const int file = FS_FOpenFileWrite(cachePath);
+    if (!file)
+        return false;
+
+    const bool wroteHeader = FS_Write((const char *)header, sizeof(header), file) == sizeof(header);
+    const bool wroteData = wroteHeader
+        && FS_Write((const char *)samples, dataBytes, file) == dataBytes;
+    FS_FCloseFile(file);
+    if (!wroteData)
+    {
+        FS_Delete(cachePath);
+        return false;
+    }
+
+    return true;
+}
+
+static bool SND_VRCreateMilesPredecodeCache(const char *sourcePath, const char *cachePath)
+{
+    void *sourceData = 0;
+    void *waveData = 0;
+    unsigned int waveSize = 0;
+    _AILSOUNDINFO info;
+    const int sourceSize = FS_ReadFile(sourcePath, &sourceData);
+
+    if (sourceSize <= 0 || !sourceData)
+    {
+        Com_PrintError(9, "[VR][AUDIO][PREDECODE] V42 could not read %s\n", sourcePath);
+        return false;
+    }
+
+    const int decoded = AIL_decompress_ASI(
+        sourceData,
+        (unsigned int)sourceSize,
+        ".mp3",
+        &waveData,
+        &waveSize,
+        0);
+    if (!decoded || !waveData || waveSize < 44 || !AIL_WAV_info(waveData, &info))
+    {
+        const char *error = (const char *)AIL_last_error();
+        Com_PrintError(
+            9,
+            "[VR][AUDIO][PREDECODE] V42 Miles decode failed for %s: %s\n",
+            sourcePath,
+            error ? error : "no Miles error text");
+        if (waveData)
+            AIL_mem_free_lock(waveData);
+        FS_FreeFile((char *)sourceData);
+        return false;
+    }
+
+    const bool wrote = FS_WriteFile((char *)cachePath, (char *)waveData, waveSize) != 0;
+    Com_Printf(
+        9,
+        "[VR][AUDIO][PREDECODE] V42 Miles decoded %s -> %s: %u bytes; %u Hz; %i-bit; %i channels\n",
+        sourcePath,
+        cachePath,
+        waveSize,
+        info.rate,
+        info.bits,
+        info.channels);
+    if (info.bits == 16 && info.data_ptr && info.data_len >= sizeof(short))
+        SND_VRReportPcm16("Miles", (const short *)info.data_ptr, info.data_len / sizeof(short));
+
+    AIL_mem_free_lock(waveData);
+    FS_FreeFile((char *)sourceData);
+    if (!wrote)
+        Com_PrintError(9, "[VR][AUDIO][PREDECODE] V42 could not write %s\n", cachePath);
+    return wrote;
+}
+
+static bool SND_VRCreateDrMp3PredecodeCache(const char *sourcePath, const char *cachePath)
+{
+    void *sourceData = 0;
+    const int sourceSize = FS_ReadFile(sourcePath, &sourceData);
+
+    if (sourceSize <= 0 || !sourceData)
+    {
+        Com_PrintError(9, "[VR][AUDIO][PREDECODE] V42 could not read %s\n", sourcePath);
+        return false;
+    }
+
+    drmp3_config config;
+    drmp3_uint64 totalFrameCount = 0;
+    drmp3_int16 *samples = drmp3_open_memory_and_read_pcm_frames_s16(
+        sourceData,
+        (size_t)sourceSize,
+        &config,
+        &totalFrameCount,
+        0);
+    if (!samples || !totalFrameCount || totalFrameCount > 0xFFFFFFFFULL)
+    {
+        Com_PrintError(9, "[VR][AUDIO][PREDECODE] V42 dr_mp3 decode failed for %s\n", sourcePath);
+        if (samples)
+            drmp3_free(samples, 0);
+        FS_FreeFile((char *)sourceData);
+        return false;
+    }
+
+    const bool wrote = SND_VRWritePcm16Wave(
+        cachePath,
+        samples,
+        (unsigned int)totalFrameCount,
+        config.channels,
+        config.sampleRate);
+    Com_Printf(
+        9,
+        "[VR][AUDIO][PREDECODE] V42 dr_mp3 decoded %s -> %s: %u frames; %u Hz; 16-bit; %u channels\n",
+        sourcePath,
+        cachePath,
+        (unsigned int)totalFrameCount,
+        config.sampleRate,
+        config.channels);
+    if (config.channels && totalFrameCount <= 0xFFFFFFFFULL / config.channels)
+    {
+        SND_VRReportPcm16(
+            "dr_mp3",
+            samples,
+            (unsigned int)totalFrameCount * config.channels);
+    }
+
+    drmp3_free(samples, 0);
+    FS_FreeFile((char *)sourceData);
+    if (!wrote)
+        Com_PrintError(9, "[VR][AUDIO][PREDECODE] V42 could not write %s\n", cachePath);
+    return wrote;
+}
+
+static bool SND_VRResolveAirliftFrontStreamPath(
+    const snd_alias_t *alias,
+    const char *sourcePath,
+    char *resolvedPath,
+    int resolvedPathSize)
+{
+    char sourcePathCopy[256];
+
+    if (!snd_vrMp3PredecodeMode || !SND_IsVRAirliftFrontHelicopterAlias(alias))
+        return false;
+
+    const int mode = snd_vrMp3PredecodeMode->current.integer;
+    if (mode < 1 || mode > 2)
+        return false;
+
+    // The caller intentionally reuses one buffer for source and resolved paths.
+    // Preserve the archive path before replacing that buffer with the cache path.
+    I_strncpyz(sourcePathCopy, sourcePath, sizeof(sourcePathCopy));
+
+    const char *cachePath = mode == 1
+        ? "vr-audio-probe/v42-front-miles.wav"
+        : "vr-audio-probe/v42-front-drmp3.wav";
+    bool cacheReady = FS_FileExists((char *)cachePath) != 0;
+    if (!cacheReady)
+    {
+        Com_Printf(
+            9,
+            "[VR][AUDIO][PREDECODE] V42 creating %s cache; the first load may pause briefly\n",
+            SND_GetVRMp3PredecodeModeName(mode));
+        cacheReady = mode == 1
+            ? SND_VRCreateMilesPredecodeCache(sourcePathCopy, cachePath)
+            : SND_VRCreateDrMp3PredecodeCache(sourcePathCopy, cachePath);
+    }
+
+    if (!cacheReady)
+    {
+        Com_PrintError(
+            9,
+            "[VR][AUDIO][PREDECODE] V42 cache unavailable; falling back to live MP3 for %s\n",
+            alias->aliasName);
+        return false;
+    }
+
+    I_strncpyz(resolvedPath, cachePath, resolvedPathSize);
+    if (!s_vrMp3PredecodeCacheReported[mode])
+    {
+        Com_Printf(
+            9,
+            "[VR][AUDIO][PREDECODE] V42 routing %s through %s (%s)\n",
+            alias->aliasName,
+            cachePath,
+            SND_GetVRMp3PredecodeModeName(mode));
+        s_vrMp3PredecodeCacheReported[mode] = true;
+    }
+    return true;
+}
 
 void __cdecl TRACK_snd_driver()
 {
@@ -32,6 +343,39 @@ bool __cdecl SND_IsMultiChannel()
 char __cdecl SND_InitDriver()
 {
     snd_khz = Dvar_RegisterInt("snd_khz", 44, (DvarLimits)0x2C0000000BLL, DVAR_ARCHIVE | DVAR_LATCH, "The game sound frequency.");
+    snd_vrMilesOutputMode = Dvar_RegisterInt(
+        "snd_vrMilesOutputMode",
+        0,
+        0,
+        2,
+        DVAR_ARCHIVE,
+        "Miles output diagnostic (restart required): 0 DirectSound defaults, 1 WaveOut, 2 buffered DirectSound.");
+    snd_vrHelicopterStemMode = Dvar_RegisterInt(
+        "snd_vrHelicopterStemMode",
+        0,
+        0,
+        2,
+        DVAR_NOFLAG,
+        "Airlift helicopter stream isolation: 0 normal mix, 1 front L/R only, 2 surround Ls/Rs only.");
+    snd_vrMp3PredecodeMode = Dvar_RegisterInt(
+        "snd_vrMp3PredecodeMode",
+        0,
+        0,
+        2,
+        DVAR_ARCHIVE,
+        "Airlift front MP3 diagnostic (restart required): 0 live MP3, 1 Miles-predecoded WAV, 2 dr_mp3-predecoded WAV.");
+    Com_Printf(
+        9,
+        "[VR][AUDIO] V39 Miles helicopter stem isolation active: 0 normal; 1 front-only; 2 surround-only\n");
+    Com_Printf(
+        9,
+        "[VR][AUDIO] V40 Miles output-path isolation active: mode %i; 0 DirectSound; 1 WaveOut; 2 buffered DirectSound; restart required\n",
+        snd_vrMilesOutputMode->current.integer);
+    Com_Printf(
+        9,
+        "[VR][AUDIO] V42 MP3 predecode isolation active: mode %i; %s; surround auto-muted in modes 1/2; restart required\n",
+        snd_vrMp3PredecodeMode->current.integer,
+        SND_GetVRMp3PredecodeModeName(snd_vrMp3PredecodeMode->current.integer));
     AIL_set_file_callbacks(MSS_FileOpenCallback, MSS_FileCloseCallback, MSS_FileSeekCallback, MSS_FileReadCallback);
     AIL_set_redist_directory("miles");
     snd_outputConfiguration = Dvar_RegisterEnum(
@@ -305,28 +649,15 @@ bool __cdecl SND_IsStreamChannelFree(int index)
 
 void __cdecl SND_ApplyChannelMap(_SAMPLE *handle, const snd_alias_t *alias, int srcChannelCount)
 {
-    float v3; // [esp+0h] [ebp-60h]
-    float v4; // [esp+4h] [ebp-5Ch]
-    float v5; // [esp+8h] [ebp-58h]
-    float v6; // [esp+Ch] [ebp-54h]
-    MSS_SPEAKER src_list[18] = {
-        MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER,
-        MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER,
-        MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER,
-        MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER,
-        MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER,
-        MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER
-    };
-    MSS_SPEAKER dst_list[18] = { 
-        MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER, 
-        MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER,
-        MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER, 
-        MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER, 
-        MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER, 
-        MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER 
-    };
-
-    float outVolumes[18]; // [esp+10h] [ebp-50h] BYREF
+    // KISAK_SP_VR_MILES_SPEAKER_MAP_FIX_V37
+    // COD4's speaker maps contain one scalar gain per destination speaker.
+    // The Miles 7.2 compatibility shim previously passed those gains to the
+    // newer source-to-destination matrix API with every source and destination
+    // hardcoded to FRONT_CENTER.  That folded stereo and surround stems onto
+    // the same speaker.  AIL_set_sample_speaker_scale_factors is the 7.2 API
+    // that preserves the retail per-destination semantics.
+    MSS_SPEAKER destinationSpeakers[6];
+    float outVolumes[6];
     MSSChannelMap *channelMap; // [esp+58h] [ebp-8h]
     int i; // [esp+5Ch] [ebp-4h]
 
@@ -337,26 +668,70 @@ void __cdecl SND_ApplyChannelMap(_SAMPLE *handle, const snd_alias_t *alias, int 
     channelMap = Com_GetSpeakerMap(alias->speakerMap, srcChannelCount);
     if (channelMap)
     {
+        if (channelMap->speakerCount < 0 || channelMap->speakerCount > 6)
+        {
+            MyAssertHandler(
+                ".\\win32\\snd_driver.cpp",
+                779,
+                0,
+                "%s\n\t(channelMap->speakerCount) = %i",
+                "channelMap->speakerCount >= 0 && channelMap->speakerCount <= 6",
+                channelMap->speakerCount);
+            return;
+        }
+
         memset(outVolumes, 0, sizeof(outVolumes));
         for (i = 0; i < channelMap->speakerCount; ++i)
         {
-            v5 = channelMap->speakers[i].levels[0];
-            v6 = channelMap->speakers[i].levels[1];
-            v4 = v5 - v6;
-            if (v4 < 0.0)
-                v3 = v6;
-            else
-                v3 = v5;
-            outVolumes[i] = v3;
+            const int destination = channelMap->speakers[i].speaker;
+            if (destination < MSS_SPEAKER_FRONT_LEFT || destination > MSS_SPEAKER_MAX_INDEX)
+            {
+                MyAssertHandler(
+                    ".\\win32\\snd_driver.cpp",
+                    791,
+                    0,
+                    "%s\n\t(destination) = %i",
+                    "destination >= MSS_SPEAKER_FRONT_LEFT && destination <= MSS_SPEAKER_MAX_INDEX",
+                    destination);
+                return;
+            }
+
+            destinationSpeakers[i] = static_cast<MSS_SPEAKER>(destination);
+            outVolumes[i] = channelMap->speakers[i].levels[0];
+            if (srcChannelCount == 2 && channelMap->speakers[i].levels[1] > outVolumes[i])
+                outVolumes[i] = channelMap->speakers[i].levels[1];
         }
-        //AIL_set_sample_channel_levels(handle, outVolumes, channelMap->speakerCount);
-        AIL_set_sample_channel_levels(handle, src_list, dst_list, outVolumes, channelMap->speakerCount);
+
+        AIL_set_sample_speaker_scale_factors(
+            handle,
+            destinationSpeakers,
+            outVolumes,
+            channelMap->speakerCount);
+
+        if (SND_IsVRAirliftHelicopterAlias(alias))
+        {
+            Com_Printf(
+                9,
+                "[VR][AUDIO][MAP] V37 alias %s: source channels %i; output %s; destinations %i\n",
+                alias->aliasName,
+                srcChannelCount,
+                SND_IsMultiChannel() ? "multichannel" : "stereo",
+                channelMap->speakerCount);
+            for (i = 0; i < channelMap->speakerCount; ++i)
+            {
+                Com_Printf(
+                    9,
+                    "[VR][AUDIO][MAP] V37 alias %s: destination %i gain %.3f\n",
+                    alias->aliasName,
+                    static_cast<int>(destinationSpeakers[i]),
+                    outVolumes[i]);
+            }
+        }
     }
 }
 
 int __cdecl SND_StartAlias2DSample(SndStartAliasInfo *startAliasInfo, int *pChannel)
 {
-    float v3; // [esp+0h] [ebp-B0h]
     float baseSlavePercentage; // [esp+4h] [ebp-ACh]
     double timescale; // [esp+10h] [ebp-A0h]
     float v6; // [esp+1Ch] [ebp-94h]
@@ -462,8 +837,7 @@ int __cdecl SND_StartAlias2DSample(SndStartAliasInfo *startAliasInfo, int *pChan
     SND_Set2DChannelVolume(index, realVolume);
     AIL_set_sample_loop_count(handle, (startAliasInfo->alias0->flags & 1) == 0);
     baseSlavePercentage = MSS_GetWetLevel(startAliasInfo->alias0);
-    v3 = CG_BannerScoreboardScaleMultiplier();
-    AIL_set_sample_reverb_levels(handle, v3, baseSlavePercentage);
+    AIL_set_sample_reverb_levels(handle, MSS_GetDryLevel(), baseSlavePercentage);
     AIL_sample_ms_position(handle, &total_msec, 0);
     if (startAliasInfo->timeshift >= total_msec)
         return SND_SetPlaybackIdNotPlayed(index);
@@ -507,26 +881,12 @@ int __cdecl SND_StartAlias2DSample(SndStartAliasInfo *startAliasInfo, int *pChan
 
 void __cdecl SND_Apply3DSpatializationTweaks(_SAMPLE *handle, const snd_alias_t *alias)
 {
-    MSS_SPEAKER src_list[18] = {
-        MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER,
-        MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER,
-        MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER,
-        MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER,
-        MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER,
-        MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER
-    };
-    MSS_SPEAKER dst_list[18] = {
-        MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER,
-        MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER,
-        MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER,
-        MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER,
-        MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER,
-        MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER, MSS_SPEAKER_FRONT_CENTER
-    };
-    float outVolumes[19]; // [esp+0h] [ebp-58h] BYREF
+    // KISAK_SP_VR_MILES_3D_SPEAKER_SCALE_FIX_V37
+    MSS_SPEAKER destinationSpeakers[18];
+    float outVolumes[18];
     int index; // [esp+4Ch] [ebp-Ch]
     float notCenterPercentage; // [esp+50h] [ebp-8h]
-    DWORD numChannels; // [esp+54h] [ebp-4h] BYREF
+    int outputChannels; // [esp+54h] [ebp-4h] BYREF
 
     if (!handle)
         MyAssertHandler(".\\win32\\snd_driver.cpp", 797, 0, "%s", "handle");
@@ -534,24 +894,41 @@ void __cdecl SND_Apply3DSpatializationTweaks(_SAMPLE *handle, const snd_alias_t 
         MyAssertHandler(".\\win32\\snd_driver.cpp", 798, 0, "%s", "alias");
     if (SND_IsMultiChannel())
     {
-        // LWSS ADD - get channel count
-        numChannels = AIL_sample_channel_count(handle, NULL);
-        // LWSS END
-        //AIL_sample_channel_levels(handle, &numChannels);
-        AIL_sample_channel_levels(handle, src_list, dst_list, outVolumes, numChannels);
+        outputChannels = 0;
+        AIL_speaker_configuration(milesGlob.driver, 0, &outputChannels, 0, 0);
+        if (outputChannels <= 0 || outputChannels > 18)
+        {
+            MyAssertHandler(
+                ".\\win32\\snd_driver.cpp",
+                824,
+                0,
+                "%s\n\t(outputChannels) = %i",
+                "outputChannels > 0 && outputChannels <= 18",
+                outputChannels);
+            return;
+        }
 
-        for (index = 0; index < numChannels; ++index)
+        for (index = 0; index < outputChannels; ++index)
+        {
+            destinationSpeakers[index] = static_cast<MSS_SPEAKER>(index);
             outVolumes[index] = 1.0;
+        }
         if (alias->centerPercentage != 0.0 && SND_IsMultiChannel())
         {
             notCenterPercentage = 1.0 - alias->centerPercentage;
-            for (index = 0; index < numChannels; ++index)
+            for (index = 0; index < outputChannels; ++index)
                 outVolumes[index] = outVolumes[index] * notCenterPercentage;
         }
-        outVolumes[2] = alias->centerPercentage;
-        outVolumes[3] = alias->lfePercentage;
-        //AIL_set_sample_channel_levels(handle, outVolumes, numChannels);
-        AIL_set_sample_channel_levels(handle, src_list, dst_list, outVolumes, numChannels);
+        if (outputChannels > MSS_SPEAKER_FRONT_CENTER)
+            outVolumes[MSS_SPEAKER_FRONT_CENTER] = alias->centerPercentage;
+        if (outputChannels > MSS_SPEAKER_LOW_FREQUENCY)
+            outVolumes[MSS_SPEAKER_LOW_FREQUENCY] = alias->lfePercentage;
+
+        AIL_set_sample_speaker_scale_factors(
+            handle,
+            destinationSpeakers,
+            outVolumes,
+            outputChannels);
     }
 }
 
@@ -692,7 +1069,7 @@ int __cdecl SND_StartAlias3DSample(SndStartAliasInfo *startAliasInfo, int *pChan
     SND_Set3DPosition(index, startAliasInfo->org);
     AIL_set_sample_loop_count(handle, (startAliasInfo->alias0->flags & 1) == 0);
     maxdist = MSS_GetWetLevel(startAliasInfo->alias0);
-    mindist = CG_BannerScoreboardScaleMultiplier();
+    mindist = MSS_GetDryLevel();
     AIL_set_sample_reverb_levels(handle, mindist, maxdist);
     if (!rate)
         MyAssertHandler(".\\win32\\snd_driver.cpp", 1004, 0, "%s", "rate");
@@ -807,7 +1184,6 @@ int __cdecl SND_StartAliasStreamOnChannel(SndStartAliasInfo *startAliasInfo, int
     const char *error; // eax
     double LerpedSlavePercentage; // st7
     double Stream3DVolumeFallOff; // st7
-    float v6; // [esp+4h] [ebp-244h]
     float baseSlavePercentage; // [esp+8h] [ebp-240h]
     float *org; // [esp+Ch] [ebp-23Ch]
     float v9; // [esp+18h] [ebp-230h]
@@ -868,6 +1244,11 @@ int __cdecl SND_StartAliasStreamOnChannel(SndStartAliasInfo *startAliasInfo, int
         }
         Com_GetSoundFileName(startAliasInfo->alias0, filename, 128);
         Com_sprintf(realname, 0x100u, "sound/%s", filename);
+        SND_VRResolveAirliftFrontStreamPath(
+            startAliasInfo->alias0,
+            realname,
+            realname,
+            sizeof(realname));
         total_msec[1] = (int)realname;
         {
             PROF_SCOPED("SND_open_stream");
@@ -899,8 +1280,7 @@ int __cdecl SND_StartAliasStreamOnChannel(SndStartAliasInfo *startAliasInfo, int
             }
             AIL_set_stream_loop_count((HSTREAM)handle, (startAliasInfo->alias0->flags & 1) == 0);
             baseSlavePercentage = MSS_GetWetLevel(startAliasInfo->alias0);
-            v6 = CG_BannerScoreboardScaleMultiplier();
-            AIL_set_sample_reverb_levels(handle_sample, v6, baseSlavePercentage);
+            AIL_set_sample_reverb_levels(handle_sample, MSS_GetDryLevel(), baseSlavePercentage);
             AIL_stream_ms_position((HSTREAM)handle, total_msec, 0);
             if (startAliasInfo->timeshift < total_msec[0])
             {
@@ -1007,13 +1387,8 @@ int __cdecl SND_StartAliasStreamOnChannel(SndStartAliasInfo *startAliasInfo, int
 
 void __cdecl SND_SetRoomtype(int roomtype)
 {
-    float v1; // [esp+0h] [ebp-8h]
-    float WetLevel; // [esp+4h] [ebp-4h]
-
     AIL_set_room_type(milesGlob.driver, roomtype);
-    WetLevel = MSS_GetWetLevel(0);
-    v1 = CG_BannerScoreboardScaleMultiplier();
-    AIL_set_digital_master_reverb_levels(milesGlob.driver, v1, WetLevel);
+    AIL_set_digital_master_reverb_levels(milesGlob.driver, MSS_GetDryLevel(), MSS_GetWetLevel(0));
 }
 
 void __cdecl SND_UpdateEqs()
@@ -1333,6 +1708,7 @@ void __cdecl SND_SetStreamChannelVolume(int index, float volume)
             "(index >= ((0 + 8) + 32) && index < ((0 + 8) + 32) + g_snd.max_stream_channels)",
             index);
     handle_sample = (_SAMPLE *)AIL_stream_sample_handle((HSTREAM)milesGlob.handle_sample[index]);
+    volume = volume * SND_GetVRAirliftHelicopterStemScale(g_snd.chaninfo[index].alias0);
     if (g_snd.chaninfo[index].soundFileInfo.srcChannelCount == 2
         || !SND_IsAliasChannel3D((g_snd.chaninfo[index].alias0->flags & 0x3F00) >> 8))
     {
@@ -1431,9 +1807,6 @@ void __cdecl SND_SetStreamChannelPlaybackRate(int index, int rate)
 
 void __cdecl SND_Update2DChannelReverb(int index)
 {
-    float v1; // [esp+0h] [ebp-8h]
-    float WetLevel; // [esp+4h] [ebp-4h]
-
     if (index < 0 || index >= g_snd.max_2D_channels)
         MyAssertHandler(
             ".\\win32\\snd_driver.cpp",
@@ -1442,16 +1815,14 @@ void __cdecl SND_Update2DChannelReverb(int index)
             "%s\n\t(index) = %i",
             "(index >= 0 && index < 0 + g_snd.max_2D_channels)",
             index);
-    WetLevel = MSS_GetWetLevel(g_snd.chaninfo[index].alias0);
-    v1 = CG_BannerScoreboardScaleMultiplier();
-    AIL_set_sample_reverb_levels(milesGlob.handle_sample[index], v1, WetLevel);
+    AIL_set_sample_reverb_levels(
+        milesGlob.handle_sample[index],
+        MSS_GetDryLevel(),
+        MSS_GetWetLevel(g_snd.chaninfo[index].alias0));
 }
 
 void __cdecl SND_Update3DChannelReverb(int index)
 {
-    float v1; // [esp+0h] [ebp-8h]
-    float WetLevel; // [esp+4h] [ebp-4h]
-
     if (index < 8 || index >= g_snd.max_3D_channels + 8)
         MyAssertHandler(
             ".\\win32\\snd_driver.cpp",
@@ -1460,17 +1831,14 @@ void __cdecl SND_Update3DChannelReverb(int index)
             "%s\n\t(index) = %i",
             "(index >= (0 + 8) && index < (0 + 8) + g_snd.max_3D_channels)",
             index);
-    WetLevel = MSS_GetWetLevel(g_snd.chaninfo[index].alias0);
-    v1 = CG_BannerScoreboardScaleMultiplier();
-    AIL_set_sample_reverb_levels(milesGlob.handle_sample[index], v1, WetLevel);
+    AIL_set_sample_reverb_levels(
+        milesGlob.handle_sample[index],
+        MSS_GetDryLevel(),
+        MSS_GetWetLevel(g_snd.chaninfo[index].alias0));
 }
 
 void __cdecl SND_UpdateStreamChannelReverb(int index)
 {
-    float v1; // [esp+0h] [ebp-Ch]
-    float WetLevel; // [esp+4h] [ebp-8h]
-    _SAMPLE *handle_sample; // [esp+8h] [ebp-4h]
-
     if (index < 40 || index >= g_snd.max_stream_channels + 40)
         MyAssertHandler(
             ".\\win32\\snd_driver.cpp",
@@ -1479,10 +1847,10 @@ void __cdecl SND_UpdateStreamChannelReverb(int index)
             "%s\n\t(index) = %i",
             "(index >= ((0 + 8) + 32) && index < ((0 + 8) + 32) + g_snd.max_stream_channels)",
             index);
-    handle_sample = (_SAMPLE *)AIL_stream_sample_handle((HSTREAM)milesGlob.handle_sample[index]);
-    WetLevel = MSS_GetWetLevel(g_snd.chaninfo[index].alias0);
-    v1 = CG_BannerScoreboardScaleMultiplier();
-    AIL_set_sample_reverb_levels(handle_sample, v1, WetLevel);
+    AIL_set_sample_reverb_levels(
+        (_SAMPLE *)AIL_stream_sample_handle((HSTREAM)milesGlob.handle_sample[index]),
+        MSS_GetDryLevel(),
+        MSS_GetWetLevel(g_snd.chaninfo[index].alias0));
 }
 
 int __cdecl SND_Get2DChannelLength(int index)
@@ -1828,6 +2196,40 @@ void __cdecl SND_UpdateStreamChannel(int i, int frametime)
             "(i >= ((0 + 8) + 32) && i < ((0 + 8) + 32) + g_snd.max_stream_channels)",
             i);
     chaninfo = &g_snd.chaninfo[i];
+    if (SND_IsVRAirliftHelicopterAlias(chaninfo->alias0))
+    {
+        const int traceIndex = i - 40;
+        const int now = Sys_Milliseconds();
+        if (now - s_vrHelicopterStreamTraceTime[traceIndex] >= 1000)
+        {
+            HSTREAM stream = (HSTREAM)milesGlob.handle_sample[i];
+            HSAMPLE sample = AIL_stream_sample_handle(stream);
+            int lengthMsec = 0;
+            int positionMsec = 0;
+            AIL_stream_ms_position(stream, &lengthMsec, &positionMsec);
+
+            MSTREAM_TYPE *streamState = (MSTREAM_TYPE *)stream;
+            Com_Printf(
+                9,
+                "[VR][AUDIO][STREAM] V39 channel %i alias %s: status 0x%x; pos %i/%i ms; "
+                "readError %u; starved %i; totalRead %u; buffers %i/%i/%i; V39 mode %i; scale %.1f\n",
+                i,
+                chaninfo->alias0->aliasName,
+                AIL_stream_status(stream),
+                positionMsec,
+                lengthMsec,
+                streamState->error,
+                sample ? sample->starved : -1,
+                streamState->totalread,
+                streamState->size1,
+                streamState->size2,
+                streamState->size3,
+                snd_vrHelicopterStemMode ? snd_vrHelicopterStemMode->current.integer : 0,
+                SND_GetVRAirliftHelicopterStemScale(chaninfo->alias0));
+            s_vrHelicopterStreamTraceTime[traceIndex] = now;
+        }
+    }
+
     if (!chaninfo->paused && (i >= 45 || SND_UpdateBackgroundVolume(i - 40, frametime)))
     {
         alias0 = chaninfo->alias0;

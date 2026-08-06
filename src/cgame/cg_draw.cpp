@@ -34,7 +34,9 @@ static uint32_t s_vrJavelinHudDiagnosticSequence = 0;
 
 static bool VR_JavelinHudDiagnosticActive()
 {
-    return BG_GetViewmodelWeaponIndex(
+    return
+        VR_VerboseDiagnosticsEnabled() &&
+        BG_GetViewmodelWeaponIndex(
                &cgArray[0].predictedPlayerState) == 7;
 }
 
@@ -1631,6 +1633,16 @@ void __cdecl CG_DrawActive(int localClientNum)
 
     const auto vrStereoFrontendStart =
         std::chrono::steady_clock::now();
+
+    // KISAK_SP_VR_CAPTURE_POSE_METADATA_V32
+    // The backend may finish this packed stereo frame after one or more newer
+    // OpenXR poses have been published. Preserve the exact views used by this
+    // GfxBackEndData so the capture consumer never guesses by acquisition time.
+    if (frontEndDataOut != nullptr)
+    {
+        VR_RecordRenderFramePose(
+            frontEndDataOut->frameCount);
+    }
 
     const auto vrLeftEyeStart =
         std::chrono::steady_clock::now();

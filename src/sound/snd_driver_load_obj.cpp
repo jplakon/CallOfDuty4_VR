@@ -3,6 +3,12 @@
 #include <universal/com_files.h>
 #include <universal/com_memory.h>
 
+// KISAK_SP_VR_MP3_PREDECODE_ISOLATION_V42
+// Generate dr_mp3 exactly once. snd_driver.cpp includes the same header for
+// declarations and uses it only for the V42 diagnostic predecode path.
+#define DR_MP3_IMPLEMENTATION
+#include <dr_libs/dr_mp3.h>
+
 LoadedSound *__cdecl SND_LoadFromBuffer(void *buffer, const char *soundName)
 {
     _AILSOUNDINFO info; // [esp+8h] [ebp-28h] BYREF

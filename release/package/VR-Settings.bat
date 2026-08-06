@@ -2,8 +2,10 @@
 rem KisakCOD VR settings
 rem Fully close and restart the game after editing this file.
 
-rem Current Quest 3 / Virtual Desktop test mode.
-rem Lower development fallback: 3072x1536
+rem Current Quest 3 / Virtual Desktop native packed mode.
+rem Valid lower preset: use VR_CUSTOM_MODE=4768x2016 together with
+rem KISAK_VR_OUTPUT_SCALE=0.75 below. Do not use the obsolete 3072x1536 mode;
+rem it cannot contain two rectangular eyes plus the dedicated scope panel.
 set "VR_CUSTOM_MODE=6016x2688"
 
 rem Physical scope placement, measured in meters.
@@ -14,15 +16,19 @@ set "KISAK_VR_SCOPE_RADIUS_METERS=0.024"
 set "KISAK_VR_SCOPE_CAPTURE_SIZE=1024"
 
 rem GPU bridge and compositor.
+rem Keep 1.0 for 6016x2688; use 0.75 with the 4768x2016 lower preset.
 set "KISAK_VR_GPU_BRIDGE=1"
 set "KISAK_VR_ALLOW_OVERSIZED_WINDOW=1"
 set "KISAK_VR_OUTPUT_SCALE=1.0"
 set "KISAK_VR_FSR=0"
 set "KISAK_VR_BRIGHTNESS=1.00"
 
+rem High-volume retired mission/controller traces. Leave off for normal play.
+set "KISAK_VR_VERBOSE_DIAGNOSTICS=0"
+
 rem Physical magazines for supported rifles, SMGs, and pistols.
-rem Left trigger ejects; squeeze at the left hip draws; release at the
-rem magazine well inserts. Set to 0 to restore trigger-to-reload.
+rem Right A ejects; squeeze at the left hip draws; release at the magazine
+rem well inserts. Set to 0 to make right A use COD4's native reload.
 set "KISAK_VR_MANUAL_RELOAD=1"
 
 rem Two-bone IK left hand at the physical OpenXR grip pose without stretching.

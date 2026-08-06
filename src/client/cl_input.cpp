@@ -1524,6 +1524,12 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
         bool vrJumpHeld = false;
         bool vrUseHeld = false;
         bool vrReloadHeld = false;
+        bool vrRightStickJumpPressed = false;
+        bool vrRightStickCrouchPressed = false;
+
+        VR_ConsumeRightStickVerticalActions(
+            &vrRightStickJumpPressed,
+            &vrRightStickCrouchPressed);
 
         if (VR_GetBasicGameplayButtons(
                 &vrAdsHeld,
@@ -1569,15 +1575,23 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
             }
         }
 
+        if (vrRightStickJumpPressed)
+        {
+            result->buttons |=
+                BUTTON_JUMP;
+        }
+
         // KISAK_SP_VR_SCRIPTED_JUMP_BRIDGE_V1
         // Mission scripts can listen for +gostand through notifyOnCommand.
         // Directly setting BUTTON_JUMP bypasses that notification, so replay
-        // one native command edge for every left-trigger press.
+        // one native command edge for every left-trigger press or upward
+        // right-stick gesture.
         static bool vrJumpCommandWasHeld = false;
 
         const bool vrJumpCommandPressed =
-            vrJumpHeld &&
-            !vrJumpCommandWasHeld;
+            (vrJumpHeld &&
+             !vrJumpCommandWasHeld) ||
+            vrRightStickJumpPressed;
 
         vrJumpCommandWasHeld =
             vrJumpHeld;
@@ -1608,13 +1622,22 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
                 0,
                 vrJumpUpCommand);
 
+            // CL_KeyMove already ran for this usercmd.  If +gostand raised
+            // the player from crouch or prone, refresh the command's stance
+            // bits so the upward gesture takes effect in this same frame.
+            if (vrRightStickJumpPressed)
+            {
+                CL_AddCurrentStanceToCmd(
+                    result);
+            }
+
             static bool loggedVrScriptedJumpBridge = false;
 
             if (!loggedVrScriptedJumpBridge)
             {
                 Com_Printf(
                     0,
-                    "[VR][JUMP] Routed the left Touch trigger through "
+                    "[VR][JUMP] Routed Touch jump input through "
                     "the native +gostand command path.\n");
 
                 loggedVrScriptedJumpBridge = true;
@@ -1715,6 +1738,20 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
 
         vrStanceWasHeld =
             vrStanceHeld;
+
+        // Right-stick down is an explicit crouch command.  Up uses the
+        // existing +gostand bridge, so the two vertical directions form a
+        // natural crouch/down and stand-or-jump/up pair without changing B's
+        // tap/hold stance behavior.
+        if (vrRightStickCrouchPressed)
+        {
+            CL_SetStance(
+                0,
+                CL_STANCE_CROUCH);
+
+            vrStanceChanged =
+                true;
+        }
 
         if (vrStanceChanged)
         {

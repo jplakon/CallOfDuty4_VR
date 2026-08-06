@@ -6,6 +6,10 @@
 // The normal Call of Duty Direct3D 9 renderer remains untouched.
 bool VR_Init();
 
+// Returns the last human-readable OpenXR initialization failure. This remains
+// valid after VR_Init returns false so WinMain can stop with a useful message.
+const char* VR_GetLastStartupError();
+
 // Polls OpenXR events and, while the session is running, renders a stereo, head-tracked cube and floor grid
 // to the headset. Call once per game frame.
 void VR_Frame();
@@ -15,6 +19,16 @@ void VR_Shutdown();
 
 // Returns true after OpenXR and its D3D11 session have initialized.
 bool VR_IsInitialized();
+
+// KISAK_SP_VR_CAPTURE_POSE_METADATA_V32
+// Associates the current OpenXR render views with the exact legacy renderer
+// frame that is about to build the packed stereo scene.
+void VR_RecordRenderFramePose(
+    unsigned int renderFrameId);
+
+// High-volume controller, hand-model, and retired mission diagnostics are
+// release-disabled unless KISAK_VR_VERBOSE_DIAGNOSTICS=1 is set.
+bool VR_VerboseDiagnosticsEnabled();
 
 // KISAK_SP_VR_FIXED_SCOPED_TURRET_VIEW_FIX_V1
 // Publishes whether CoD4 currently has the player locked to a fixed weapon
@@ -278,6 +292,13 @@ bool VR_GetLocomotionCombatButtons(
     bool* sprintHeld,
     bool* meleeHeld,
     bool* stanceHeld);
+
+// Consumes one latched vertical right-stick gesture.  Up requests the native
+// jump/stand path and down requests crouch.  Neutral re-arms the gesture;
+// horizontal stick dominance remains reserved for snap turning.
+bool VR_ConsumeRightStickVerticalActions(
+    bool* jumpPressed,
+    bool* crouchPressed);
 
 // Returns weapon-utility controls:
 // right grip = held offhand input, left Y = held utility input.

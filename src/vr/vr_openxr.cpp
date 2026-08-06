@@ -454,6 +454,31 @@ std::array<XrView, kVrStereoEyeCount>
 bool g_vrPublishedRenderViewsValid = false;
 bool g_vrCapturedStereoViewsValid = false;
 bool g_vrLoggedCapturedPoseMatch = false;
+bool g_vrLoggedCapturedPoseMiss = false;
+std::mutex g_vrPublishedRenderViewsMutex;
+
+// KISAK_SP_VR_CAPTURE_POSE_METADATA_V32
+constexpr std::size_t kVrRenderPoseHistoryCount = 64u;
+
+struct VrRenderPoseHistoryEntry
+{
+    bool valid = false;
+    std::uint64_t renderFrameId = 0u;
+    std::uint64_t recordedNanoseconds = 0u;
+    std::array<XrView, kVrStereoEyeCount> views = {};
+};
+
+std::array<
+    VrRenderPoseHistoryEntry,
+    kVrRenderPoseHistoryCount>
+    g_vrRenderPoseHistory = {};
+
+std::mutex g_vrRenderPoseHistoryMutex;
+std::size_t g_vrRenderPoseHistoryWriteIndex = 0u;
+std::uint64_t g_vrPublishedRenderPoseNanoseconds = 0u;
+std::uint64_t g_vrCapturedRenderPoseNanoseconds = 0u;
+VrD3D9FrameMetadata g_vrCapturedStereoMetadata = {};
+bool g_vrCapturedStereoPoseMatched = false;
 
 std::mutex g_vrHeadOrientationMutex;
 
@@ -508,7 +533,9 @@ float g_vrRightThumbstickX = 0.0f;
 float g_vrRightThumbstickY = 0.0f;
 bool g_vrRightThumbstickValid = false;
 bool g_vrSnapTurnArmed = true;
-bool g_vrRightStickUtilityArmed = true;
+bool g_vrRightStickVerticalArmed = true;
+bool g_vrRightStickJumpPressed = false;
+bool g_vrRightStickCrouchPressed = false;
 bool g_vrRightThumbrestTouched = false;
 bool g_vrModifierDpadArmed = true;
 
@@ -623,6 +650,120 @@ struct VrEyeSwapchain
 
 std::vector<VrEyeSwapchain> g_vrEyeSwapchains;
 
+// KISAK_SP_VR_OPENXR_STARTUP_DIAGNOSTICS_V31
+// Preserve a human-readable startup failure even before an XrInstance exists,
+// when xrResultToString cannot be called.  WinMain uses this to stop instead of
+// silently continuing into the flat renderer.
+std::array<char, 1024> g_vrLastStartupError = {};
+
+const char* VR_XrResultName(const XrResult result)
+{
+    switch (static_cast<int>(result))
+    {
+        case -1: return "XR_ERROR_VALIDATION_FAILURE";
+        case -2: return "XR_ERROR_RUNTIME_FAILURE";
+        case -3: return "XR_ERROR_OUT_OF_MEMORY";
+        case -4: return "XR_ERROR_API_VERSION_UNSUPPORTED";
+        case -6: return "XR_ERROR_INITIALIZATION_FAILED";
+        case -7: return "XR_ERROR_FUNCTION_UNSUPPORTED";
+        case -8: return "XR_ERROR_FEATURE_UNSUPPORTED";
+        case -9: return "XR_ERROR_EXTENSION_NOT_PRESENT";
+        case -10: return "XR_ERROR_LIMIT_REACHED";
+        case -11: return "XR_ERROR_SIZE_INSUFFICIENT";
+        case -12: return "XR_ERROR_HANDLE_INVALID";
+        case -13: return "XR_ERROR_INSTANCE_LOST";
+        case -14: return "XR_ERROR_SESSION_RUNNING";
+        case -16: return "XR_ERROR_SESSION_NOT_RUNNING";
+        case -17: return "XR_ERROR_SESSION_LOST";
+        case -18: return "XR_ERROR_SYSTEM_INVALID";
+        case -19: return "XR_ERROR_PATH_INVALID";
+        case -20: return "XR_ERROR_PATH_COUNT_EXCEEDED";
+        case -21: return "XR_ERROR_PATH_FORMAT_INVALID";
+        case -22: return "XR_ERROR_PATH_UNSUPPORTED";
+        case -23: return "XR_ERROR_LAYER_INVALID";
+        case -24: return "XR_ERROR_LAYER_LIMIT_EXCEEDED";
+        case -25: return "XR_ERROR_SWAPCHAIN_RECT_INVALID";
+        case -26: return "XR_ERROR_SWAPCHAIN_FORMAT_UNSUPPORTED";
+        case -27: return "XR_ERROR_ACTION_TYPE_MISMATCH";
+        case -28: return "XR_ERROR_SESSION_NOT_READY";
+        case -29: return "XR_ERROR_SESSION_NOT_STOPPING";
+        case -30: return "XR_ERROR_TIME_INVALID";
+        case -31: return "XR_ERROR_REFERENCE_SPACE_UNSUPPORTED";
+        case -32: return "XR_ERROR_FILE_ACCESS_ERROR";
+        case -33: return "XR_ERROR_FILE_CONTENTS_INVALID";
+        case -34: return "XR_ERROR_FORM_FACTOR_UNSUPPORTED";
+        case -35: return "XR_ERROR_FORM_FACTOR_UNAVAILABLE";
+        case -36: return "XR_ERROR_API_LAYER_NOT_PRESENT";
+        case -37: return "XR_ERROR_CALL_ORDER_INVALID";
+        case -38: return "XR_ERROR_GRAPHICS_DEVICE_INVALID";
+        case -39: return "XR_ERROR_POSE_INVALID";
+        case -40: return "XR_ERROR_INDEX_OUT_OF_RANGE";
+        case -41: return "XR_ERROR_VIEW_CONFIGURATION_TYPE_UNSUPPORTED";
+        case -42: return "XR_ERROR_ENVIRONMENT_BLEND_MODE_UNSUPPORTED";
+        case -44: return "XR_ERROR_NAME_DUPLICATED";
+        case -45: return "XR_ERROR_NAME_INVALID";
+        case -46: return "XR_ERROR_ACTIONSET_NOT_ATTACHED";
+        case -47: return "XR_ERROR_ACTIONSETS_ALREADY_ATTACHED";
+        case -48: return "XR_ERROR_LOCALIZED_NAME_DUPLICATED";
+        case -49: return "XR_ERROR_LOCALIZED_NAME_INVALID";
+        case -50: return "XR_ERROR_GRAPHICS_REQUIREMENTS_CALL_MISSING";
+        case -51: return "XR_ERROR_RUNTIME_UNAVAILABLE";
+        default: return "XR_ERROR_UNRECOGNIZED";
+    }
+}
+
+const char* VR_XrStartupAdvice(const XrResult result)
+{
+    switch (static_cast<int>(result))
+    {
+        case -32:
+            return
+                "The active OpenXR runtime or an enabled API layer could not "
+                "access a required manifest or DLL. Check OpenXR-Startup.log "
+                "for the exact runtime/layer path.";
+        case -33:
+            return
+                "An OpenXR runtime or API-layer manifest is invalid. Check "
+                "OpenXR-Startup.log for the selected JSON file.";
+        case -35:
+            return
+                "The runtime is installed, but no ready headset is available. "
+                "Connect and wake the headset before launching.";
+        case -36:
+            return
+                "A requested or implicit OpenXR API layer could not be loaded. "
+                "Check OpenXR-Startup.log for registered layers.";
+        case -38:
+            return
+                "The OpenXR runtime rejected the graphics adapter. Ensure the "
+                "headset runtime and KisakCOD use the same GPU.";
+        case -51:
+            return
+                "No usable 32-bit OpenXR runtime was found. Select an active "
+                "OpenXR runtime and restart its headset software.";
+        default:
+            return
+                "Check OpenXR-Startup.log and main\\console.log for the failing "
+                "runtime stage.";
+    }
+}
+
+void VR_RecordStartupFailure(
+    const char* operation,
+    const char* resultName,
+    const int resultValue,
+    const char* advice)
+{
+    std::snprintf(
+        g_vrLastStartupError.data(),
+        g_vrLastStartupError.size(),
+        "%s failed: %s (%d). %s",
+        operation != nullptr ? operation : "OpenXR initialization",
+        resultName != nullptr ? resultName : "unknown error",
+        resultValue,
+        advice != nullptr ? advice : "See the startup logs.");
+}
+
 const char* VR_SessionStateName(const XrSessionState state)
 {
     switch (state)
@@ -652,39 +793,52 @@ const char* VR_SessionStateName(const XrSessionState state)
 
 void VR_LogXrFailure(const char* operation, const XrResult result)
 {
-    char resultText[XR_MAX_RESULT_STRING_SIZE] = {};
+    char runtimeResultText[XR_MAX_RESULT_STRING_SIZE] = {};
+    const char* resultName = VR_XrResultName(result);
 
     if (g_vrInstance != XR_NULL_HANDLE &&
         XR_SUCCEEDED(
             xrResultToString(
                 g_vrInstance,
                 result,
-                resultText)))
+                runtimeResultText)) &&
+        runtimeResultText[0] != '\0')
     {
-        Com_PrintWarning(
-            0,
-            "[VR] %s failed: %s (%d).\n",
-            operation,
-            resultText,
-            static_cast<int>(result));
+        resultName = runtimeResultText;
     }
-    else
-    {
-        Com_PrintWarning(
-            0,
-            "[VR] %s failed with result %d.\n",
-            operation,
-            static_cast<int>(result));
-    }
+
+    VR_RecordStartupFailure(
+        operation,
+        resultName,
+        static_cast<int>(result),
+        VR_XrStartupAdvice(result));
+
+    Com_PrintWarning(
+        0,
+        "[VR] %s\n",
+        g_vrLastStartupError.data());
 }
 
 void VR_LogHrFailure(const char* operation, const HRESULT hr)
 {
+    char resultName[32] = {};
+
+    std::snprintf(
+        resultName,
+        sizeof(resultName),
+        "HRESULT 0x%08lX",
+        static_cast<unsigned long>(hr));
+
+    VR_RecordStartupFailure(
+        operation,
+        resultName,
+        static_cast<int>(hr),
+        "The Direct3D/OpenXR graphics bridge failed. Check main\\console.log.");
+
     Com_PrintWarning(
         0,
-        "[VR] %s failed with HRESULT 0x%08lX.\n",
-        operation,
-        static_cast<unsigned long>(hr));
+        "[VR] %s\n",
+        g_vrLastStartupError.data());
 }
 
 bool VR_HasInstanceExtension(const char* requestedExtension)
@@ -2988,28 +3142,100 @@ void VR_UpdateCompositorConstantsForEye(
         0);
 }
 
-void VR_RecordCapturedStereoPose()
+std::uint64_t VR_OpenXrClockNanoseconds()
 {
-    if (!g_vrPublishedRenderViewsValid)
+    return static_cast<std::uint64_t>(
+        std::chrono::duration_cast<
+            std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now()
+                .time_since_epoch())
+            .count());
+}
+
+void VR_RecordCapturedStereoPose(
+    const VrD3D9FrameMetadata& metadata)
+{
+    std::array<XrView, kVrStereoEyeCount>
+        matchedViews = {};
+
+    std::uint64_t matchedPoseNanoseconds = 0u;
+    bool matched = false;
+    bool poseAvailable = false;
+
+    if (metadata.renderFrameId != 0u)
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrRenderPoseHistoryMutex);
+
+        for (const VrRenderPoseHistoryEntry& entry :
+             g_vrRenderPoseHistory)
+        {
+            if (entry.valid &&
+                entry.renderFrameId ==
+                    metadata.renderFrameId)
+            {
+                matchedViews = entry.views;
+                matchedPoseNanoseconds =
+                    entry.recordedNanoseconds;
+                matched = true;
+                poseAvailable = true;
+                break;
+            }
+        }
+    }
+
+    if (!matched)
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrPublishedRenderViewsMutex);
+
+        if (g_vrPublishedRenderViewsValid)
+        {
+            matchedViews =
+                g_vrPublishedRenderViews;
+            matchedPoseNanoseconds =
+                g_vrPublishedRenderPoseNanoseconds;
+            poseAvailable = true;
+        }
+    }
+
+    g_vrCapturedStereoMetadata = metadata;
+    g_vrCapturedStereoPoseMatched = matched;
+    g_vrCapturedRenderPoseNanoseconds =
+        matchedPoseNanoseconds;
+
+    if (!poseAvailable)
     {
         return;
     }
 
     g_vrCapturedStereoViews =
-        g_vrPublishedRenderViews;
+        matchedViews;
 
     g_vrCapturedStereoViewsValid =
         true;
 
-    if (!g_vrLoggedCapturedPoseMatch)
+    if (matched &&
+        !g_vrLoggedCapturedPoseMatch)
     {
         Com_Printf(
             0,
-            "[VR] Matched captured stereo frame to its original "
-            "OpenXR render pose.\n");
+            "[VR] D3D9 capture frame IDs now resolve to the exact "
+            "OpenXR views used to render their pixels.\n");
 
         g_vrLoggedCapturedPoseMatch =
             true;
+    }
+    else if (!matched &&
+             !g_vrLoggedCapturedPoseMiss)
+    {
+        Com_PrintWarning(
+            0,
+            "[VR] A captured D3D9 frame had no matching render-pose "
+            "history entry; using the newest published pose for this "
+            "frame.\n");
+
+        g_vrLoggedCapturedPoseMiss = true;
     }
 }
 
@@ -3365,7 +3591,8 @@ bool VR_OpenGpuSharedStereoFrame(
     g_vrCurrentSharedSerial =
         frame.serial;
 
-    VR_RecordCapturedStereoPose();
+    VR_RecordCapturedStereoPose(
+        frame.metadata);
 
     if (!g_vrLoggedFirstSharedFrameOpen)
     {
@@ -3433,13 +3660,15 @@ bool VR_UpdateCapturedStereoTexture()
     std::uint32_t width = 0u;
     std::uint32_t height = 0u;
     std::uint64_t serial = 0u;
+    VrD3D9FrameMetadata metadata = {};
 
     if (!VR_D3D9CopyLatestStereoFrame(
             g_vrUploadedStereoSerial,
             pixels,
             width,
             height,
-            serial))
+            serial,
+            metadata))
     {
         return
             g_vrCapturedStereoView !=
@@ -3524,7 +3753,7 @@ bool VR_UpdateCapturedStereoTexture()
         width * 4u,
         0);
 
-    VR_RecordCapturedStereoPose();
+    VR_RecordCapturedStereoPose(metadata);
 
     g_vrUploadedStereoSerial = serial;
 
@@ -4884,6 +5113,11 @@ float4 PSMain(
 
 bool VR_TrackedHandDiagnosticsEnabledInternal()
 {
+    if (!VR_VerboseDiagnosticsEnabled())
+    {
+        return false;
+    }
+
     static const bool enabled = []()
     {
         const char* setting =
@@ -6454,7 +6688,9 @@ void VR_DestroyControllerInput()
         g_vrRightThumbstickY = 0.0f;
         g_vrRightThumbstickValid = false;
         g_vrSnapTurnArmed = true;
-        g_vrRightStickUtilityArmed = true;
+        g_vrRightStickVerticalArmed = true;
+        g_vrRightStickJumpPressed = false;
+        g_vrRightStickCrouchPressed = false;
         g_vrRightThumbrestTouched = false;
         g_vrModifierDpadArmed = true;
 
@@ -8231,7 +8467,8 @@ void VR_UpdatePoseFocusAimFromControllers()
 
     static bool loggedConfiguration = false;
 
-    if (!loggedConfiguration)
+    if (VR_VerboseDiagnosticsEnabled() &&
+        !loggedConfiguration)
     {
         Com_Printf(
             0,
@@ -8243,7 +8480,8 @@ void VR_UpdatePoseFocusAimFromControllers()
         loggedConfiguration = true;
     }
 
-    if (poseJustBecameAvailable &&
+    if (VR_VerboseDiagnosticsEnabled() &&
+        poseJustBecameAvailable &&
         !currentHeld)
     {
         Com_Printf(
@@ -8257,7 +8495,8 @@ void VR_UpdatePoseFocusAimFromControllers()
             rightHandHeight);
     }
 
-    if (currentHeld &&
+    if (VR_VerboseDiagnosticsEnabled() &&
+        currentHeld &&
         !previousHeld)
     {
         Com_Printf(
@@ -8269,7 +8508,8 @@ void VR_UpdatePoseFocusAimFromControllers()
             rightHandForward,
             rightHandHeight);
     }
-    else if (!currentHeld &&
+    else if (VR_VerboseDiagnosticsEnabled() &&
+             !currentHeld &&
              previousHeld)
     {
         if (!poseAvailable)
@@ -8335,6 +8575,7 @@ void VR_UpdateControllerActions(
     ++g_vrControllerDiagnosticFrame;
 
     const bool logPeriodicSnapshot =
+        VR_VerboseDiagnosticsEnabled() &&
         (g_vrControllerDiagnosticFrame % 180u) ==
         0u;
 
@@ -8577,7 +8818,8 @@ void VR_UpdateControllerActions(
             squeezeActive &&
             squeezeValue >= 0.75f;
 
-        if (triggerPressed &&
+        if (VR_VerboseDiagnosticsEnabled() &&
+            triggerPressed &&
             !g_vrControllerTriggerPressed[
                 handIndex])
         {
@@ -8588,7 +8830,8 @@ void VR_UpdateControllerActions(
                 VR_ControllerHandName(handIndex));
         }
 
-        if (squeezePressed &&
+        if (VR_VerboseDiagnosticsEnabled() &&
+            squeezePressed &&
             !g_vrControllerSqueezePressed[
                 handIndex])
         {
@@ -8901,7 +9144,11 @@ void VR_UpdateControllerActions(
         }
     }
 
-    int rightStickUtilityKey = 0;
+    // KISAK_SP_VR_RIGHT_STICK_JUMP_CROUCH_V44
+    // Keep horizontal dominance reserved for snap turning.  A deliberate
+    // vertical flick publishes a single gameplay edge and cannot repeat
+    // until the stick returns through the neutral release threshold.
+    int rightStickVerticalAction = 0;
 
     {
         std::lock_guard<std::mutex> lock(
@@ -8920,53 +9167,53 @@ void VR_UpdateControllerActions(
         if (!g_vrRightThumbstickValid ||
             absoluteY <= releaseThreshold)
         {
-            g_vrRightStickUtilityArmed = true;
+            g_vrRightStickVerticalArmed = true;
         }
-        else if (g_vrRightStickUtilityArmed &&
+        else if (g_vrRightStickVerticalArmed &&
                  absoluteY >= engageThreshold &&
                  absoluteY >=
                      absoluteX + dominanceMargin)
         {
             // OpenXR Touch thumbstick positive Y is forward/up.
-            // ASCII key numbers match the engine's normal keyboard path.
-            rightStickUtilityKey =
+            rightStickVerticalAction =
                 g_vrRightThumbstickY > 0.0f
-                    ? '5'
-                    : 'n';
+                    ? 1
+                    : -1;
 
-            g_vrRightStickUtilityArmed = false;
+            g_vrRightStickVerticalArmed = false;
         }
     }
 
-    if (rightStickUtilityKey != 0 &&
-        !Key_IsCatcherActive(0, 0x10))
+    // Match gameplay command routing: gestures made while the console, UI,
+    // message, or script-input catcher owns input are discarded.
+    if (rightStickVerticalAction != 0 &&
+        !Key_IsCatcherActive(0, 0x33))
     {
-        const std::uint32_t eventTime =
-            static_cast<std::uint32_t>(
-                Sys_Milliseconds());
+        {
+            std::lock_guard<std::mutex> lock(
+                g_vrHeadOrientationMutex);
 
-        CL_KeyEvent(
-            0,
-            rightStickUtilityKey,
-            1,
-            eventTime);
+            if (rightStickVerticalAction > 0)
+            {
+                g_vrRightStickJumpPressed = true;
+            }
+            else
+            {
+                g_vrRightStickCrouchPressed = true;
+            }
+        }
 
-        CL_KeyEvent(
-            0,
-            rightStickUtilityKey,
-            0,
-            eventTime);
+        static bool loggedRightStickVertical = false;
 
-        static bool loggedRightStickUtilities = false;
-
-        if (!loggedRightStickUtilities)
+        if (!loggedRightStickVertical)
         {
             Com_Printf(
                 0,
-                "[VR] Bound right-stick up to rifle grenade launcher "
-                "(5) and down to night vision (N).\n");
+                "[VR][CONTROLS] V44 right-stick vertical: up "
+                "jump/stand, down crouch; horizontal snap-turn "
+                "preserved.\n");
 
-            loggedRightStickUtilities = true;
+            loggedRightStickVertical = true;
         }
     }
 
@@ -9066,7 +9313,8 @@ void VR_UpdateControllerActions(
 
     VR_UpdatePoseFocusAimFromControllers();
 
-    if (logTwoHandEngaged)
+    if (VR_VerboseDiagnosticsEnabled() &&
+        logTwoHandEngaged)
     {
         Com_Printf(
             0,
@@ -9074,7 +9322,8 @@ void VR_UpdateControllerActions(
             "two-hand weapon stabilization.\n");
     }
 
-    if (logTwoHandReleased)
+    if (VR_VerboseDiagnosticsEnabled() &&
+        logTwoHandReleased)
     {
         Com_Printf(
             0,
@@ -10210,6 +10459,9 @@ bool VR_RenderSolidColorFrame(
     if (locatedViewCount >=
         kVrStereoEyeCount)
     {
+        std::lock_guard<std::mutex> lock(
+            g_vrPublishedRenderViewsMutex);
+
         for (std::uint32_t eyeIndex = 0u;
              eyeIndex < kVrStereoEyeCount;
              ++eyeIndex)
@@ -10220,6 +10472,9 @@ bool VR_RenderSolidColorFrame(
 
         g_vrPublishedRenderViewsValid =
             true;
+
+        g_vrPublishedRenderPoseNanoseconds =
+            VR_OpenXrClockNanoseconds();
     }
 
     constexpr float clearColor[4] = {
@@ -10784,6 +11039,69 @@ void VR_ResetState()
         g_vrLoggedFixedScopedTurretFsrBypass = false;
     }
 }
+}
+
+
+void VR_RecordRenderFramePose(
+    const unsigned int renderFrameId)
+{
+    if (renderFrameId == 0u)
+    {
+        return;
+    }
+
+    std::array<XrView, kVrStereoEyeCount>
+        renderViews = {};
+    std::uint64_t recordedNanoseconds = 0u;
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrPublishedRenderViewsMutex);
+
+        if (!g_vrPublishedRenderViewsValid)
+        {
+            return;
+        }
+
+        renderViews = g_vrPublishedRenderViews;
+        recordedNanoseconds =
+            g_vrPublishedRenderPoseNanoseconds != 0u
+                ? g_vrPublishedRenderPoseNanoseconds
+                : VR_OpenXrClockNanoseconds();
+    }
+
+    std::lock_guard<std::mutex> lock(
+        g_vrRenderPoseHistoryMutex);
+
+    VrRenderPoseHistoryEntry& entry =
+        g_vrRenderPoseHistory[
+            g_vrRenderPoseHistoryWriteIndex];
+
+    entry.valid = true;
+    entry.renderFrameId = renderFrameId;
+    entry.recordedNanoseconds = recordedNanoseconds;
+    entry.views = renderViews;
+
+    g_vrRenderPoseHistoryWriteIndex =
+        (g_vrRenderPoseHistoryWriteIndex + 1u) %
+        kVrRenderPoseHistoryCount;
+}
+
+bool VR_VerboseDiagnosticsEnabled()
+{
+    static const bool enabled = []()
+    {
+        const char* requested =
+            std::getenv(
+                "KISAK_VR_VERBOSE_DIAGNOSTICS");
+
+        return
+            requested != nullptr &&
+            requested[0] == '1' &&
+            requested[1] == '\0';
+    }();
+
+    return enabled;
 }
 
 
@@ -12594,6 +12912,33 @@ bool VR_GetLocomotionCombatButtons(
     return true;
 }
 
+bool VR_ConsumeRightStickVerticalActions(
+    bool* jumpPressed,
+    bool* crouchPressed)
+{
+    if (jumpPressed == nullptr ||
+        crouchPressed == nullptr)
+    {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(
+        g_vrHeadOrientationMutex);
+
+    *jumpPressed =
+        g_vrRightStickJumpPressed;
+
+    *crouchPressed =
+        g_vrRightStickCrouchPressed;
+
+    g_vrRightStickJumpPressed = false;
+    g_vrRightStickCrouchPressed = false;
+
+    return
+        *jumpPressed ||
+        *crouchPressed;
+}
+
 bool VR_GetWeaponUtilityButtons(
     bool* rightGripHeld,
     bool* leftYHeld)
@@ -13744,6 +14089,8 @@ void VR_UpdatePackedUiScreenPlacement()
 
 bool VR_Init()
 {
+    g_vrLastStartupError[0] = '\0';
+
     VR_ResetHeadOrientation();
 
     {
@@ -13758,11 +14105,30 @@ bool VR_Init()
     g_vrLoggedProjectionApply.fill(false);
     g_vrLoggedProjectionPublish = false;
 
-    g_vrPublishedRenderViews = {};
     g_vrCapturedStereoViews = {};
-    g_vrPublishedRenderViewsValid = false;
     g_vrCapturedStereoViewsValid = false;
     g_vrLoggedCapturedPoseMatch = false;
+    g_vrLoggedCapturedPoseMiss = false;
+    g_vrCapturedRenderPoseNanoseconds = 0u;
+    g_vrCapturedStereoMetadata = {};
+    g_vrCapturedStereoPoseMatched = false;
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrPublishedRenderViewsMutex);
+
+        g_vrPublishedRenderViews = {};
+        g_vrPublishedRenderViewsValid = false;
+        g_vrPublishedRenderPoseNanoseconds = 0u;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrRenderPoseHistoryMutex);
+
+        g_vrRenderPoseHistory = {};
+        g_vrRenderPoseHistoryWriteIndex = 0u;
+    }
     if (g_vrInitialized)
     {
         return true;
@@ -13772,6 +14138,10 @@ bool VR_Init()
         0,
         "[VR] Initializing OpenXR head-rotation frame bridge...\n");
 
+    Com_Printf(
+        0,
+        "[VR][STARTUP] V31 fail-fast OpenXR diagnostics enabled.\n");
+
     if (!VR_HasInstanceExtension(
             XR_KHR_D3D11_ENABLE_EXTENSION_NAME))
     {
@@ -13779,6 +14149,15 @@ bool VR_Init()
             0,
             "[VR] Runtime does not expose "
             "XR_KHR_D3D11_enable.\n");
+
+        if (g_vrLastStartupError[0] == '\0')
+        {
+            VR_RecordStartupFailure(
+                "OpenXR extension check",
+                "XR_KHR_D3D11_enable is unavailable",
+                -9,
+                "Select a Windows OpenXR runtime that supports D3D11.");
+        }
 
         return false;
     }
@@ -14009,6 +14388,20 @@ void VR_Frame()
     const bool vrPerfHasInterval =
         vrPerfPreviousFrameValid;
 
+    const bool vrPerfGameplayActive =
+        clientUIActives[0].connectionState ==
+            CA_ACTIVE &&
+        !Key_IsCatcherActive(0, 0x10);
+
+    static bool vrPerfPreviousGameplayActive = false;
+
+    const bool vrPerfContinuousGameplay =
+        vrPerfGameplayActive &&
+        vrPerfPreviousGameplayActive;
+
+    vrPerfPreviousGameplayActive =
+        vrPerfGameplayActive;
+
     const double vrPerfIntervalMilliseconds =
         vrPerfHasInterval
             ? std::chrono::duration<double, std::milli>(
@@ -14084,6 +14477,37 @@ void VR_Frame()
         g_vrUploadedStereoSerial !=
             vrPerfCaptureSerialBefore;
 
+    const std::uint64_t vrPerfNowNanoseconds =
+        VR_OpenXrClockNanoseconds();
+
+    const std::uint64_t vrPerfCaptureReferenceNanoseconds =
+        g_vrCapturedStereoMetadata
+                    .producerReadyNanoseconds != 0u
+            ? g_vrCapturedStereoMetadata
+                  .producerReadyNanoseconds
+            : g_vrCapturedStereoMetadata
+                  .captureSubmittedNanoseconds;
+
+    const double vrPerfCaptureAgeMilliseconds =
+        vrPerfCaptureReferenceNanoseconds != 0u &&
+                vrPerfNowNanoseconds >=
+                    vrPerfCaptureReferenceNanoseconds
+            ? static_cast<double>(
+                  vrPerfNowNanoseconds -
+                  vrPerfCaptureReferenceNanoseconds) /
+                  1000000.0
+            : 0.0;
+
+    const double vrPerfPoseAgeMilliseconds =
+        g_vrCapturedRenderPoseNanoseconds != 0u &&
+                vrPerfNowNanoseconds >=
+                    g_vrCapturedRenderPoseNanoseconds
+            ? static_cast<double>(
+                  vrPerfNowNanoseconds -
+                  g_vrCapturedRenderPoseNanoseconds) /
+                  1000000.0
+            : 0.0;
+
     const XrCompositionLayerBaseHeader* layers[1] = {};
 
     uint32_t layerCount = 0;
@@ -14123,6 +14547,13 @@ void VR_Frame()
         VR_LogXrFailure("xrEndFrame", result);
     }
 
+    // KISAK_SP_VR_SEQUENTIAL_CAPTURE_QUEUE_V33
+    // The current frame's D3D11 work has now been submitted. Poll retirement
+    // fences again so the D3D9 producer sees a free slot before the next
+    // Com_Frame handoff. This lets a single queued capture survive a temporary
+    // producer/consumer phase crossing instead of being overwritten.
+    VR_PollRetiredSharedFrames();
+
     const double vrPerfWaitMilliseconds =
         std::chrono::duration<double, std::milli>(
             vrPerfWaitEnd -
@@ -14149,17 +14580,48 @@ void VR_Frame()
     static unsigned int vrPerfReusedCaptureCount = 0u;
     static unsigned int vrPerfNoRenderCount = 0u;
 
+    static unsigned int vrPerfGameplaySampleCount = 0u;
+    static unsigned int vrPerfGameplayIntervalCount = 0u;
+    static unsigned int vrPerfGameplayFreshCount = 0u;
+    static unsigned int vrPerfGameplayReusedCount = 0u;
+    static unsigned int vrPerfGameplayReuseStreak = 0u;
+    static unsigned int vrPerfGameplayReuseStreakMaximum = 0u;
+    static unsigned int vrPerfGameplaySpike20Count = 0u;
+    static unsigned int vrPerfGameplaySpike30Count = 0u;
+    static unsigned int vrPerfGameplayPoseMatchedCount = 0u;
+    static unsigned int vrPerfGameplayPoseFallbackCount = 0u;
+    static unsigned int vrPerfGameplayCaptureAgeCount = 0u;
+    static unsigned int vrPerfGameplayProducerIntervalCount = 0u;
+
+    static std::uint64_t vrPerfPreviousGameplayCaptureSerial = 0u;
+    static std::uint64_t vrPerfPreviousGameplayProducerSequence = 0u;
+    static std::uint64_t vrPerfPreviousGameplayRenderFrameId = 0u;
+    static std::uint64_t vrPerfPreviousGameplayCaptureSubmitted = 0u;
+    static std::uint64_t vrPerfGameplayBridgeMissedCount = 0u;
+    static std::uint64_t vrPerfGameplayConsumerSkippedCount = 0u;
+    static std::uint64_t vrPerfGameplayRenderGapCount = 0u;
+
     static double vrPerfIntervalTotal = 0.0;
     static double vrPerfWaitTotal = 0.0;
     static double vrPerfRenderTotal = 0.0;
     static double vrPerfEndTotal = 0.0;
     static double vrPerfCallTotal = 0.0;
 
+    static double vrPerfGameplayIntervalTotal = 0.0;
+    static double vrPerfGameplayCaptureAgeTotal = 0.0;
+    static double vrPerfGameplayPoseAgeTotal = 0.0;
+    static double vrPerfGameplayProducerIntervalTotal = 0.0;
+
     static double vrPerfIntervalMaximum = 0.0;
     static double vrPerfWaitMaximum = 0.0;
     static double vrPerfRenderMaximum = 0.0;
     static double vrPerfEndMaximum = 0.0;
     static double vrPerfCallMaximum = 0.0;
+
+    static double vrPerfGameplayIntervalMaximum = 0.0;
+    static double vrPerfGameplayCaptureAgeMaximum = 0.0;
+    static double vrPerfGameplayPoseAgeMaximum = 0.0;
+    static double vrPerfGameplayProducerIntervalMaximum = 0.0;
 
     ++vrPerfSampleCount;
 
@@ -14227,6 +14689,189 @@ void VR_Frame()
         ++vrPerfReusedCaptureCount;
     }
 
+    if (!vrPerfGameplayActive)
+    {
+        vrPerfGameplayReuseStreak = 0u;
+        vrPerfPreviousGameplayCaptureSerial = 0u;
+        vrPerfPreviousGameplayProducerSequence = 0u;
+        vrPerfPreviousGameplayRenderFrameId = 0u;
+        vrPerfPreviousGameplayCaptureSubmitted = 0u;
+    }
+    else if (frameState.shouldRender)
+    {
+        ++vrPerfGameplaySampleCount;
+
+        if (vrPerfContinuousGameplay &&
+            vrPerfHasInterval)
+        {
+            ++vrPerfGameplayIntervalCount;
+            vrPerfGameplayIntervalTotal +=
+                vrPerfIntervalMilliseconds;
+
+            if (vrPerfIntervalMilliseconds >
+                vrPerfGameplayIntervalMaximum)
+            {
+                vrPerfGameplayIntervalMaximum =
+                    vrPerfIntervalMilliseconds;
+            }
+
+            if (vrPerfIntervalMilliseconds > 20.0)
+            {
+                ++vrPerfGameplaySpike20Count;
+            }
+
+            if (vrPerfIntervalMilliseconds > 30.0)
+            {
+                ++vrPerfGameplaySpike30Count;
+            }
+        }
+
+        if (g_vrUploadedStereoSerial != 0u)
+        {
+            ++vrPerfGameplayCaptureAgeCount;
+            vrPerfGameplayCaptureAgeTotal +=
+                vrPerfCaptureAgeMilliseconds;
+            vrPerfGameplayPoseAgeTotal +=
+                vrPerfPoseAgeMilliseconds;
+
+            if (vrPerfCaptureAgeMilliseconds >
+                vrPerfGameplayCaptureAgeMaximum)
+            {
+                vrPerfGameplayCaptureAgeMaximum =
+                    vrPerfCaptureAgeMilliseconds;
+            }
+
+            if (vrPerfPoseAgeMilliseconds >
+                vrPerfGameplayPoseAgeMaximum)
+            {
+                vrPerfGameplayPoseAgeMaximum =
+                    vrPerfPoseAgeMilliseconds;
+            }
+        }
+
+        if (vrPerfFreshCapture)
+        {
+            ++vrPerfGameplayFreshCount;
+            vrPerfGameplayReuseStreak = 0u;
+
+            const std::uint64_t currentSerial =
+                g_vrUploadedStereoSerial;
+
+            const std::uint64_t currentProducerSequence =
+                g_vrCapturedStereoMetadata
+                    .producerSequence;
+
+            const std::uint64_t currentRenderFrameId =
+                g_vrCapturedStereoMetadata
+                    .renderFrameId;
+
+            const std::uint64_t currentCaptureSubmitted =
+                g_vrCapturedStereoMetadata
+                    .captureSubmittedNanoseconds;
+
+            const bool sequenceContinues =
+                vrPerfPreviousGameplayCaptureSerial != 0u &&
+                currentSerial >
+                    vrPerfPreviousGameplayCaptureSerial &&
+                currentProducerSequence >=
+                    vrPerfPreviousGameplayProducerSequence &&
+                currentRenderFrameId >=
+                    vrPerfPreviousGameplayRenderFrameId;
+
+            if (sequenceContinues)
+            {
+                const std::uint64_t serialDelta =
+                    currentSerial -
+                    vrPerfPreviousGameplayCaptureSerial;
+
+                const std::uint64_t producerDelta =
+                    currentProducerSequence -
+                    vrPerfPreviousGameplayProducerSequence;
+
+                const std::uint64_t renderFrameDelta =
+                    currentRenderFrameId -
+                    vrPerfPreviousGameplayRenderFrameId;
+
+                if (producerDelta > serialDelta)
+                {
+                    vrPerfGameplayBridgeMissedCount +=
+                        producerDelta - serialDelta;
+                }
+
+                if (serialDelta > 1u)
+                {
+                    vrPerfGameplayConsumerSkippedCount +=
+                        serialDelta - 1u;
+                }
+
+                if (renderFrameDelta > producerDelta)
+                {
+                    vrPerfGameplayRenderGapCount +=
+                        renderFrameDelta - producerDelta;
+                }
+
+                if (currentCaptureSubmitted >
+                    vrPerfPreviousGameplayCaptureSubmitted &&
+                    vrPerfPreviousGameplayCaptureSubmitted != 0u)
+                {
+                    const std::uint64_t producerIntervalDivisor =
+                        producerDelta > 0u
+                            ? producerDelta
+                            : 1u;
+
+                    const double producerIntervalMilliseconds =
+                        static_cast<double>(
+                            currentCaptureSubmitted -
+                            vrPerfPreviousGameplayCaptureSubmitted) /
+                        (1000000.0 *
+                         static_cast<double>(
+                             producerIntervalDivisor));
+
+                    ++vrPerfGameplayProducerIntervalCount;
+                    vrPerfGameplayProducerIntervalTotal +=
+                        producerIntervalMilliseconds;
+
+                    if (producerIntervalMilliseconds >
+                        vrPerfGameplayProducerIntervalMaximum)
+                    {
+                        vrPerfGameplayProducerIntervalMaximum =
+                            producerIntervalMilliseconds;
+                    }
+                }
+            }
+
+            vrPerfPreviousGameplayCaptureSerial =
+                currentSerial;
+            vrPerfPreviousGameplayProducerSequence =
+                currentProducerSequence;
+            vrPerfPreviousGameplayRenderFrameId =
+                currentRenderFrameId;
+            vrPerfPreviousGameplayCaptureSubmitted =
+                currentCaptureSubmitted;
+
+            if (g_vrCapturedStereoPoseMatched)
+            {
+                ++vrPerfGameplayPoseMatchedCount;
+            }
+            else
+            {
+                ++vrPerfGameplayPoseFallbackCount;
+            }
+        }
+        else
+        {
+            ++vrPerfGameplayReusedCount;
+            ++vrPerfGameplayReuseStreak;
+
+            if (vrPerfGameplayReuseStreak >
+                vrPerfGameplayReuseStreakMaximum)
+            {
+                vrPerfGameplayReuseStreakMaximum =
+                    vrPerfGameplayReuseStreak;
+            }
+        }
+    }
+
     if (vrPerfSampleCount >= 120u)
     {
         const double vrPerfSampleScale =
@@ -14258,6 +14903,34 @@ void VR_Frame()
                           vrPerfFreshCaptureCount) /
                       static_cast<double>(
                           vrPerfRenderedSampleCount)
+                : 0.0;
+
+        const double vrPerfGameplayAverageInterval =
+            vrPerfGameplayIntervalCount > 0u
+                ? vrPerfGameplayIntervalTotal /
+                      static_cast<double>(
+                          vrPerfGameplayIntervalCount)
+                : 0.0;
+
+        const double vrPerfGameplayAverageCaptureAge =
+            vrPerfGameplayCaptureAgeCount > 0u
+                ? vrPerfGameplayCaptureAgeTotal /
+                      static_cast<double>(
+                          vrPerfGameplayCaptureAgeCount)
+                : 0.0;
+
+        const double vrPerfGameplayAveragePoseAge =
+            vrPerfGameplayCaptureAgeCount > 0u
+                ? vrPerfGameplayPoseAgeTotal /
+                      static_cast<double>(
+                          vrPerfGameplayCaptureAgeCount)
+                : 0.0;
+
+        const double vrPerfGameplayAverageProducerInterval =
+            vrPerfGameplayProducerIntervalCount > 0u
+                ? vrPerfGameplayProducerIntervalTotal /
+                      static_cast<double>(
+                          vrPerfGameplayProducerIntervalCount)
                 : 0.0;
 
         Com_Printf(
@@ -14292,11 +14965,58 @@ void VR_Frame()
             vrPerfNoRenderCount,
             vrPerfSampleCount);
 
+        Com_Printf(
+            0,
+            "[VR][PERF] Gameplay: %u samples; interval %.2f avg / "
+            "%.2f max ms; spikes >20 %u, >30 %u; capture fresh %u, "
+            "reused %u, reuse streak max %u; producer %.2f avg / "
+            "%.2f max ms; bridge missed %llu, consumer skipped %llu, "
+            "render gaps %llu; capture age %.2f avg / %.2f max ms; "
+            "pose age %.2f avg / %.2f max ms; exact pose %u, "
+            "fallback %u.\n",
+            vrPerfGameplaySampleCount,
+            vrPerfGameplayAverageInterval,
+            vrPerfGameplayIntervalMaximum,
+            vrPerfGameplaySpike20Count,
+            vrPerfGameplaySpike30Count,
+            vrPerfGameplayFreshCount,
+            vrPerfGameplayReusedCount,
+            vrPerfGameplayReuseStreakMaximum,
+            vrPerfGameplayAverageProducerInterval,
+            vrPerfGameplayProducerIntervalMaximum,
+            static_cast<unsigned long long>(
+                vrPerfGameplayBridgeMissedCount),
+            static_cast<unsigned long long>(
+                vrPerfGameplayConsumerSkippedCount),
+            static_cast<unsigned long long>(
+                vrPerfGameplayRenderGapCount),
+            vrPerfGameplayAverageCaptureAge,
+            vrPerfGameplayCaptureAgeMaximum,
+            vrPerfGameplayAveragePoseAge,
+            vrPerfGameplayPoseAgeMaximum,
+            vrPerfGameplayPoseMatchedCount,
+            vrPerfGameplayPoseFallbackCount);
+
         vrPerfSampleCount = 0u;
         vrPerfIntervalSampleCount = 0u;
         vrPerfFreshCaptureCount = 0u;
         vrPerfReusedCaptureCount = 0u;
         vrPerfNoRenderCount = 0u;
+
+        vrPerfGameplaySampleCount = 0u;
+        vrPerfGameplayIntervalCount = 0u;
+        vrPerfGameplayFreshCount = 0u;
+        vrPerfGameplayReusedCount = 0u;
+        vrPerfGameplayReuseStreakMaximum = 0u;
+        vrPerfGameplaySpike20Count = 0u;
+        vrPerfGameplaySpike30Count = 0u;
+        vrPerfGameplayPoseMatchedCount = 0u;
+        vrPerfGameplayPoseFallbackCount = 0u;
+        vrPerfGameplayCaptureAgeCount = 0u;
+        vrPerfGameplayProducerIntervalCount = 0u;
+        vrPerfGameplayBridgeMissedCount = 0u;
+        vrPerfGameplayConsumerSkippedCount = 0u;
+        vrPerfGameplayRenderGapCount = 0u;
 
         vrPerfIntervalTotal = 0.0;
         vrPerfWaitTotal = 0.0;
@@ -14304,11 +15024,21 @@ void VR_Frame()
         vrPerfEndTotal = 0.0;
         vrPerfCallTotal = 0.0;
 
+        vrPerfGameplayIntervalTotal = 0.0;
+        vrPerfGameplayCaptureAgeTotal = 0.0;
+        vrPerfGameplayPoseAgeTotal = 0.0;
+        vrPerfGameplayProducerIntervalTotal = 0.0;
+
         vrPerfIntervalMaximum = 0.0;
         vrPerfWaitMaximum = 0.0;
         vrPerfRenderMaximum = 0.0;
         vrPerfEndMaximum = 0.0;
         vrPerfCallMaximum = 0.0;
+
+        vrPerfGameplayIntervalMaximum = 0.0;
+        vrPerfGameplayCaptureAgeMaximum = 0.0;
+        vrPerfGameplayPoseAgeMaximum = 0.0;
+        vrPerfGameplayProducerIntervalMaximum = 0.0;
     }
 }
 
@@ -14434,6 +15164,9 @@ void VR_Shutdown()
     g_vrCapturedStereoWidth = 0u;
     g_vrCapturedStereoHeight = 0u;
     g_vrUploadedStereoSerial = 0u;
+    g_vrCapturedStereoMetadata = {};
+    g_vrCapturedRenderPoseNanoseconds = 0u;
+    g_vrCapturedStereoPoseMatched = false;
     g_vrLoggedFirstStereoUpload = false;
     g_vrCurrentSharedFrameActive = false;
     g_vrCurrentSharedSlot = 0u;
@@ -14479,6 +15212,18 @@ void VR_Shutdown()
 bool VR_IsInitialized()
 {
     return g_vrInitialized;
+}
+
+const char* VR_GetLastStartupError()
+{
+    if (g_vrLastStartupError[0] == '\0')
+    {
+        return
+            "OpenXR initialization failed without a runtime error code. "
+            "Check OpenXR-Startup.log and main\\console.log.";
+    }
+
+    return g_vrLastStartupError.data();
 }
 
 void VR_SetFixedScopedTurretState(

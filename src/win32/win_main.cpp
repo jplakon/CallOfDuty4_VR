@@ -15,6 +15,7 @@
 #include <float.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <direct.h>
 #include <io.h>
 #include <conio.h>
@@ -779,7 +780,28 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
 	freopen("CONIN$", "r", stdin);
 	freopen("CONOUT$", "w", stdout);
-	freopen("CONOUT$", "w", stderr);
+
+	// KISAK_SP_VR_OPENXR_STARTUP_DIAGNOSTICS_V31
+	// The Khronos loader writes XR_LOADER_DEBUG messages to stderr.  Preserve
+	// them in a file selected by the launcher so failures before xrCreateInstance
+	// identify the active runtime and API-layer manifest paths.
+	const char* vrLoaderLogPath = getenv("KISAK_VR_LOADER_LOG");
+	if (vrLoaderLogPath != nullptr && vrLoaderLogPath[0] != '\0')
+	{
+		if (freopen(vrLoaderLogPath, "a", stderr) != nullptr)
+		{
+			fprintf(stderr, "\n=== OpenXR loader trace ===\n");
+			fflush(stderr);
+		}
+		else
+		{
+			freopen("CONOUT$", "w", stderr);
+		}
+	}
+	else
+	{
+		freopen("CONOUT$", "w", stderr);
+	}
 #endif
 
 	Sys_InitializeCriticalSections();
@@ -821,7 +843,34 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
       0,
       "[VR] Starting OpenXR from WinMain...\n");
 
-  VR_Init();
+  if (!VR_Init())
+  {
+    char vrStartupMessage[2048] = {};
+
+    Com_sprintf(
+        vrStartupMessage,
+        sizeof(vrStartupMessage),
+        "%s\n\nKisakCOD VR stopped instead of silently opening in "
+        "flatscreen mode.\n\nSee OpenXR-Startup.log and "
+        "main\\console.log for details.",
+        VR_GetLastStartupError());
+
+    Com_PrintError(
+        0,
+        "[VR][STARTUP] %s\n",
+        vrStartupMessage);
+
+    fflush(nullptr);
+
+    MessageBoxA(
+        g_wv.hWnd,
+        vrStartupMessage,
+        "KisakCOD VR - OpenXR startup failed",
+        MB_OK | MB_ICONERROR);
+
+    Sys_NormalExit();
+    return 31;
+  }
 #endif
 
 #ifdef KISAK_MP

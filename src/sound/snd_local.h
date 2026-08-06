@@ -171,7 +171,11 @@ void MSS_InitChannels();
 void MSS_InitEq();
 bool __cdecl MSS_Startup();
 void MSS_ShutdownCleanup();
-double __cdecl MSS_GetWetLevel(const snd_alias_t *pAlias);
+// KISAK_SP_VR_MSS_DRY_LEVEL_FIX_V36
+// Miles expects its dry reverb send in the normalized [0, 1] range.  The
+// reconstructed driver previously supplied a UI scale value instead.
+float MSS_GetDryLevel();
+float MSS_GetWetLevel(const snd_alias_t *pAlias);
 void __cdecl MSS_ApplyEqFilter(_SAMPLE *s, int entchannel);
 void __cdecl MSS_ResumeSample(int i, int frametime);
 _DIG_DRIVER *__cdecl MSS_GetDriver();

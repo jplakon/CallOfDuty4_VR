@@ -42,6 +42,7 @@ struct VrSharedCaptureSlot
     std::uint32_t height = 0u;
     std::uint64_t generation = 0u;
     std::uint64_t serial = 0u;
+    VrD3D9FrameMetadata metadata = {};
     VrSharedSlotState state =
         VrSharedSlotState::Free;
 };
@@ -61,6 +62,8 @@ std::uint32_t g_latestWidth = 0u;
 std::uint32_t g_latestHeight = 0u;
 std::uint64_t g_latestSerial = 0u;
 std::uint64_t g_captureSerialCounter = 0u;
+std::uint64_t g_producerSequenceCounter = 0u;
+VrD3D9FrameMetadata g_latestMetadata = {};
 
 // CPU fallback.  This is D3DPOOL_SYSTEMMEM and therefore does not block
 // legacy IDirect3DDevice9::Reset().
@@ -85,6 +88,16 @@ bool g_loggedResourceCreation = false;
 bool g_loggedSharedBackpressure = false;
 bool g_loggedSharedFallback = false;
 bool g_loggedDeviceLostPause = false;
+
+std::uint64_t VR_CaptureClockNanoseconds()
+{
+    return static_cast<std::uint64_t>(
+        std::chrono::duration_cast<
+            std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now()
+                .time_since_epoch())
+            .count());
+}
 
 template <typename T>
 void VR_ReleaseObject(T*& object)
@@ -276,6 +289,9 @@ void VR_PollSharedProducerSlots(
 
         if (hr == S_OK)
         {
+            slot.metadata.producerReadyNanoseconds =
+                VR_CaptureClockNanoseconds();
+
             slot.state =
                 VrSharedSlotState::Ready;
         }
@@ -443,7 +459,8 @@ bool VR_EnsureSharedSlot(
 VrSharedCaptureResult VR_TryCaptureSharedFrame(
     IDirect3DDevice9* device,
     IDirect3DSurface9* backBuffer,
-    const D3DSURFACE_DESC& description)
+    const D3DSURFACE_DESC& description,
+    const VrD3D9FrameMetadata& metadata)
 {
     if (!VR_SharedBridgeRequested() ||
         g_sharedBridgeUnavailable.load(
@@ -564,6 +581,10 @@ VrSharedCaptureResult VR_TryCaptureSharedFrame(
 
     slot.serial =
         ++g_captureSerialCounter;
+    slot.metadata = metadata;
+    slot.metadata.captureSubmittedNanoseconds =
+        VR_CaptureClockNanoseconds();
+    slot.metadata.producerReadyNanoseconds = 0u;
     slot.state =
         VrSharedSlotState::Producing;
 
@@ -576,10 +597,12 @@ VrSharedCaptureResult VR_TryCaptureSharedFrame(
         Com_Printf(
             0,
             "[VR] GPU-shared D3D9Ex capture active: "
-            "%u x %u, three fenced textures, "
+            "%u x %u, %u fenced textures, "
+            "sequential display queue, "
             "no CPU pixel readback.\n",
             description.Width,
-            description.Height);
+            description.Height,
+            kVrD3D9SharedFrameSlotCount);
 
         g_loggedFirstSharedCapture = true;
     }
@@ -636,6 +659,8 @@ void VR_D3D9CaptureSetEnabled(const bool enabled)
         g_latestHeight = 0u;
         g_latestSerial = 0u;
         g_captureSerialCounter = 0u;
+        g_producerSequenceCounter = 0u;
+        g_latestMetadata = {};
     }
 
     g_sharedBridgeUnavailable.store(
@@ -657,7 +682,9 @@ bool VR_D3D9IsSameFrameStereoEnabled()
             std::memory_order_acquire);
 }
 
-void VR_D3D9CaptureFrame(IDirect3DDevice9* device)
+void VR_D3D9CaptureFrame(
+    IDirect3DDevice9* device,
+    const std::uint64_t renderFrameId)
 {
     if (device == nullptr ||
         !VR_D3D9IsSameFrameStereoEnabled())
@@ -671,6 +698,13 @@ void VR_D3D9CaptureFrame(IDirect3DDevice9* device)
     {
         return;
     }
+
+    VrD3D9FrameMetadata frameMetadata = {};
+    frameMetadata.renderFrameId = renderFrameId;
+    frameMetadata.producerSequence =
+        ++g_producerSequenceCounter;
+    frameMetadata.captureSubmittedNanoseconds =
+        VR_CaptureClockNanoseconds();
 
     const HRESULT cooperativeLevel =
         device->TestCooperativeLevel();
@@ -728,7 +762,8 @@ void VR_D3D9CaptureFrame(IDirect3DDevice9* device)
         VR_TryCaptureSharedFrame(
             device,
             backBuffer,
-            description);
+            description,
+            frameMetadata);
 
     if (sharedResult ==
         VrSharedCaptureResult::Captured)
@@ -921,6 +956,9 @@ void VR_D3D9CaptureFrame(IDirect3DDevice9* device)
             description.Height;
 
         g_latestSerial = serial;
+        frameMetadata.producerReadyNanoseconds =
+            VR_CaptureClockNanoseconds();
+        g_latestMetadata = frameMetadata;
     }
 
     const auto captureTimingEnd =
@@ -1004,26 +1042,10 @@ bool VR_D3D9AcquireLatestSharedFrame(
 
     VR_PollSharedProducerSlots(true);
 
-    std::uint32_t newestIndex =
+    std::uint32_t nextIndex =
         kVrD3D9SharedFrameSlotCount;
-    std::uint64_t newestSerial =
-        lastSerial;
-
-    for (std::uint32_t index = 0u;
-         index < kVrD3D9SharedFrameSlotCount;
-         ++index)
-    {
-        const VrSharedCaptureSlot& slot =
-            g_sharedSlots[index];
-
-        if (slot.state ==
-                VrSharedSlotState::Ready &&
-            slot.serial > newestSerial)
-        {
-            newestSerial = slot.serial;
-            newestIndex = index;
-        }
-    }
+    std::uint64_t nextSerial =
+        ~static_cast<std::uint64_t>(0u);
 
     for (std::uint32_t index = 0u;
          index < kVrD3D9SharedFrameSlotCount;
@@ -1032,34 +1054,46 @@ bool VR_D3D9AcquireLatestSharedFrame(
         VrSharedCaptureSlot& slot =
             g_sharedSlots[index];
 
-        if (slot.state ==
-                VrSharedSlotState::Ready &&
-            index != newestIndex)
+        if (slot.state !=
+            VrSharedSlotState::Ready)
+        {
+            continue;
+        }
+
+        if (slot.serial <= lastSerial)
         {
             slot.state =
                 VrSharedSlotState::Free;
+            continue;
+        }
+
+        if (slot.serial < nextSerial)
+        {
+            nextSerial = slot.serial;
+            nextIndex = index;
         }
     }
 
-    if (newestIndex ==
+    if (nextIndex ==
         kVrD3D9SharedFrameSlotCount)
     {
         return false;
     }
 
-    VrSharedCaptureSlot& newest =
-        g_sharedSlots[newestIndex];
+    VrSharedCaptureSlot& next =
+        g_sharedSlots[nextIndex];
 
-    newest.state =
+    next.state =
         VrSharedSlotState::Acquired;
 
     frame.sharedHandle =
-        newest.sharedHandle;
-    frame.width = newest.width;
-    frame.height = newest.height;
-    frame.slotIndex = newestIndex;
-    frame.generation = newest.generation;
-    frame.serial = newest.serial;
+        next.sharedHandle;
+    frame.width = next.width;
+    frame.height = next.height;
+    frame.slotIndex = nextIndex;
+    frame.generation = next.generation;
+    frame.serial = next.serial;
+    frame.metadata = next.metadata;
 
     return true;
 }
@@ -1125,7 +1159,8 @@ bool VR_D3D9CopyLatestStereoFrame(
     std::vector<std::uint8_t>& pixels,
     std::uint32_t& width,
     std::uint32_t& height,
-    std::uint64_t& serial)
+    std::uint64_t& serial,
+    VrD3D9FrameMetadata& metadata)
 {
     std::lock_guard<std::mutex> captureLock(
         g_captureMutex);
@@ -1143,6 +1178,7 @@ bool VR_D3D9CopyLatestStereoFrame(
     width = g_latestWidth;
     height = g_latestHeight;
     serial = g_latestSerial;
+    metadata = g_latestMetadata;
 
     return true;
 }

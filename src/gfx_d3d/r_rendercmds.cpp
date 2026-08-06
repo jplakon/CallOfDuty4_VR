@@ -289,7 +289,9 @@ void __cdecl R_IssueRenderCommands(uint32_t type)
                 RB_BeginFrame(frontEndDataOut);
                 RB_Draw3D();
                 RB_CallExecuteRenderCommands();
-                RB_EndFrame(frontEndDataOut->drawType);
+                RB_EndFrame(
+                    frontEndDataOut->drawType,
+                    frontEndDataOut->frameCount);
             }
             R_UnlockSkinnedCache();
             R_ToggleSmpFrame();
@@ -1804,7 +1806,9 @@ void __cdecl R_EndDebugFrame()
             RB_BeginFrame(frontEndDataOut);
             RB_Draw3D();
             RB_CallExecuteRenderCommands();
-            RB_EndFrame(-1);
+            RB_EndFrame(
+                -1,
+                0u);
         }
         s_cmdList = s_debugFrameGlob.restoreCmdList;
         frontEndDataOut = s_debugFrameGlob.restoreFrontEndDataOut;
