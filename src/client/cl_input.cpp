@@ -1524,12 +1524,79 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
         bool vrJumpHeld = false;
         bool vrUseHeld = false;
         bool vrReloadHeld = false;
-        bool vrRightStickJumpPressed = false;
-        bool vrRightStickCrouchPressed = false;
+        bool vrRightStickUpPressed = false;
+        bool vrRightStickDownPressed = false;
 
         VR_ConsumeRightStickVerticalActions(
-            &vrRightStickJumpPressed,
-            &vrRightStickCrouchPressed);
+            &vrRightStickUpPressed,
+            &vrRightStickDownPressed);
+
+        // KISAK_SP_VR_RIGHT_STICK_STANCE_LADDER_V51
+        // Reuse COD4's native persistent-stance state machine.  Each
+        // deliberate vertical flick moves exactly one rung and the stick
+        // must return to neutral before another edge can be consumed.
+        // Up only becomes a jump after the player is already standing.
+        bool vrRightStickJumpPressed = false;
+        bool vrRightStickStanceChanged = false;
+
+        if (vrRightStickUpPressed)
+        {
+            if (clients[0].stance ==
+                CL_STANCE_STAND)
+            {
+                vrRightStickJumpPressed =
+                    true;
+            }
+            else
+            {
+                const StanceState previousStance =
+                    clients[0].stance;
+
+                IN_RaiseStance();
+
+                vrRightStickStanceChanged =
+                    clients[0].stance !=
+                    previousStance;
+            }
+        }
+        else if (vrRightStickDownPressed)
+        {
+            const StanceState previousStance =
+                clients[0].stance;
+
+            IN_LowerStance();
+
+            vrRightStickStanceChanged =
+                clients[0].stance !=
+                previousStance;
+        }
+
+        if (vrRightStickStanceChanged)
+        {
+            // CL_KeyMove already emitted this frame's stance bits before the
+            // VR gesture was consumed, so refresh them immediately.
+            CL_AddCurrentStanceToCmd(
+                result);
+        }
+
+        if (vrRightStickUpPressed ||
+            vrRightStickDownPressed)
+        {
+            static bool loggedVrRightStickStanceLadder =
+                false;
+
+            if (!loggedVrRightStickStanceLadder)
+            {
+                Com_Printf(
+                    0,
+                    "[VR][STANCE] V51 right-stick ladder active: "
+                    "down stand/crouch/prone; up "
+                    "prone/crouch/stand/jump.\n");
+
+                loggedVrRightStickStanceLadder =
+                    true;
+            }
+        }
 
         if (VR_GetBasicGameplayButtons(
                 &vrAdsHeld,
@@ -1671,7 +1738,8 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
         static StanceState vrStancePressPosition =
             CL_STANCE_STAND;
 
-        bool vrStanceChanged = false;
+        bool vrStanceChanged =
+            vrRightStickStanceChanged;
 
         if (vrStanceHeld &&
             !vrStanceWasHeld)
@@ -1738,20 +1806,6 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
 
         vrStanceWasHeld =
             vrStanceHeld;
-
-        // Right-stick down is an explicit crouch command.  Up uses the
-        // existing +gostand bridge, so the two vertical directions form a
-        // natural crouch/down and stand-or-jump/up pair without changing B's
-        // tap/hold stance behavior.
-        if (vrRightStickCrouchPressed)
-        {
-            CL_SetStance(
-                0,
-                CL_STANCE_CROUCH);
-
-            vrStanceChanged =
-                true;
-        }
 
         if (vrStanceChanged)
         {
@@ -1968,34 +2022,46 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
 
         CL_MouseMove(result);
 
-        float vrSnapYawDegrees = 0.0f;
+        // KISAK_SP_VR_SMOOTH_TURN_OPTION_V50
+        // Use real client-frame time so smooth turning is independent of
+        // render rate and game timescale. The VR layer caps a hitch at 50 ms.
+        const float vrTurnFrameSeconds =
+            static_cast<float>(frame_msec) *
+            0.001f;
+
+        float vrTurnYawDegrees = 0.0f;
 
         if (!Key_IsCatcherActive(0, 8) &&
-            VR_ConsumeSnapTurn(
-                &vrSnapYawDegrees))
+            VR_GetTurnYawDelta(
+                vrTurnFrameSeconds,
+                &vrTurnYawDegrees))
         {
             clients[0].viewangles[1] +=
-                vrSnapYawDegrees;
+                vrTurnYawDegrees;
 
-            if (clients[0].viewangles[1] >= 360.0f)
+            while (clients[0].viewangles[1] >=
+                   360.0f)
             {
                 clients[0].viewangles[1] -= 360.0f;
             }
-            else if (clients[0].viewangles[1] < 0.0f)
+
+            while (clients[0].viewangles[1] <
+                   0.0f)
             {
                 clients[0].viewangles[1] += 360.0f;
             }
 
-            static bool loggedVrSnapTurn = false;
+            static bool loggedVrRightStickTurn =
+                false;
 
-            if (!loggedVrSnapTurn)
+            if (!loggedVrRightStickTurn)
             {
                 Com_Printf(
                     0,
-                    "[VR] Applied 45-degree right-thumbstick "
-                    "snap turning.\n");
+                    "[VR][CONTROLS] Applied configured "
+                    "right-thumbstick turning.\n");
 
-                loggedVrSnapTurn = true;
+                loggedVrRightStickTurn = true;
             }
         }
 

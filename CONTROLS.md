@@ -3,9 +3,10 @@
 This controller map applies to Meta Quest Touch controllers. Other OpenXR
 controllers may use different runtime bindings.
 
-Right-stick vertical gestures trigger once and must return near neutral before
-they can trigger again. Vertically dominant input is required, so they do not
-interfere with horizontal snap turning.
+Right-stick vertical gestures move one native stance step and must return near
+neutral before they can trigger again. Vertically dominant input prevents a
+stance gesture from also turning. Horizontal turning can use the default
+45-degree snap mode or optional analog smooth mode.
 
 The tracked-hands build keeps COD4's original combined hand mesh
 and uses two-bone shoulder/elbow IK to place the left wrist at the left OpenXR
@@ -17,15 +18,15 @@ animation. Touch-driven finger curling is not implemented yet.
 | Action | Controller binding |
 |---|---|
 | Move | Left thumbstick; movement follows HMD direction |
-| Snap turn | Right thumbstick left or right |
+| Turn | Right thumbstick left or right; 45-degree snap by default or configurable smooth turn |
 | Fire | Right index trigger |
 | Aim / scope | Hold the left grip and physically shoulder the weapon near the headset sight line |
-| Jump / stand | Flick right thumbstick up; left index trigger also remains available |
+| Raise stance / jump | Flick right thumbstick up: prone -> crouch -> stand -> jump; left index trigger also remains available |
 | Manual magazine reload | Right A to eject or reload; squeeze the left grip at the left hip to draw; release at the magazine well to insert |
 | Use / interact | Left X button |
 | Sprint | Click left thumbstick |
-| Crouch | Flick right thumbstick down; tapping right B also remains available |
-| Prone | Hold right B button |
+| Lower stance | Flick right thumbstick down: stand -> crouch -> prone; tapping right B also remains available |
+| Prone | Flick right thumbstick down while crouched, or hold right B button |
 | Melee | Click right thumbstick |
 | Frag grenade | Hold left Y for at least 0.3 seconds, then release to throw |
 | Flashbang / tactical grenade | Right grip |

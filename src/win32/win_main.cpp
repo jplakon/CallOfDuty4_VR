@@ -9,6 +9,17 @@
 #include "win_net.h"
 #include "win_net_debug.h"
 #include "win_steam.h"
+#if defined(KISAK_OPENXR_ENABLED)
+#include "win_crash_diagnostics.h"
+#else
+// Keep the shared MP/dedicated win_main.cpp buildable without linking the
+// SP-only V48 recorder target sources.
+static void KisakCrash_SetStage(const char*) {}
+static void KisakCrash_RecordFatalError(const char*) {}
+static void KisakCrash_MarkExpectedExit(const char*, int) {}
+static void KisakCrash_PrepareCurrentThread(const char*) {}
+static void KisakCrash_ReinstallUnhandledExceptionFilter() {}
+#endif
 
 //#include "resource.h"
 #include <errno.h>
@@ -196,6 +207,8 @@ void __cdecl Sys_OutOfMemErrorInternal(const char* filename, int line)
 
 	Sys_EnterCriticalSection(CRITSECT_FATAL_ERROR);
 	Com_Printf(16, "Out of memory: filename '%s', line %d\n", filename, line);
+	KisakCrash_SetStage("fatal engine error: out of memory");
+	KisakCrash_RecordFatalError("Out of memory");
 	v4 = Win_LocalizeRef("WIN_OUT_OF_MEM_TITLE");
 	v3 = Win_LocalizeRef("WIN_OUT_OF_MEM_BODY");
 	ActiveWindow = GetActiveWindow();
@@ -251,6 +264,9 @@ void Sys_NoFreeFilesError()
 	char* v2; // [esp-8h] [ebp-8h]
 
 	Sys_EnterCriticalSection(CRITSECT_FATAL_ERROR);
+	KisakCrash_SetStage("fatal engine error: disk/file creation failure");
+	KisakCrash_RecordFatalError(
+		"The engine could not create a required file");
 	v2 = Win_LocalizeRef("WIN_DISK_FULL_TITLE");
 	v1 = Win_LocalizeRef("WIN_DISK_FULL_BODY");
 	ActiveWindow = GetActiveWindow();
@@ -324,8 +340,16 @@ void Sys_Error(const char *error, ...)
 	Sys_EnterCriticalSection(CRITSECT_COM_ERROR);
 	Com_PrintStackTrace();
 	com_errorEntered = 1;
-	Sys_SuspendOtherThreads();
 	vsnprintf_s(string, 0x1000u, error, va);
+	va_end(va);
+
+	// KISAK_SP_VR_CRASH_DIAGNOSTICS_V48
+	// Capture fatal engine exits before suspending other threads. DbgHelp may
+	// need the Windows loader while writing a dump; suspending a thread that
+	// owns that lock first could otherwise deadlock the diagnostic path.
+	KisakCrash_SetStage("fatal engine error: Sys_Error");
+	KisakCrash_RecordFatalError(string);
+	Sys_SuspendOtherThreads();
 	
 	// random gamma crap we don't care about
 	// FixWindowsDesktop();
@@ -348,12 +372,12 @@ void Sys_Error(const char *error, ...)
 				TranslateMessage(&Msg);
 				DispatchMessageA(&Msg);
 			}
-			exit(0);
+			exit(EXIT_FAILURE);
 		}
 	}
 
 	Sys_SetErrorText(string);
-	exit(0);
+	exit(EXIT_FAILURE);
 }
 
 void __cdecl Sys_OpenURL(const char *url, int doexit)
@@ -398,6 +422,7 @@ void Sys_SpawnQuitProcess()
 void __cdecl  Sys_Quit()
 {
 	Sys_EnterCriticalSection(CRITSECT_COM_ERROR);
+	KisakCrash_MarkExpectedExit("Sys_Quit normal shutdown", 0);
 
 #if defined(KISAK_OPENXR_ENABLED)
     VR_Shutdown();
@@ -762,7 +787,11 @@ WinMain
 # BURN, BABY, BURN -- MASTER IGNITION ROUTINE
 ==================
 */
+#if defined(KISAK_OPENXR_ENABLED)
+static int Kisak_WinMainImpl(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
+#else
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
+#endif
 
 	// KISAK: make a pretty console in debug mode, redirect in/out/err stream
 #if 1 || defined(KISAK_DEBUG)
@@ -790,7 +819,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 	{
 		if (freopen(vrLoaderLogPath, "a", stderr) != nullptr)
 		{
-			fprintf(stderr, "\n=== OpenXR loader trace ===\n");
+			fprintf(stderr, "\n=== OpenXR/OpenVR startup trace ===\n");
 			fflush(stderr);
 		}
 		else
@@ -806,6 +835,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
 	Sys_InitializeCriticalSections();
 	Sys_InitMainThread();
+	KisakCrash_PrepareCurrentThread("MAIN");
+	KisakCrash_SetStage("startup: tracker and localization initialization");
 	track_init();
 	Win_InitLocalization();
 
@@ -819,6 +850,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 		// should never get a previous instance in Win32
 		if (!hPrevInstance)
 		{
+			KisakCrash_SetStage("startup: engine prerequisites");
 			Com_InitParse();
 			Dvar_Init();
 			InitTiming(); 
@@ -834,14 +866,18 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 			Profile_InitContext(0);
 			KISAK_NULLSUB();
 			// LWSS ADD: Steam Init
+			KisakCrash_SetStage("startup: Steam_Init");
 			Steam_Init();
+			KisakCrash_ReinstallUnhandledExceptionFilter();
 			// LWSS END
+			KisakCrash_SetStage("startup: Com_Init");
 			Com_Init(sys_cmdline);
 
 #if defined(KISAK_OPENXR_ENABLED)
+			KisakCrash_SetStage("startup: VR_Init");
   Com_Printf(
       0,
-      "[VR] Starting OpenXR from WinMain...\n");
+      "[VR] Starting the V49 OpenXR-first VR backend from WinMain...\n");
 
   if (!VR_Init())
   {
@@ -865,12 +901,26 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     MessageBoxA(
         g_wv.hWnd,
         vrStartupMessage,
-        "KisakCOD VR - OpenXR startup failed",
+        "KisakCOD VR - VR startup failed",
         MB_OK | MB_ICONERROR);
 
+	KisakCrash_MarkExpectedExit(
+		"VR runtime initialization failed",
+		31);
     Sys_NormalExit();
     return 31;
   }
+
+	KisakCrash_ReinstallUnhandledExceptionFilter();
+	KisakCrash_SetStage("startup: VR backend ready");
+	Com_Printf(
+		0,
+		"[VR][STARTUP] Active V49 backend: %s.\n",
+		VR_GetActiveBackendName());
+	Com_Printf(
+		0,
+		"[VR][CRASH] V48 crash recorder ready: unhandled main/worker "
+		"exceptions write a text report and minidump in CrashDumps.\n");
 #endif
 
 #ifdef KISAK_MP
@@ -892,9 +942,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 			//}
 
 			SetFocus(g_wv.hWnd);
+			unsigned int v48FrameNumber = 0u;
 
 			// main game loop
 			while (1) {
+				++v48FrameNumber;
+				KisakCrash_SetFrameNumber(v48FrameNumber);
 				// if not running as a game client, sleep a bit
 #ifdef KISAK_MP
 				if (g_wv.isMinimized || (com_dedicated && com_dedicated->current.integer)) 
@@ -906,11 +959,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 				}
 
 				// run the game
+				KisakCrash_SetStage("main loop: Com_Frame");
 				Com_Frame();
 
 #if defined(KISAK_OPENXR_ENABLED)
+				KisakCrash_SetStage("main loop: VR_Frame");
                             VR_Frame();
 #endif
+				KisakCrash_SetStage("main loop: between frames");
 
 				// LWSS: Punkbuster stuff
 				//if (!com_dedicated || !com_dedicated->integer) {
@@ -924,8 +980,45 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
 	Win_ShutdownLocalization();
 	track_shutdown(0);
+	KisakCrash_MarkExpectedExit(
+		"WinMain returned without entering the game loop",
+		0);
 	return 0;
 }
+
+#if defined(KISAK_OPENXR_ENABLED)
+int WINAPI WinMain(
+	HINSTANCE hInstance,
+	HINSTANCE hPrevInstance,
+	LPSTR lpCmdLine,
+	int nCmdShow)
+{
+	// KISAK_SP_VR_CRASH_DIAGNOSTICS_V48
+	// Keep the SEH boundary in a trivial wrapper so MSVC can unwind normal C++
+	// code inside Kisak_WinMainImpl while still preserving the faulting context.
+	__try
+	{
+		KisakCrash_Install(lpCmdLine);
+
+		return Kisak_WinMainImpl(
+			hInstance,
+			hPrevInstance,
+			lpCmdLine,
+			nCmdShow);
+	}
+	__except (KisakCrash_ExceptionFilter(
+		GetExceptionInformation(),
+		"WinMain SEH boundary"))
+	{
+		const DWORD exceptionCode =
+			KisakCrash_GetRecordedExceptionCode();
+
+		return exceptionCode != 0u
+			? static_cast<int>(exceptionCode)
+			: -1;
+	}
+}
+#endif
 
 extern "C" __declspec(dllexport) DWORD NvOptimusEnablement = 1;
 extern "C" __declspec(dllexport) DWORD AmdPowerXpressRequestHighPerformance = 1;

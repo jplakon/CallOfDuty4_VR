@@ -15,6 +15,10 @@
 #endif
 #include <gfx_d3d/rb_backend.h>
 
+#if defined(KISAK_OPENXR_ENABLED)
+#include <win32/win_crash_diagnostics.h>
+#endif
+
 uint32_t Win_InitThreads();
 
 
@@ -211,7 +215,7 @@ void __cdecl SetThreadName(uint32_t threadId, const char* threadName)
     }
 }
 
-uint32_t __stdcall Sys_ThreadMain(ThreadContext_t threadContext)
+static uint32_t Sys_ThreadMainBody(ThreadContext_t threadContext)
 {
     bcassert(threadContext, THREAD_CONTEXT_COUNT);
     iassert(threadFunc[threadContext]);
@@ -219,6 +223,40 @@ uint32_t __stdcall Sys_ThreadMain(ThreadContext_t threadContext)
     Sys_InitThread(threadContext);
     threadFunc[threadContext](threadContext);
     return 0;
+}
+
+uint32_t __stdcall Sys_ThreadMain(ThreadContext_t threadContext)
+{
+#if defined(KISAK_OPENXR_ENABLED)
+    // KISAK_SP_VR_CRASH_DIAGNOSTICS_V48
+    // SetUnhandledExceptionFilter covers third-party threads. This explicit
+    // boundary also preserves the exception context if Steam, OpenXR, or a
+    // codec replaces the process-wide filter after startup.
+    __try
+    {
+        KisakCrash_PrepareCurrentThread(
+            s_threadNames[threadContext]);
+
+        return Sys_ThreadMainBody(threadContext);
+    }
+    __except (KisakCrash_ExceptionFilter(
+        GetExceptionInformation(),
+        "engine worker-thread SEH boundary"))
+    {
+        const DWORD exceptionCode =
+            KisakCrash_GetRecordedExceptionCode();
+
+        TerminateProcess(
+            GetCurrentProcess(),
+            exceptionCode != 0u
+                ? exceptionCode
+                : static_cast<DWORD>(-1));
+
+        return exceptionCode;
+    }
+#else
+    return Sys_ThreadMainBody(threadContext);
+#endif
 }
 
 static void* wakeDatabaseEvent;

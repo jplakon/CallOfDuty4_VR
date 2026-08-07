@@ -65,12 +65,15 @@ target_sources(
         ${SRC_DIR}/vr/vr_d3d9ex_interop_probe.h
         ${SRC_DIR}/vr/vr_openxr.h
         ${SRC_DIR}/vr/vr_d3d9_capture.h
+        ${SRC_DIR}/win32/win_crash_diagnostics.cpp
+        ${SRC_DIR}/win32/win_crash_diagnostics.h
 )
 
 target_link_libraries(
     ${PROJECT_NAME}
     PRIVATE
         OpenXR::openxr_loader
+        OpenVR::openvr_api
         d3d11
         dxgi
         d3dcompiler

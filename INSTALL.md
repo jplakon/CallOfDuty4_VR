@@ -43,6 +43,7 @@ developer's current Quest 3 configuration:
 - Physical scope capture: `1024`
 - Physical magazine reloading enabled
 - Controller-tracked hands enabled
+- 45-degree snap turning enabled by default
 
 If performance is poor, change both packed-render settings to the supported
 lower preset:
@@ -55,6 +56,25 @@ set "KISAK_VR_OUTPUT_SCALE=0.75"
 Do not use `3072x1536`. It cannot contain both rectangular eye images and the
 dedicated physical-scope panel. Fully close and restart the game after changing
 environment settings.
+
+
+### Turning mode
+
+Snap turning remains the default:
+
+```bat
+set "KISAK_VR_TURN_MODE=snap"
+```
+
+To use analog smooth turning, set:
+
+```bat
+set "KISAK_VR_TURN_MODE=smooth"
+set "KISAK_VR_SMOOTH_TURN_SPEED=120"
+```
+
+The smooth-turn speed is full-stick degrees per second and accepts values from
+30 through 360. Fully close and restart COD4 after changing either value.
 
 The HUD controls are also in `VR-Settings.bat`. Lowering
 `KISAK_VR_HUD_SAFE_X` moves the left-side ammo/action information farther
@@ -73,9 +93,17 @@ Logs are normally written below the game directory in:
 main\console.log
 ```
 
+
+## Crash reports
+
+If the game crashes, do not reopen it. Run
+`Collect-KisakCOD-VR-Crash-Report.bat` from the COD4 folder and send the ZIP
+created on the Windows Desktop privately. A minidump can contain limited
+process memory and should not be posted publicly.
+
 ## Known campaign limitation
 
-**Death From Above is not supported in `v0.10.0-beta.2`.**
+**Death From Above is not supported in `v0.10.0-beta.3`.**
 
 To skip **Death From Above**:
 

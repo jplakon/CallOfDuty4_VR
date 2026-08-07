@@ -1,6 +1,6 @@
 # Known issues
 
-This list applies to `v0.10.0-beta.2`.
+This list applies to `v0.10.0-beta.3`.
 
 ## Unsupported mission
 
@@ -12,6 +12,9 @@ This list applies to `v0.10.0-beta.2`.
 - The primary tested configuration is Meta Quest 3 through Virtual Desktop's
   OpenXR runtime.
 - Other OpenXR headsets, controller profiles, and runtimes are experimental.
+- The experimental 32-bit SteamVR/OpenVR fallback does not yet map motion
+  controllers and may show projection/pose distortion or incorrect tilt on
+  some systems. Use a working OpenXR runtime for normal play.
 - The default `6016x2688` / output-scale `1.0` mode is demanding. The supported
   lower preset is `4768x2016` / output-scale `0.75`.
 - `3072x1536` is incompatible with the packed renderer because it cannot hold

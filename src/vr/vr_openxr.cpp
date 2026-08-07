@@ -7,6 +7,7 @@ void __cdecl UI_MouseEvent(int localClientNum, int x, int y);
 #include "gfx_d3d/r_init.h"
 
 #include "qcommon/qcommon.h"
+#include "win32/win_crash_diagnostics.h"
 
 #include <Windows.h>
 #include <d3d11.h>
@@ -16,6 +17,7 @@ void __cdecl UI_MouseEvent(int localClientNum, int x, int y);
 
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
+#include <openvr.h>
 
 #include <algorithm>
 #include <array>
@@ -38,6 +40,34 @@ XrInstance g_vrInstance = XR_NULL_HANDLE;
 XrSystemId g_vrSystemId = XR_NULL_SYSTEM_ID;
 XrSession g_vrSession = XR_NULL_HANDLE;
 XrSpace g_vrAppSpace = XR_NULL_HANDLE;
+
+// KISAK_SP_VR_OPENVR_FALLBACK_V49
+// COD4 is a 32-bit process. Some current SteamVR/Pimax installations expose
+// only a 64-bit OpenXR runtime, but SteamVR still supplies the architecture-
+// matched 32-bit OpenVR client. Keep the working OpenXR path primary and use
+// OpenVR only when requested or when OpenXR cannot enumerate a runtime.
+enum class VrRuntimeBackend : std::uint32_t
+{
+    None = 0u,
+    OpenXr,
+    OpenVr,
+};
+
+VrRuntimeBackend g_vrRuntimeBackend =
+    VrRuntimeBackend::None;
+
+vr::IVRSystem* g_vrOpenVrSystem = nullptr;
+vr::IVRCompositor* g_vrOpenVrCompositor = nullptr;
+
+std::array<
+    vr::TrackedDevicePose_t,
+    vr::k_unMaxTrackedDeviceCount>
+    g_vrOpenVrRenderPoses = {};
+
+bool g_vrOpenVrInitialized = false;
+bool g_vrOpenVrLoggedFirstPose = false;
+bool g_vrOpenVrLoggedFirstSubmit = false;
+bool g_vrOpenVrLoggedControllerLimitation = false;
 
 constexpr std::uint32_t kVrControllerCount = 2u;
 
@@ -350,6 +380,12 @@ ComPtr<ID3D11Buffer> g_vrMenuBlitVertexBuffer;
 // backbuffer. Sample only that completed eye for a clean mono screen.
 ComPtr<ID3D11Buffer> g_vrPauseMenuBlitVertexBuffer;
 
+// KISAK_SP_VR_QUIT_CONFIRMATION_CENTER_CROP_V46
+// V45 paints the nested confirmation once across the complete main stereo
+// canvas. A centered, one-eye-wide crop contains that single shared dialog
+// without also squeezing both gameplay eyes into each headset eye.
+ComPtr<ID3D11Buffer> g_vrQuitConfirmationBlitVertexBuffer;
+
 ComPtr<ID3D11SamplerState> g_vrBlitSampler;
 bool g_vrLoggedMenuComfortScreen = false;
 
@@ -534,10 +570,25 @@ float g_vrRightThumbstickY = 0.0f;
 bool g_vrRightThumbstickValid = false;
 bool g_vrSnapTurnArmed = true;
 bool g_vrRightStickVerticalArmed = true;
-bool g_vrRightStickJumpPressed = false;
-bool g_vrRightStickCrouchPressed = false;
+bool g_vrRightStickUpPressed = false;
+bool g_vrRightStickDownPressed = false;
 bool g_vrRightThumbrestTouched = false;
 bool g_vrModifierDpadArmed = true;
+
+// KISAK_SP_VR_SMOOTH_TURN_OPTION_V50
+enum class VrTurnMode
+{
+    Snap,
+    Smooth,
+};
+
+VrTurnMode g_vrTurnMode =
+    VrTurnMode::Snap;
+
+float g_vrSmoothTurnSpeedDegreesPerSecond =
+    120.0f;
+
+bool g_vrTurnSettingsLoaded = false;
 
 // KISAK_SP_VR_POSE_FOCUS_AIM_V1
 // ADS is published by the two-hand eye-level pose detector instead of the
@@ -649,6 +700,17 @@ struct VrEyeSwapchain
 };
 
 std::vector<VrEyeSwapchain> g_vrEyeSwapchains;
+
+struct VrOpenVrEyeTarget
+{
+    int32_t width = 0;
+    int32_t height = 0;
+    ComPtr<ID3D11Texture2D> texture;
+    ComPtr<ID3D11RenderTargetView> renderTargetView;
+};
+
+std::array<VrOpenVrEyeTarget, kVrStereoEyeCount>
+    g_vrOpenVrEyeTargets = {};
 
 // KISAK_SP_VR_OPENXR_STARTUP_DIAGNOSTICS_V31
 // Preserve a human-readable startup failure even before an XrInstance exists,
@@ -764,6 +826,38 @@ void VR_RecordStartupFailure(
         advice != nullptr ? advice : "See the startup logs.");
 }
 
+const char* VR_RuntimeBackendName()
+{
+    switch (g_vrRuntimeBackend)
+    {
+        case VrRuntimeBackend::OpenXr:
+            return "OpenXR";
+        case VrRuntimeBackend::OpenVr:
+            return "OpenVR/SteamVR";
+        default:
+            return "none";
+    }
+}
+
+void VR_RecordOpenVrStartupFailure(
+    const char* openXrFailure,
+    const char* operation,
+    const char* resultName,
+    const int resultValue)
+{
+    std::snprintf(
+        g_vrLastStartupError.data(),
+        g_vrLastStartupError.size(),
+        "%s OpenVR fallback %s: %s (%d). Start SteamVR, connect "
+        "the headset, and see OpenXR-Startup.log plus main\\console.log.",
+        openXrFailure != nullptr && openXrFailure[0] != '\0'
+            ? openXrFailure
+            : "OpenXR was unavailable.",
+        operation != nullptr ? operation : "failed",
+        resultName != nullptr ? resultName : "unknown error",
+        resultValue);
+}
+
 const char* VR_SessionStateName(const XrSessionState state)
 {
     switch (state)
@@ -833,7 +927,7 @@ void VR_LogHrFailure(const char* operation, const HRESULT hr)
         operation,
         resultName,
         static_cast<int>(hr),
-        "The Direct3D/OpenXR graphics bridge failed. Check main\\console.log.");
+        "The Direct3D VR graphics bridge failed. Check main\\console.log.");
 
     Com_PrintWarning(
         0,
@@ -1013,6 +1107,129 @@ bool VR_CreateD3D11Device(
         0,
         "[VR] Created OpenXR D3D11 device at feature level 0x%X.\n",
         static_cast<unsigned int>(createdFeatureLevel));
+
+    return true;
+}
+
+bool VR_CreateOpenVrD3D11Device()
+{
+    if (g_vrOpenVrSystem == nullptr)
+    {
+        return false;
+    }
+
+    int32_t adapterIndex = -1;
+    g_vrOpenVrSystem->GetDXGIOutputInfo(
+        &adapterIndex);
+
+    if (adapterIndex < 0)
+    {
+        VR_RecordOpenVrStartupFailure(
+            nullptr,
+            "did not identify a compositor DXGI adapter",
+            "VRInitError_Driver_Failed",
+            static_cast<int>(
+                vr::VRInitError_Driver_Failed));
+
+        Com_PrintWarning(
+            0,
+            "[VR][OPENVR] SteamVR did not return a valid DXGI "
+            "adapter index.\n");
+
+        return false;
+    }
+
+    ComPtr<IDXGIFactory1> factory;
+
+    HRESULT hr =
+        CreateDXGIFactory1(
+            IID_PPV_ARGS(factory.GetAddressOf()));
+
+    if (FAILED(hr))
+    {
+        VR_LogHrFailure(
+            "CreateDXGIFactory1(OpenVR)",
+            hr);
+        return false;
+    }
+
+    ComPtr<IDXGIAdapter1> selectedAdapter;
+
+    hr = factory->EnumAdapters1(
+        static_cast<UINT>(adapterIndex),
+        selectedAdapter.GetAddressOf());
+
+    if (FAILED(hr) || selectedAdapter == nullptr)
+    {
+        VR_LogHrFailure(
+            "IDXGIFactory1::EnumAdapters1(OpenVR)",
+            hr);
+        return false;
+    }
+
+    DXGI_ADAPTER_DESC1 adapterDescription = {};
+
+    hr = selectedAdapter->GetDesc1(
+        &adapterDescription);
+
+    if (FAILED(hr))
+    {
+        VR_LogHrFailure(
+            "IDXGIAdapter1::GetDesc1(OpenVR)",
+            hr);
+        return false;
+    }
+
+    constexpr std::array<D3D_FEATURE_LEVEL, 3>
+        requestedFeatureLevels = {
+            D3D_FEATURE_LEVEL_11_0,
+            D3D_FEATURE_LEVEL_10_1,
+            D3D_FEATURE_LEVEL_10_0,
+        };
+
+    D3D_FEATURE_LEVEL createdFeatureLevel =
+        D3D_FEATURE_LEVEL_10_0;
+
+    hr = D3D11CreateDevice(
+        selectedAdapter.Get(),
+        D3D_DRIVER_TYPE_UNKNOWN,
+        nullptr,
+        D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+        requestedFeatureLevels.data(),
+        static_cast<UINT>(
+            requestedFeatureLevels.size()),
+        D3D11_SDK_VERSION,
+        g_vrD3dDevice.GetAddressOf(),
+        &createdFeatureLevel,
+        g_vrD3dContext.GetAddressOf());
+
+    if (FAILED(hr))
+    {
+        VR_LogHrFailure(
+            "D3D11CreateDevice(OpenVR)",
+            hr);
+        return false;
+    }
+
+    if (!VR_ProbeD3D9ExD3D11Interop(
+            dx.device,
+            g_vrD3dDevice.Get(),
+            adapterDescription.AdapterLuid))
+    {
+        Com_PrintWarning(
+            0,
+            "[VR][OPENVR] D3D9Ex/D3D11 shared-texture "
+            "interop did not pass; the CPU capture bridge "
+            "will remain available.\n");
+    }
+
+    Com_Printf(
+        0,
+        "[VR][OPENVR] Created compositor-matched D3D11 "
+        "device on adapter %d at feature level 0x%X.\n",
+        adapterIndex,
+        static_cast<unsigned int>(
+            createdFeatureLevel));
 
     return true;
 }
@@ -2601,6 +2818,29 @@ float4 PSScope(PixelInput input) : SV_TARGET
                         eyeSwapchain.height));
         }
 
+        // OpenVR owns persistent eye textures instead of OpenXR
+        // swapchains. Reuse their extent so the established FSR path does
+        // not attempt a zero-sized intermediate on the fallback backend.
+        for (const VrOpenVrEyeTarget& eyeTarget :
+             g_vrOpenVrEyeTargets)
+        {
+            if (eyeTarget.width > 0 &&
+                eyeTarget.height > 0)
+            {
+                intermediateWidth =
+                    (std::max)(
+                        intermediateWidth,
+                        static_cast<std::uint32_t>(
+                            eyeTarget.width));
+
+                intermediateHeight =
+                    (std::max)(
+                        intermediateHeight,
+                        static_cast<std::uint32_t>(
+                            eyeTarget.height));
+            }
+        }
+
         D3D11_TEXTURE2D_DESC intermediateDescription = {};
         intermediateDescription.Width =
             intermediateWidth;
@@ -2822,6 +3062,33 @@ float4 PSScope(PixelInput input) : SV_TARGET
     {
         VR_LogHrFailure(
             "CreateBuffer(pause menu mono blit)",
+            hr);
+
+        return false;
+    }
+
+    static const VrBlitVertex quitConfirmationVertices[4] = {
+        {{-1.0f,  1.0f}, {0.25f, 0.0f}},
+        {{ 1.0f,  1.0f}, {0.75f, 0.0f}},
+        {{-1.0f, -1.0f}, {0.25f, 1.0f}},
+        {{ 1.0f, -1.0f}, {0.75f, 1.0f}},
+    };
+
+    D3D11_SUBRESOURCE_DATA quitConfirmationVertexData = {};
+    quitConfirmationVertexData.pSysMem =
+        quitConfirmationVertices;
+
+    hr =
+        g_vrD3dDevice->CreateBuffer(
+            &vertexDescription,
+            &quitConfirmationVertexData,
+            g_vrQuitConfirmationBlitVertexBuffer
+                .GetAddressOf());
+
+    if (FAILED(hr))
+    {
+        VR_LogHrFailure(
+            "CreateBuffer(quit confirmation centered mono blit)",
             hr);
 
         return false;
@@ -4241,6 +4508,246 @@ VrHeadVector VR_RotateHeadVector(
             orientation.w * twiceCross.z +
             secondCross.z,
     };
+}
+
+XrPosef VR_OpenVrMatrixToPose(
+    const vr::HmdMatrix34_t& matrix)
+{
+    XrPosef pose = {};
+    pose.position = {
+        matrix.m[0][3],
+        matrix.m[1][3],
+        matrix.m[2][3],
+    };
+
+    const float trace =
+        matrix.m[0][0] +
+        matrix.m[1][1] +
+        matrix.m[2][2];
+
+    XrQuaternionf orientation = {};
+
+    if (trace > 0.0f)
+    {
+        const float scale =
+            2.0f * std::sqrt(trace + 1.0f);
+
+        orientation.w = 0.25f * scale;
+        orientation.x =
+            (matrix.m[2][1] - matrix.m[1][2]) /
+            scale;
+        orientation.y =
+            (matrix.m[0][2] - matrix.m[2][0]) /
+            scale;
+        orientation.z =
+            (matrix.m[1][0] - matrix.m[0][1]) /
+            scale;
+    }
+    else if (matrix.m[0][0] > matrix.m[1][1] &&
+             matrix.m[0][0] > matrix.m[2][2])
+    {
+        const float scale =
+            2.0f * std::sqrt(
+                1.0f + matrix.m[0][0] -
+                matrix.m[1][1] - matrix.m[2][2]);
+
+        orientation.w =
+            (matrix.m[2][1] - matrix.m[1][2]) /
+            scale;
+        orientation.x = 0.25f * scale;
+        orientation.y =
+            (matrix.m[0][1] + matrix.m[1][0]) /
+            scale;
+        orientation.z =
+            (matrix.m[0][2] + matrix.m[2][0]) /
+            scale;
+    }
+    else if (matrix.m[1][1] > matrix.m[2][2])
+    {
+        const float scale =
+            2.0f * std::sqrt(
+                1.0f + matrix.m[1][1] -
+                matrix.m[0][0] - matrix.m[2][2]);
+
+        orientation.w =
+            (matrix.m[0][2] - matrix.m[2][0]) /
+            scale;
+        orientation.x =
+            (matrix.m[0][1] + matrix.m[1][0]) /
+            scale;
+        orientation.y = 0.25f * scale;
+        orientation.z =
+            (matrix.m[1][2] + matrix.m[2][1]) /
+            scale;
+    }
+    else
+    {
+        const float scale =
+            2.0f * std::sqrt(
+                1.0f + matrix.m[2][2] -
+                matrix.m[0][0] - matrix.m[1][1]);
+
+        orientation.w =
+            (matrix.m[1][0] - matrix.m[0][1]) /
+            scale;
+        orientation.x =
+            (matrix.m[0][2] + matrix.m[2][0]) /
+            scale;
+        orientation.y =
+            (matrix.m[1][2] + matrix.m[2][1]) /
+            scale;
+        orientation.z = 0.25f * scale;
+    }
+
+    pose.orientation =
+        VR_NormalizeQuaternion(
+            orientation);
+
+    return pose;
+}
+
+XrPosef VR_ComposePose(
+    const XrPosef& parent,
+    const XrPosef& child)
+{
+    const VrHeadVector rotatedChildPosition =
+        VR_RotateHeadVector(
+            parent.orientation,
+            {
+                child.position.x,
+                child.position.y,
+                child.position.z,
+            });
+
+    XrPosef result = {};
+    result.orientation =
+        VR_MultiplyQuaternion(
+            parent.orientation,
+            child.orientation);
+
+    result.position = {
+        parent.position.x +
+            rotatedChildPosition.x,
+        parent.position.y +
+            rotatedChildPosition.y,
+        parent.position.z +
+            rotatedChildPosition.z,
+    };
+
+    return result;
+}
+
+XrPosef VR_InvertPose(
+    const XrPosef& pose)
+{
+    XrPosef inverse = {};
+    inverse.orientation =
+        VR_ConjugateQuaternion(
+            VR_NormalizeQuaternion(
+                pose.orientation));
+
+    const VrHeadVector inversePosition =
+        VR_RotateHeadVector(
+            inverse.orientation,
+            {
+                -pose.position.x,
+                -pose.position.y,
+                -pose.position.z,
+            });
+
+    inverse.position = {
+        inversePosition.x,
+        inversePosition.y,
+        inversePosition.z,
+    };
+
+    return inverse;
+}
+
+XrPosef VR_OpenVrHeadPoseFromViews(
+    const std::array<XrView, kVrStereoEyeCount>& views)
+{
+    if (g_vrOpenVrSystem != nullptr)
+    {
+        const XrPosef leftEyeToHead =
+            VR_OpenVrMatrixToPose(
+                g_vrOpenVrSystem
+                    ->GetEyeToHeadTransform(
+                        vr::Eye_Left));
+
+        return VR_ComposePose(
+            views[0].pose,
+            VR_InvertPose(
+                leftEyeToHead));
+    }
+
+    XrPosef headPose =
+        views[0].pose;
+
+    headPose.position = {
+        0.5f *
+            (views[0].pose.position.x +
+             views[1].pose.position.x),
+        0.5f *
+            (views[0].pose.position.y +
+             views[1].pose.position.y),
+        0.5f *
+            (views[0].pose.position.z +
+             views[1].pose.position.z),
+    };
+
+    return headPose;
+}
+
+vr::HmdMatrix34_t VR_OpenVrHeadMatrixFromViews(
+    const std::array<XrView, kVrStereoEyeCount>& views)
+{
+    const XrPosef headPose =
+        VR_OpenVrHeadPoseFromViews(
+            views);
+
+    const XrQuaternionf orientation =
+        VR_NormalizeQuaternion(
+            headPose.orientation);
+
+    const float x = orientation.x;
+    const float y = orientation.y;
+    const float z = orientation.z;
+    const float w = orientation.w;
+
+    vr::HmdMatrix34_t matrix = {};
+
+    matrix.m[0][0] =
+        1.0f - 2.0f * (y * y + z * z);
+    matrix.m[0][1] =
+        2.0f * (x * y - z * w);
+    matrix.m[0][2] =
+        2.0f * (x * z + y * w);
+
+    matrix.m[1][0] =
+        2.0f * (x * y + z * w);
+    matrix.m[1][1] =
+        1.0f - 2.0f * (x * x + z * z);
+    matrix.m[1][2] =
+        2.0f * (y * z - x * w);
+
+    matrix.m[2][0] =
+        2.0f * (x * z - y * w);
+    matrix.m[2][1] =
+        2.0f * (y * z + x * w);
+    matrix.m[2][2] =
+        1.0f - 2.0f * (x * x + y * y);
+
+    matrix.m[0][3] =
+        headPose.position.x;
+
+    matrix.m[1][3] =
+        headPose.position.y;
+
+    matrix.m[2][3] =
+        headPose.position.z;
+
+    return matrix;
 }
 
 VrHeadVector VR_OpenXrVectorToCod(
@@ -6689,8 +7196,8 @@ void VR_DestroyControllerInput()
         g_vrRightThumbstickValid = false;
         g_vrSnapTurnArmed = true;
         g_vrRightStickVerticalArmed = true;
-        g_vrRightStickJumpPressed = false;
-        g_vrRightStickCrouchPressed = false;
+        g_vrRightStickUpPressed = false;
+        g_vrRightStickDownPressed = false;
         g_vrRightThumbrestTouched = false;
         g_vrModifierDpadArmed = true;
 
@@ -9145,7 +9652,8 @@ void VR_UpdateControllerActions(
     }
 
     // KISAK_SP_VR_RIGHT_STICK_JUMP_CROUCH_V44
-    // Keep horizontal dominance reserved for snap turning.  A deliberate
+    // KISAK_SP_VR_RIGHT_STICK_STANCE_LADDER_V51
+    // Keep horizontal dominance reserved for configured turning.  A deliberate
     // vertical flick publishes a single gameplay edge and cannot repeat
     // until the stick returns through the neutral release threshold.
     int rightStickVerticalAction = 0;
@@ -9195,11 +9703,11 @@ void VR_UpdateControllerActions(
 
             if (rightStickVerticalAction > 0)
             {
-                g_vrRightStickJumpPressed = true;
+                g_vrRightStickUpPressed = true;
             }
             else
             {
-                g_vrRightStickCrouchPressed = true;
+                g_vrRightStickDownPressed = true;
             }
         }
 
@@ -9209,8 +9717,9 @@ void VR_UpdateControllerActions(
         {
             Com_Printf(
                 0,
-                "[VR][CONTROLS] V44 right-stick vertical: up "
-                "jump/stand, down crouch; horizontal snap-turn "
+                "[VR][CONTROLS] V51 right-stick stance ladder: up "
+                "raises one stance (or jumps from standing), down "
+                "lowers one stance; horizontal turning "
                 "preserved.\n");
 
             loggedRightStickVertical = true;
@@ -9941,6 +10450,15 @@ void VR_HandleSessionStateChanged(
         g_vrSessionRunning = false;
         g_vrExitRequested = true;
     }
+
+    KisakCrash_SetVrState(
+        g_vrInitialized,
+        g_vrSessionRunning,
+        static_cast<int>(g_vrSessionState),
+        static_cast<unsigned int>(
+            g_vrUploadedStereoSerial & 0xFFFFFFFFu),
+        g_vrCapturedStereoWidth,
+        g_vrCapturedStereoHeight);
 }
 
 void VR_PollEvents()
@@ -10489,8 +11007,18 @@ bool VR_RenderSolidColorFrame(
             0,
             0x10);
 
+    // KISAK_SP_VR_QUIT_CONFIRMATION_CENTER_CROP_V46
+    // V45 makes SCR_DrawScreenField paint the nested dialog only once across
+    // the main stereo canvas. V46 selects its centered one-eye-wide region;
+    // using the full canvas would squeeze both gameplay eyes into each HMD
+    // eye, while an ordinary right-eye crop cuts through the shared dialog.
+    const bool quitConfirmationComfortMode =
+        menuComfortMode &&
+        VR_IsQuitConfirmationMenuActive();
+
     const bool activePauseComfortMode =
         menuComfortMode &&
+        !quitConfirmationComfortMode &&
         clientUIActives[0].connectionState ==
             CA_ACTIVE;
 
@@ -10589,6 +11117,27 @@ bool VR_RenderSolidColorFrame(
         loggedActivePauseCrop = true;
     }
 
+    static bool loggedQuitConfirmationCenterCrop = false;
+
+    if (quitConfirmationComfortMode &&
+        !loggedQuitConfirmationCenterCrop)
+    {
+        const char* topMenuName =
+            UI_GetTopActiveMenuName(0);
+
+        Com_Printf(
+            0,
+            "[VR][UI] V46 quit confirmation centered mono: "
+            "retained V45 one-pass painting and sampled the "
+            "center 25%%-75%% of the main stereo canvas for "
+            "both eyes (top menu '%s').\n",
+            topMenuName != nullptr
+                ? topMenuName
+                : "unknown");
+
+        loggedQuitConfirmationCenterCrop = true;
+    }
+
     static bool loggedConvergedMenuProjection = false;
 
     if (menuComfortProjectionValid &&
@@ -10685,7 +11234,8 @@ bool VR_RenderSolidColorFrame(
             g_vrCapturedStereoHeight > 0u)
         {
             const std::uint32_t menuSourceWidth =
-                activePauseComfortMode
+                (activePauseComfortMode ||
+                 quitConfirmationComfortMode)
                     ? VR_GetCapturedMainStereoWidth() / 2u
                     : VR_GetCapturedMainStereoWidth();
 
@@ -10793,7 +11343,9 @@ bool VR_RenderSolidColorFrame(
             const UINT offset = 0;
 
             ID3D11Buffer* vertexBuffer =
-                activePauseComfortMode
+                quitConfirmationComfortMode
+                    ? g_vrQuitConfirmationBlitVertexBuffer.Get()
+                    : activePauseComfortMode
                     ? g_vrPauseMenuBlitVertexBuffer.Get()
                     : menuComfortMode
                         ? g_vrMenuBlitVertexBuffer.Get()
@@ -11009,8 +11561,281 @@ bool VR_RenderSolidColorFrame(
     return true;
 }
 
+bool VR_RenderOpenVrEye(
+    const std::uint32_t eyeIndex,
+    const std::array<XrView, kVrStereoEyeCount>&
+        submissionViews,
+    const bool submissionViewsValid,
+    const bool menuComfortMode,
+    const bool quitConfirmationComfortMode,
+    const bool activePauseComfortMode)
+{
+    if (eyeIndex >= kVrStereoEyeCount ||
+        g_vrD3dContext == nullptr)
+    {
+        return false;
+    }
+
+    VrOpenVrEyeTarget& eyeTarget =
+        g_vrOpenVrEyeTargets[eyeIndex];
+
+    ID3D11RenderTargetView* renderTarget =
+        eyeTarget.renderTargetView.Get();
+
+    if (renderTarget == nullptr ||
+        eyeTarget.texture == nullptr ||
+        eyeTarget.width <= 0 ||
+        eyeTarget.height <= 0)
+    {
+        return false;
+    }
+
+    constexpr float clearColor[4] = {
+        0.03f,
+        0.08f,
+        0.20f,
+        1.0f,
+    };
+
+    g_vrD3dContext->OMSetRenderTargets(
+        1,
+        &renderTarget,
+        nullptr);
+
+    g_vrD3dContext->ClearRenderTargetView(
+        renderTarget,
+        clearColor);
+
+    D3D11_VIEWPORT viewport = {};
+    viewport.Width =
+        static_cast<float>(eyeTarget.width);
+    viewport.Height =
+        static_cast<float>(eyeTarget.height);
+    viewport.MinDepth = 0.0f;
+    viewport.MaxDepth = 1.0f;
+
+    if (menuComfortMode &&
+        g_vrCapturedStereoWidth > 0u &&
+        g_vrCapturedStereoHeight > 0u)
+    {
+        const std::uint32_t menuSourceWidth =
+            (activePauseComfortMode ||
+             quitConfirmationComfortMode)
+                ? VR_GetCapturedMainStereoWidth() / 2u
+                : VR_GetCapturedMainStereoWidth();
+
+        const float sourceAspect =
+            static_cast<float>(menuSourceWidth) /
+            static_cast<float>(
+                g_vrCapturedStereoHeight);
+
+        const float targetAspect =
+            static_cast<float>(eyeTarget.width) /
+            static_cast<float>(eyeTarget.height);
+
+        if (sourceAspect > targetAspect)
+        {
+            viewport.Height =
+                viewport.Width /
+                sourceAspect;
+
+            viewport.TopLeftY =
+                0.5f *
+                (static_cast<float>(
+                     eyeTarget.height) -
+                 viewport.Height);
+        }
+        else
+        {
+            viewport.Width =
+                viewport.Height *
+                sourceAspect;
+
+            viewport.TopLeftX =
+                0.5f *
+                (static_cast<float>(
+                     eyeTarget.width) -
+                 viewport.Width);
+        }
+    }
+
+    if (!menuComfortMode &&
+        submissionViewsValid)
+    {
+        VR_ConfigureHudConvergedCaptureViewport(
+            submissionViews[eyeIndex].fov,
+            eyeTarget.width,
+            eyeTarget.height,
+            &viewport);
+    }
+
+    VR_UpdateCompositorConstantsForEye(
+        viewport,
+        eyeTarget.width,
+        eyeTarget.height);
+
+    g_vrD3dContext->RSSetViewports(
+        1,
+        &viewport);
+
+    g_vrD3dContext->RSSetState(
+        g_vrTestRasterizerState.Get());
+
+    g_vrD3dContext->OMSetDepthStencilState(
+        g_vrTestDepthStencilState.Get(),
+        0);
+
+    ID3D11ShaderResourceView* capturedView =
+        g_vrCapturedStereoView.Get();
+
+    bool fsrRendered = false;
+
+    if (capturedView != nullptr &&
+        !menuComfortMode)
+    {
+        fsrRendered =
+            VR_RenderFsrUpscaledEye(
+                eyeIndex,
+                eyeTarget.width,
+                eyeTarget.height,
+                capturedView,
+                renderTarget,
+                viewport);
+    }
+
+    if (capturedView != nullptr &&
+        !fsrRendered)
+    {
+        g_vrD3dContext->OMSetRenderTargets(
+            1,
+            &renderTarget,
+            nullptr);
+
+        g_vrD3dContext->OMSetDepthStencilState(
+            nullptr,
+            0);
+
+        g_vrD3dContext->IASetInputLayout(
+            g_vrBlitInputLayout.Get());
+
+        const UINT stride =
+            sizeof(VrBlitVertex);
+
+        const UINT offset = 0u;
+
+        ID3D11Buffer* vertexBuffer =
+            quitConfirmationComfortMode
+                ? g_vrQuitConfirmationBlitVertexBuffer.Get()
+                : activePauseComfortMode
+                    ? g_vrPauseMenuBlitVertexBuffer.Get()
+                    : menuComfortMode
+                        ? g_vrMenuBlitVertexBuffer.Get()
+                        : g_vrBlitVertexBuffers[eyeIndex]
+                              .Get();
+
+        g_vrD3dContext->IASetVertexBuffers(
+            0,
+            1,
+            &vertexBuffer,
+            &stride,
+            &offset);
+
+        g_vrD3dContext->IASetIndexBuffer(
+            nullptr,
+            DXGI_FORMAT_UNKNOWN,
+            0);
+
+        g_vrD3dContext->IASetPrimitiveTopology(
+            D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+
+        g_vrD3dContext->VSSetShader(
+            g_vrBlitVertexShader.Get(),
+            nullptr,
+            0);
+
+        g_vrD3dContext->PSSetShader(
+            g_vrBlitPixelShader.Get(),
+            nullptr,
+            0);
+
+        ID3D11Buffer* compositorConstantBuffer =
+            g_vrCompositorConstantBuffer.Get();
+
+        g_vrD3dContext->PSSetConstantBuffers(
+            1,
+            1,
+            &compositorConstantBuffer);
+
+        g_vrD3dContext->PSSetShaderResources(
+            0,
+            1,
+            &capturedView);
+
+        ID3D11SamplerState* sampler =
+            g_vrBlitSampler.Get();
+
+        g_vrD3dContext->PSSetSamplers(
+            0,
+            1,
+            &sampler);
+
+        g_vrD3dContext->Draw(4, 0);
+
+        ID3D11ShaderResourceView* nullView =
+            nullptr;
+
+        g_vrD3dContext->PSSetShaderResources(
+            0,
+            1,
+            &nullView);
+
+        VR_SetFullEyeViewport(
+            eyeTarget.width,
+            eyeTarget.height);
+
+        if (!menuComfortMode &&
+            submissionViewsValid)
+        {
+            VR_RenderPhysicalSniperScope(
+                eyeIndex,
+                eyeTarget.width,
+                eyeTarget.height,
+                submissionViews[eyeIndex]);
+        }
+    }
+
+    if (capturedView != nullptr &&
+        fsrRendered)
+    {
+        VR_SetFullEyeViewport(
+            eyeTarget.width,
+            eyeTarget.height);
+
+        if (submissionViewsValid)
+        {
+            VR_RenderPhysicalSniperScope(
+                eyeIndex,
+                eyeTarget.width,
+                eyeTarget.height,
+                submissionViews[eyeIndex]);
+        }
+    }
+
+    if (!menuComfortMode)
+    {
+        VR_SetFullEyeViewport(
+            eyeTarget.width,
+            eyeTarget.height);
+    }
+
+    g_vrD3dContext->Flush();
+    return true;
+}
+
 void VR_ResetState()
 {
+    g_vrRuntimeBackend =
+        VrRuntimeBackend::None;
     g_vrInstance = XR_NULL_HANDLE;
     g_vrSystemId = XR_NULL_SYSTEM_ID;
     g_vrSession = XR_NULL_HANDLE;
@@ -11021,6 +11846,10 @@ void VR_ResetState()
     g_vrSessionRunning = false;
     g_vrExitRequested = false;
     g_vrPalmPoseExtensionEnabled = false;
+    g_vrOpenVrInitialized = false;
+    g_vrOpenVrLoggedFirstPose = false;
+    g_vrOpenVrLoggedFirstSubmit = false;
+    g_vrOpenVrLoggedControllerLimitation = false;
 
     {
         std::lock_guard<std::mutex> lock(
@@ -11038,7 +11867,76 @@ void VR_ResetState()
         g_vrLoggedFixedScopedTurretVisibleZoom = false;
         g_vrLoggedFixedScopedTurretFsrBypass = false;
     }
+
+    KisakCrash_SetVrState(
+        false,
+        false,
+        static_cast<int>(XR_SESSION_STATE_UNKNOWN),
+        0u,
+        0u,
+        0u);
 }
+}
+
+
+bool VR_IsQuitConfirmationMenuActive()
+{
+    if (!Key_IsCatcherActive(0, 0x10))
+    {
+        return false;
+    }
+
+    const char* topMenuName =
+        UI_GetTopActiveMenuName(0);
+
+    if (topMenuName == nullptr ||
+        topMenuName[0] == '\0')
+    {
+        return false;
+    }
+
+    // KISAK_SP_VR_ACTIVE_MISSION_QUIT_CONFIRMATION_MONO_V47
+    // The frontend confirmation is quit_popmenu, but Pause -> Quit during an
+    // active SP mission does not reuse that asset.  Depending on save/profile
+    // state, objective_info.menu opens one of these save-game warnings after
+    // closing pausedmenu.  Their names contain neither "quit" nor
+    // "leavegame", so V45/V46 kept painting them in both the stereo gameplay
+    // list and the final shared UI list.  The right-eye pause crop therefore
+    // contained two displaced copies of the dialog.
+    const bool activeMissionQuitConfirmation =
+        clientUIActives[0].connectionState == CA_ACTIVE &&
+        (
+            I_stricmp(topMenuName, "savegame_warning") == 0 ||
+            I_stricmp(topMenuName, "savegame_warning_noprofile") == 0 ||
+            I_stricmp(topMenuName, "savegame_warning_arcade") == 0
+        );
+
+    if (activeMissionQuitConfirmation)
+    {
+        static bool loggedActiveMissionQuitConfirmation = false;
+
+        if (!loggedActiveMissionQuitConfirmation)
+        {
+            Com_Printf(
+                0,
+                "[VR][UI] V47 active-mission Pause -> Quit "
+                "confirmation mono: detected '%s'; suppressing "
+                "the stereo-list UI copy and using the centered "
+                "one-eye source for both eyes.\n",
+                topMenuName);
+
+            loggedActiveMissionQuitConfirmation = true;
+        }
+
+        return true;
+    }
+
+    // Frontend menu packs commonly use quit_popmenu, while inherited MP
+    // assets use popup_leavegame.  Preserve V45/V46 for those separate
+    // confirmation dialogs without confusing them with the SP mission path.
+    return
+        I_stristr(topMenuName, "quit") != nullptr ||
+        I_stristr(topMenuName, "leavegame") != nullptr;
 }
 
 
@@ -12913,11 +13811,11 @@ bool VR_GetLocomotionCombatButtons(
 }
 
 bool VR_ConsumeRightStickVerticalActions(
-    bool* jumpPressed,
-    bool* crouchPressed)
+    bool* upPressed,
+    bool* downPressed)
 {
-    if (jumpPressed == nullptr ||
-        crouchPressed == nullptr)
+    if (upPressed == nullptr ||
+        downPressed == nullptr)
     {
         return false;
     }
@@ -12925,18 +13823,18 @@ bool VR_ConsumeRightStickVerticalActions(
     std::lock_guard<std::mutex> lock(
         g_vrHeadOrientationMutex);
 
-    *jumpPressed =
-        g_vrRightStickJumpPressed;
+    *upPressed =
+        g_vrRightStickUpPressed;
 
-    *crouchPressed =
-        g_vrRightStickCrouchPressed;
+    *downPressed =
+        g_vrRightStickDownPressed;
 
-    g_vrRightStickJumpPressed = false;
-    g_vrRightStickCrouchPressed = false;
+    g_vrRightStickUpPressed = false;
+    g_vrRightStickDownPressed = false;
 
     return
-        *jumpPressed ||
-        *crouchPressed;
+        *upPressed ||
+        *downPressed;
 }
 
 bool VR_GetWeaponUtilityButtons(
@@ -12961,7 +13859,8 @@ bool VR_GetWeaponUtilityButtons(
     return true;
 }
 
-bool VR_ConsumeSnapTurn(
+bool VR_GetTurnYawDelta(
+    const float elapsedSeconds,
     float* yawDeltaDegrees)
 {
     if (yawDeltaDegrees == nullptr)
@@ -12974,10 +13873,163 @@ bool VR_ConsumeSnapTurn(
     std::lock_guard<std::mutex> lock(
         g_vrHeadOrientationMutex);
 
+    // KISAK_SP_VR_SMOOTH_TURN_OPTION_V50
+    // VR-Settings.bat is loaded before process creation, so turning settings
+    // are immutable for this run. Read them once on the gameplay thread.
+    if (!g_vrTurnSettingsLoaded)
+    {
+        constexpr float defaultSmoothSpeed =
+            120.0f;
+
+        constexpr float minimumSmoothSpeed =
+            30.0f;
+
+        constexpr float maximumSmoothSpeed =
+            360.0f;
+
+        const char* requestedMode =
+            std::getenv("KISAK_VR_TURN_MODE");
+
+        if (requestedMode != nullptr &&
+            requestedMode[0] != '\0')
+        {
+            if (_stricmp(requestedMode, "smooth") == 0 ||
+                std::strcmp(requestedMode, "1") == 0)
+            {
+                g_vrTurnMode =
+                    VrTurnMode::Smooth;
+            }
+            else if (_stricmp(requestedMode, "snap") != 0 &&
+                     std::strcmp(requestedMode, "0") != 0)
+            {
+                Com_PrintWarning(
+                    0,
+                    "[VR][CONTROLS] Ignoring invalid "
+                    "KISAK_VR_TURN_MODE='%s'; using snap. "
+                    "Valid values are snap and smooth.\n",
+                    requestedMode);
+            }
+        }
+
+        g_vrSmoothTurnSpeedDegreesPerSecond =
+            defaultSmoothSpeed;
+
+        const char* requestedSmoothSpeed =
+            std::getenv(
+                "KISAK_VR_SMOOTH_TURN_SPEED");
+
+        if (requestedSmoothSpeed != nullptr &&
+            requestedSmoothSpeed[0] != '\0')
+        {
+            char* parseEnd = nullptr;
+
+            const float parsedSmoothSpeed =
+                std::strtof(
+                    requestedSmoothSpeed,
+                    &parseEnd);
+
+            if (parseEnd == requestedSmoothSpeed ||
+                parseEnd == nullptr ||
+                parseEnd[0] != '\0' ||
+                !std::isfinite(parsedSmoothSpeed) ||
+                parsedSmoothSpeed < minimumSmoothSpeed ||
+                parsedSmoothSpeed > maximumSmoothSpeed)
+            {
+                Com_PrintWarning(
+                    0,
+                    "[VR][CONTROLS] Ignoring invalid "
+                    "KISAK_VR_SMOOTH_TURN_SPEED='%s'; "
+                    "using %.0f. Valid range is %.0f through "
+                    "%.0f degrees per second.\n",
+                    requestedSmoothSpeed,
+                    defaultSmoothSpeed,
+                    minimumSmoothSpeed,
+                    maximumSmoothSpeed);
+            }
+            else
+            {
+                g_vrSmoothTurnSpeedDegreesPerSecond =
+                    parsedSmoothSpeed;
+            }
+        }
+
+        if (g_vrTurnMode ==
+            VrTurnMode::Smooth)
+        {
+            Com_Printf(
+                0,
+                "[VR][CONTROLS] V50 turn mode: smooth analog "
+                "at %.0f degrees/second; right-stick deadzone "
+                "0.25.\n",
+                g_vrSmoothTurnSpeedDegreesPerSecond);
+        }
+        else
+        {
+            Com_Printf(
+                0,
+                "[VR][CONTROLS] V50 turn mode: 45-degree "
+                "snap.\n");
+        }
+
+        g_vrTurnSettingsLoaded = true;
+    }
+
     if (!g_vrRightThumbstickValid)
     {
         g_vrSnapTurnArmed = true;
         return false;
+    }
+
+    // A vertically dominant gesture belongs to the stance ladder, not turning.
+    // Keep the same dominance margin in both modes so changing comfort mode
+    // never changes the right-stick vertical mappings.
+    if (std::abs(g_vrRightThumbstickX) <
+        std::abs(g_vrRightThumbstickY) + 0.15f)
+    {
+        return false;
+    }
+
+    if (g_vrTurnMode ==
+        VrTurnMode::Smooth)
+    {
+        g_vrSnapTurnArmed = true;
+
+        constexpr float smoothDeadzone =
+            0.25f;
+
+        const float absoluteStickX =
+            std::abs(g_vrRightThumbstickX);
+
+        if (absoluteStickX <=
+                smoothDeadzone ||
+            !std::isfinite(elapsedSeconds) ||
+            elapsedSeconds <= 0.0f)
+        {
+            return false;
+        }
+
+        // Linearly remap the usable stick range so motion starts at zero just
+        // outside the deadzone and reaches the configured speed at full tilt.
+        const float normalizedMagnitude =
+            (std::min)(
+                1.0f,
+                (absoluteStickX - smoothDeadzone) /
+                    (1.0f - smoothDeadzone));
+
+        const float turnDirection =
+            g_vrRightThumbstickX > 0.0f
+                ? -1.0f
+                : 1.0f;
+
+        *yawDeltaDegrees =
+            turnDirection *
+            normalizedMagnitude *
+            g_vrSmoothTurnSpeedDegreesPerSecond *
+            (std::min)(elapsedSeconds, 0.05f);
+
+        return
+            std::abs(*yawDeltaDegrees) >
+            0.0001f;
     }
 
     constexpr float engageThreshold = 0.75f;
@@ -12990,14 +14042,6 @@ bool VR_ConsumeSnapTurn(
             releaseThreshold)
     {
         g_vrSnapTurnArmed = true;
-        return false;
-    }
-
-    // A vertically dominant gesture belongs to the utility mapping,
-    // not snap turn. Require a small horizontal dominance margin.
-    if (std::abs(g_vrRightThumbstickX) <
-        std::abs(g_vrRightThumbstickY) + 0.15f)
-    {
         return false;
     }
 
@@ -14087,6 +15131,484 @@ void VR_UpdatePackedUiScreenPlacement()
 #endif
 }
 
+float VR_ReadOpenVrOutputScale()
+{
+    constexpr float defaultOutputScale = 1.00f;
+    constexpr float minimumOutputScale = 0.50f;
+    constexpr float maximumOutputScale = 1.00f;
+
+    const char* requestedOutputScale =
+        std::getenv(
+            "KISAK_VR_OUTPUT_SCALE");
+
+    if (requestedOutputScale == nullptr ||
+        requestedOutputScale[0] == '\0')
+    {
+        return defaultOutputScale;
+    }
+
+    char* parseEnd = nullptr;
+
+    const float parsedOutputScale =
+        std::strtof(
+            requestedOutputScale,
+            &parseEnd);
+
+    if (parseEnd == requestedOutputScale ||
+        parseEnd == nullptr ||
+        parseEnd[0] != '\0' ||
+        !std::isfinite(parsedOutputScale) ||
+        parsedOutputScale < minimumOutputScale ||
+        parsedOutputScale > maximumOutputScale)
+    {
+        Com_PrintWarning(
+            0,
+            "[VR][OPENVR] Ignoring invalid "
+            "KISAK_VR_OUTPUT_SCALE='%s'; using %.2f. "
+            "Valid range is %.2f through %.2f.\n",
+            requestedOutputScale,
+            defaultOutputScale,
+            minimumOutputScale,
+            maximumOutputScale);
+
+        return defaultOutputScale;
+    }
+
+    return parsedOutputScale;
+}
+
+bool VR_ConfigureOpenVrViews()
+{
+    if (g_vrOpenVrSystem == nullptr)
+    {
+        return false;
+    }
+
+    g_vrViews.resize(kVrStereoEyeCount);
+
+    std::array<
+        VrEyeProjectionTangents,
+        kVrStereoEyeCount>
+        publishedTangents = {};
+
+    for (std::uint32_t eyeIndex = 0u;
+         eyeIndex < kVrStereoEyeCount;
+         ++eyeIndex)
+    {
+        const vr::EVREye eye =
+            eyeIndex == 0u
+                ? vr::Eye_Left
+                : vr::Eye_Right;
+
+        float left = 0.0f;
+        float right = 0.0f;
+        float top = 0.0f;
+        float bottom = 0.0f;
+
+        g_vrOpenVrSystem->GetProjectionRaw(
+            eye,
+            &left,
+            &right,
+            &top,
+            &bottom);
+
+        VrEyeProjectionTangents& tangents =
+            publishedTangents[eyeIndex];
+
+        // OpenVR raw projection uses negative top and positive bottom.
+        // Normalize it to the OpenXR-style tangents used by the existing
+        // KisakCOD stereo renderer: left/down negative, right/up positive.
+        tangents.left = left;
+        tangents.right = right;
+        tangents.down = -bottom;
+        tangents.up = -top;
+
+        if (!std::isfinite(tangents.left) ||
+            !std::isfinite(tangents.right) ||
+            !std::isfinite(tangents.down) ||
+            !std::isfinite(tangents.up) ||
+            tangents.left >= 0.0f ||
+            tangents.right <= 0.0f ||
+            tangents.down >= 0.0f ||
+            tangents.up <= 0.0f ||
+            tangents.left >= tangents.right ||
+            tangents.down >= tangents.up)
+        {
+            Com_PrintWarning(
+                0,
+                "[VR][OPENVR] Rejected invalid raw projection "
+                "for eye %u: %.4f %.4f %.4f %.4f.\n",
+                eyeIndex,
+                left,
+                right,
+                top,
+                bottom);
+
+            return false;
+        }
+
+        XrView& view =
+            g_vrViews[eyeIndex];
+
+        view = XrView{XR_TYPE_VIEW};
+        view.pose.orientation.w = 1.0f;
+        view.fov.angleLeft =
+            std::atan(tangents.left);
+        view.fov.angleRight =
+            std::atan(tangents.right);
+        view.fov.angleDown =
+            std::atan(tangents.down);
+        view.fov.angleUp =
+            std::atan(tangents.up);
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrProjectionMutex);
+
+        g_vrEyeProjectionTangents =
+            publishedTangents;
+
+        g_vrEyeProjectionValid = true;
+    }
+
+    Com_Printf(
+        0,
+        "[VR][OPENVR] Published per-eye projection tangents: "
+        "L %.4f %.4f %.4f %.4f, "
+        "R %.4f %.4f %.4f %.4f.\n",
+        publishedTangents[0].left,
+        publishedTangents[0].right,
+        publishedTangents[0].down,
+        publishedTangents[0].up,
+        publishedTangents[1].left,
+        publishedTangents[1].right,
+        publishedTangents[1].down,
+        publishedTangents[1].up);
+
+    g_vrLoggedProjectionPublish = true;
+    return true;
+}
+
+bool VR_CreateOpenVrEyeTargets()
+{
+    if (g_vrOpenVrSystem == nullptr ||
+        g_vrD3dDevice == nullptr)
+    {
+        return false;
+    }
+
+    std::uint32_t recommendedWidth = 0u;
+    std::uint32_t recommendedHeight = 0u;
+
+    g_vrOpenVrSystem->GetRecommendedRenderTargetSize(
+        &recommendedWidth,
+        &recommendedHeight);
+
+    if (recommendedWidth == 0u ||
+        recommendedHeight == 0u)
+    {
+        Com_PrintWarning(
+            0,
+            "[VR][OPENVR] SteamVR returned an empty recommended "
+            "render-target size.\n");
+        return false;
+    }
+
+    g_vrOutputScale =
+        VR_ReadOpenVrOutputScale();
+
+    const std::uint32_t targetWidth =
+        (std::min)(
+            16384u,
+            (std::max)(
+                256u,
+                static_cast<std::uint32_t>(
+                    static_cast<float>(recommendedWidth) *
+                        g_vrOutputScale +
+                    0.5f)));
+
+    const std::uint32_t targetHeight =
+        (std::min)(
+            16384u,
+            (std::max)(
+                256u,
+                static_cast<std::uint32_t>(
+                    static_cast<float>(recommendedHeight) *
+                        g_vrOutputScale +
+                    0.5f)));
+
+    for (std::uint32_t eyeIndex = 0u;
+         eyeIndex < kVrStereoEyeCount;
+         ++eyeIndex)
+    {
+        VrOpenVrEyeTarget& target =
+            g_vrOpenVrEyeTargets[eyeIndex];
+
+        target.renderTargetView.Reset();
+        target.texture.Reset();
+
+        D3D11_TEXTURE2D_DESC description = {};
+        description.Width = targetWidth;
+        description.Height = targetHeight;
+        description.MipLevels = 1u;
+        description.ArraySize = 1u;
+        description.Format =
+            DXGI_FORMAT_R8G8B8A8_UNORM;
+        description.SampleDesc.Count = 1u;
+        description.Usage =
+            D3D11_USAGE_DEFAULT;
+        description.BindFlags =
+            D3D11_BIND_RENDER_TARGET |
+            D3D11_BIND_SHADER_RESOURCE;
+        description.MiscFlags =
+            D3D11_RESOURCE_MISC_SHARED;
+
+        HRESULT hr =
+            g_vrD3dDevice->CreateTexture2D(
+                &description,
+                nullptr,
+                target.texture.GetAddressOf());
+
+        if (FAILED(hr) || target.texture == nullptr)
+        {
+            VR_LogHrFailure(
+                "CreateTexture2D(OpenVR eye target)",
+                hr);
+            return false;
+        }
+
+        hr =
+            g_vrD3dDevice->CreateRenderTargetView(
+                target.texture.Get(),
+                nullptr,
+                target.renderTargetView.GetAddressOf());
+
+        if (FAILED(hr) ||
+            target.renderTargetView == nullptr)
+        {
+            VR_LogHrFailure(
+                "CreateRenderTargetView(OpenVR eye target)",
+                hr);
+            return false;
+        }
+
+        target.width =
+            static_cast<int32_t>(targetWidth);
+        target.height =
+            static_cast<int32_t>(targetHeight);
+    }
+
+    Com_Printf(
+        0,
+        "[VR][OPENVR] Eye targets are %u x %u at output scale "
+        "%.2f; SteamVR recommended %u x %u.\n",
+        targetWidth,
+        targetHeight,
+        g_vrOutputScale,
+        recommendedWidth,
+        recommendedHeight);
+
+    return true;
+}
+
+void VR_LogOpenVrIdentity()
+{
+    if (g_vrOpenVrSystem == nullptr)
+    {
+        return;
+    }
+
+    char runtimePath[1024] = {};
+    std::uint32_t requiredRuntimePath = 0u;
+
+    if (vr::VR_GetRuntimePath(
+            runtimePath,
+            static_cast<std::uint32_t>(
+                sizeof(runtimePath)),
+            &requiredRuntimePath))
+    {
+        Com_Printf(
+            0,
+            "[VR][OPENVR] Runtime path: %s.\n",
+            runtimePath);
+    }
+
+    char trackingSystem[256] = {};
+    char modelNumber[256] = {};
+
+    vr::ETrackedPropertyError propertyError =
+        vr::TrackedProp_Success;
+
+    g_vrOpenVrSystem->GetStringTrackedDeviceProperty(
+        vr::k_unTrackedDeviceIndex_Hmd,
+        vr::Prop_TrackingSystemName_String,
+        trackingSystem,
+        static_cast<std::uint32_t>(
+            sizeof(trackingSystem)),
+        &propertyError);
+
+    propertyError =
+        vr::TrackedProp_Success;
+
+    g_vrOpenVrSystem->GetStringTrackedDeviceProperty(
+        vr::k_unTrackedDeviceIndex_Hmd,
+        vr::Prop_ModelNumber_String,
+        modelNumber,
+        static_cast<std::uint32_t>(
+            sizeof(modelNumber)),
+        &propertyError);
+
+    Com_Printf(
+        0,
+        "[VR][OPENVR] Runtime/headset: %s / %s; "
+        "SDK 2.15.6; process x86.\n",
+        trackingSystem[0] != '\0'
+            ? trackingSystem
+            : "SteamVR",
+        modelNumber[0] != '\0'
+            ? modelNumber
+            : "unknown HMD");
+}
+
+bool VR_InitOpenVrFallback(
+    const char* openXrFailure)
+{
+    std::array<char, 1024> preservedOpenXrFailure = {};
+
+    std::snprintf(
+        preservedOpenXrFailure.data(),
+        preservedOpenXrFailure.size(),
+        "%s",
+        openXrFailure != nullptr &&
+                openXrFailure[0] != '\0'
+            ? openXrFailure
+            : "OpenXR was skipped or unavailable.");
+
+    Com_Printf(
+        0,
+        "[VR][OPENVR] V49 attempting the 32-bit SteamVR "
+        "fallback after: %s\n",
+        preservedOpenXrFailure.data());
+
+    vr::EVRInitError initError =
+        vr::VRInitError_None;
+
+    g_vrOpenVrSystem =
+        vr::VR_Init(
+            &initError,
+            vr::VRApplication_Scene,
+            "KisakCOD VR V49");
+
+    if (initError != vr::VRInitError_None ||
+        g_vrOpenVrSystem == nullptr)
+    {
+        VR_RecordOpenVrStartupFailure(
+            preservedOpenXrFailure.data(),
+            "initialization failed",
+            vr::VR_GetVRInitErrorAsSymbol(
+                initError),
+            static_cast<int>(initError));
+
+        Com_PrintWarning(
+            0,
+            "[VR][OPENVR] %s\n",
+            g_vrLastStartupError.data());
+
+        g_vrOpenVrSystem = nullptr;
+        return false;
+    }
+
+    g_vrRuntimeBackend =
+        VrRuntimeBackend::OpenVr;
+    g_vrOpenVrInitialized = true;
+
+    g_vrOpenVrCompositor =
+        vr::VRCompositor();
+
+    if (g_vrOpenVrCompositor == nullptr)
+    {
+        VR_RecordOpenVrStartupFailure(
+            preservedOpenXrFailure.data(),
+            "could not acquire IVRCompositor",
+            "VRInitError_Init_InterfaceNotFound",
+            static_cast<int>(
+                vr::VRInitError_Init_InterfaceNotFound));
+
+        vr::VR_Shutdown();
+        g_vrOpenVrSystem = nullptr;
+        g_vrOpenVrInitialized = false;
+        g_vrRuntimeBackend =
+            VrRuntimeBackend::None;
+        return false;
+    }
+
+    g_vrOpenVrCompositor->SetTrackingSpace(
+        vr::TrackingUniverseStanding);
+
+    VR_LogOpenVrIdentity();
+
+    if (!VR_CreateOpenVrD3D11Device() ||
+        !VR_ConfigureOpenVrViews() ||
+        !VR_CreateOpenVrEyeTargets() ||
+        !VR_CreateHeadTrackedScene() ||
+        !VR_CreateCapturedFrameBlitResources())
+    {
+        std::array<char, 1024> openVrDetail = {};
+
+        std::snprintf(
+            openVrDetail.data(),
+            openVrDetail.size(),
+            "%s",
+            g_vrLastStartupError[0] != '\0'
+                ? g_vrLastStartupError.data()
+                : "OpenVR graphics initialization failed.");
+
+        vr::VR_Shutdown();
+        g_vrOpenVrCompositor = nullptr;
+        g_vrOpenVrSystem = nullptr;
+        g_vrOpenVrInitialized = false;
+        g_vrRuntimeBackend =
+            VrRuntimeBackend::None;
+
+        std::snprintf(
+            g_vrLastStartupError.data(),
+            g_vrLastStartupError.size(),
+            "%s OpenVR fallback graphics setup failed: %s",
+            preservedOpenXrFailure.data(),
+            openVrDetail.data());
+
+        return false;
+    }
+
+    VR_D3D9CaptureSetEnabled(true);
+
+    g_vrInitialized = true;
+    g_vrSessionRunning = true;
+    g_vrSessionState =
+        XR_SESSION_STATE_FOCUSED;
+    g_vrLastStartupError[0] = '\0';
+
+    KisakCrash_SetVrState(
+        true,
+        true,
+        static_cast<int>(
+            g_vrSessionState),
+        0u,
+        0u,
+        0u);
+
+    VR_UpdatePackedUiScreenPlacement();
+
+    Com_Printf(
+        0,
+        "[VR][OPENVR] V49 x86 SteamVR fallback is ready: "
+        "head pose and stereo submission enabled; controller "
+        "input remains disabled in this proof build.\n");
+
+    return true;
+}
+
 bool VR_Init()
 {
     g_vrLastStartupError[0] = '\0';
@@ -14134,6 +15656,49 @@ bool VR_Init()
         return true;
     }
 
+    const char* requestedBackend =
+        std::getenv("KISAK_VR_BACKEND");
+
+    bool forceOpenXr = false;
+    bool forceOpenVr = false;
+
+    if (requestedBackend != nullptr &&
+        requestedBackend[0] != '\0' &&
+        _stricmp(requestedBackend, "auto") != 0)
+    {
+        forceOpenXr =
+            _stricmp(requestedBackend, "openxr") == 0;
+
+        forceOpenVr =
+            _stricmp(requestedBackend, "openvr") == 0;
+
+        if (!forceOpenXr && !forceOpenVr)
+        {
+            Com_PrintWarning(
+                0,
+                "[VR][STARTUP] Ignoring unknown "
+                "KISAK_VR_BACKEND='%s'; valid values are "
+                "auto, openxr, and openvr.\n",
+                requestedBackend);
+        }
+    }
+
+    Com_Printf(
+        0,
+        "[VR][STARTUP] V49 backend policy: %s; OpenXR "
+        "remains primary and x86 OpenVR is the fallback.\n",
+        forceOpenVr
+            ? "forced OpenVR"
+            : forceOpenXr
+                ? "forced OpenXR"
+                : "automatic");
+
+    if (forceOpenVr)
+    {
+        return VR_InitOpenVrFallback(
+            "OpenXR was skipped by KISAK_VR_BACKEND=openvr.");
+    }
+
     Com_Printf(
         0,
         "[VR] Initializing OpenXR head-rotation frame bridge...\n");
@@ -14157,6 +15722,12 @@ bool VR_Init()
                 "XR_KHR_D3D11_enable is unavailable",
                 -9,
                 "Select a Windows OpenXR runtime that supports D3D11.");
+        }
+
+        if (!forceOpenXr)
+        {
+            return VR_InitOpenVrFallback(
+                g_vrLastStartupError.data());
         }
 
         return false;
@@ -14342,7 +15913,18 @@ bool VR_Init()
 
     VR_D3D9CaptureSetEnabled(true);
 
+    g_vrRuntimeBackend =
+        VrRuntimeBackend::OpenXr;
     g_vrInitialized = true;
+
+    KisakCrash_SetVrState(
+        g_vrInitialized,
+        g_vrSessionRunning,
+        static_cast<int>(g_vrSessionState),
+        static_cast<unsigned int>(
+            g_vrUploadedStereoSerial & 0xFFFFFFFFu),
+        g_vrCapturedStereoWidth,
+        g_vrCapturedStereoHeight);
 
     VR_UpdatePackedUiScreenPlacement();
 
@@ -14353,8 +15935,351 @@ bool VR_Init()
     return true;
 }
 
+void VR_PollOpenVrEvents()
+{
+    if (g_vrOpenVrSystem == nullptr)
+    {
+        return;
+    }
+
+    vr::VREvent_t event = {};
+
+    while (g_vrOpenVrSystem->PollNextEvent(
+               &event,
+               sizeof(event)))
+    {
+        if (event.eventType ==
+            vr::VREvent_Quit)
+        {
+            Com_PrintWarning(
+                0,
+                "[VR][OPENVR] SteamVR requested application "
+                "shutdown.\n");
+
+            g_vrOpenVrSystem->AcknowledgeQuit_Exiting();
+            g_vrExitRequested = true;
+        }
+    }
+}
+
+bool VR_UpdateOpenVrHeadPose()
+{
+    if (g_vrOpenVrSystem == nullptr ||
+        g_vrOpenVrCompositor == nullptr ||
+        g_vrViews.size() < kVrStereoEyeCount)
+    {
+        return false;
+    }
+
+    const vr::EVRCompositorError waitResult =
+        g_vrOpenVrCompositor->WaitGetPoses(
+            g_vrOpenVrRenderPoses.data(),
+            static_cast<std::uint32_t>(
+                g_vrOpenVrRenderPoses.size()),
+            nullptr,
+            0u);
+
+    if (waitResult !=
+        vr::VRCompositorError_None)
+    {
+        Com_PrintWarning(
+            0,
+            "[VR][OPENVR] WaitGetPoses failed with "
+            "EVRCompositorError %d.\n",
+            static_cast<int>(waitResult));
+        return false;
+    }
+
+    const vr::TrackedDevicePose_t& hmdPose =
+        g_vrOpenVrRenderPoses[
+            vr::k_unTrackedDeviceIndex_Hmd];
+
+    if (!hmdPose.bDeviceIsConnected ||
+        !hmdPose.bPoseIsValid)
+    {
+        return false;
+    }
+
+    const XrPosef headPose =
+        VR_OpenVrMatrixToPose(
+            hmdPose.mDeviceToAbsoluteTracking);
+
+    for (std::uint32_t eyeIndex = 0u;
+         eyeIndex < kVrStereoEyeCount;
+         ++eyeIndex)
+    {
+        const vr::EVREye eye =
+            eyeIndex == 0u
+                ? vr::Eye_Left
+                : vr::Eye_Right;
+
+        const XrPosef eyeToHeadPose =
+            VR_OpenVrMatrixToPose(
+                g_vrOpenVrSystem
+                    ->GetEyeToHeadTransform(eye));
+
+        g_vrViews[eyeIndex].pose =
+            VR_ComposePose(
+                headPose,
+                eyeToHeadPose);
+    }
+
+    if (!g_vrOpenVrLoggedFirstPose)
+    {
+        Com_Printf(
+            0,
+            "[VR][OPENVR] Received the first valid predicted "
+            "HMD pose from SteamVR.\n");
+
+        g_vrOpenVrLoggedFirstPose = true;
+    }
+
+    return true;
+}
+
+void VR_FrameOpenVr()
+{
+    if (!g_vrInitialized ||
+        !g_vrOpenVrInitialized ||
+        g_vrRuntimeBackend !=
+            VrRuntimeBackend::OpenVr ||
+        g_vrOpenVrSystem == nullptr ||
+        g_vrOpenVrCompositor == nullptr)
+    {
+        return;
+    }
+
+    KisakCrash_SetStage(
+        "VR_Frame: OpenVR update packed UI placement");
+    VR_UpdatePackedUiScreenPlacement();
+
+    KisakCrash_SetStage(
+        "VR_Frame: OpenVR poll events");
+    VR_PollOpenVrEvents();
+
+    if (g_vrExitRequested)
+    {
+        return;
+    }
+
+    KisakCrash_SetStage(
+        "VR_Frame: OpenVR WaitGetPoses");
+
+    if (!VR_UpdateOpenVrHeadPose())
+    {
+        return;
+    }
+
+    if (!g_vrOpenVrLoggedControllerLimitation)
+    {
+        Com_PrintWarning(
+            0,
+            "[VR][OPENVR] V49 proof mode does not yet map "
+            "SteamVR controller actions; keyboard/mouse or a "
+            "gamepad remains available for this first test.\n");
+
+        g_vrOpenVrLoggedControllerLimitation = true;
+    }
+
+    KisakCrash_SetStage(
+        "VR_Frame: OpenVR acquire captured frame");
+    VR_UpdateCapturedStereoTexture();
+
+    std::array<XrView, kVrStereoEyeCount>
+        submissionViews = {};
+
+    bool submissionViewsValid = false;
+
+    if (g_vrCapturedStereoViewsValid)
+    {
+        submissionViews =
+            g_vrCapturedStereoViews;
+        submissionViewsValid = true;
+    }
+    else
+    {
+        for (std::uint32_t eyeIndex = 0u;
+             eyeIndex < kVrStereoEyeCount;
+             ++eyeIndex)
+        {
+            submissionViews[eyeIndex] =
+                g_vrViews[eyeIndex];
+        }
+
+        submissionViewsValid = true;
+    }
+
+    std::array<XrView, kVrStereoEyeCount>
+        currentOpenVrViews = {};
+
+    for (std::uint32_t eyeIndex = 0u;
+         eyeIndex < kVrStereoEyeCount;
+         ++eyeIndex)
+    {
+        currentOpenVrViews[eyeIndex] =
+            g_vrViews[eyeIndex];
+    }
+
+    const XrPosef currentOpenVrHeadPose =
+        VR_OpenVrHeadPoseFromViews(
+            currentOpenVrViews);
+
+    VR_PublishHeadOrientation(
+        currentOpenVrHeadPose.orientation);
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrPublishedRenderViewsMutex);
+
+        for (std::uint32_t eyeIndex = 0u;
+             eyeIndex < kVrStereoEyeCount;
+             ++eyeIndex)
+        {
+            g_vrPublishedRenderViews[eyeIndex] =
+                g_vrViews[eyeIndex];
+        }
+
+        g_vrPublishedRenderViewsValid = true;
+        g_vrPublishedRenderPoseNanoseconds =
+            VR_OpenXrClockNanoseconds();
+    }
+
+    const bool menuComfortMode =
+        Key_IsCatcherActive(
+            0,
+            0x10);
+
+    const bool quitConfirmationComfortMode =
+        menuComfortMode &&
+        VR_IsQuitConfirmationMenuActive();
+
+    const bool activePauseComfortMode =
+        menuComfortMode &&
+        !quitConfirmationComfortMode &&
+        clientUIActives[0].connectionState ==
+            CA_ACTIVE;
+
+    KisakCrash_SetStage(
+        "VR_Frame: OpenVR render eye targets");
+
+    for (std::uint32_t eyeIndex = 0u;
+         eyeIndex < kVrStereoEyeCount;
+         ++eyeIndex)
+    {
+        if (!VR_RenderOpenVrEye(
+                eyeIndex,
+                submissionViews,
+                submissionViewsValid,
+                menuComfortMode,
+                quitConfirmationComfortMode,
+                activePauseComfortMode))
+        {
+            return;
+        }
+    }
+
+    const vr::HmdMatrix34_t submissionHeadPose =
+        VR_OpenVrHeadMatrixFromViews(
+            submissionViews);
+
+    vr::VRTextureBounds_t bounds = {};
+    bounds.uMin = 0.0f;
+    bounds.vMin = 0.0f;
+    bounds.uMax = 1.0f;
+    bounds.vMax = 1.0f;
+
+    KisakCrash_SetStage(
+        "VR_Frame: OpenVR submit stereo textures");
+
+    bool submittedBothEyes = true;
+
+    for (std::uint32_t eyeIndex = 0u;
+         eyeIndex < kVrStereoEyeCount;
+         ++eyeIndex)
+    {
+        VrOpenVrEyeTarget& target =
+            g_vrOpenVrEyeTargets[eyeIndex];
+
+        vr::VRTextureWithPose_t texture = {};
+        texture.handle = target.texture.Get();
+        texture.eType =
+            vr::TextureType_DirectX;
+        texture.eColorSpace =
+            vr::ColorSpace_Auto;
+        texture.mDeviceToAbsoluteTracking =
+            submissionHeadPose;
+
+        const vr::EVRCompositorError submitResult =
+            g_vrOpenVrCompositor->Submit(
+                eyeIndex == 0u
+                    ? vr::Eye_Left
+                    : vr::Eye_Right,
+                &texture,
+                &bounds,
+                vr::Submit_TextureWithPose);
+
+        if (submitResult !=
+            vr::VRCompositorError_None)
+        {
+            Com_PrintWarning(
+                0,
+                "[VR][OPENVR] Submit failed for eye %u with "
+                "EVRCompositorError %d.\n",
+                eyeIndex,
+                static_cast<int>(submitResult));
+
+            submittedBothEyes = false;
+        }
+    }
+
+    g_vrOpenVrCompositor->PostPresentHandoff();
+
+    KisakCrash_SetStage(
+        "VR_Frame: OpenVR retire captured frame");
+    VR_PollRetiredSharedFrames();
+
+    if (submittedBothEyes &&
+        !g_vrOpenVrLoggedFirstSubmit)
+    {
+        Com_Printf(
+            0,
+            "[VR][OPENVR] V49 submitted the first stereo D3D11 "
+            "frame to SteamVR with explicit captured-pose "
+            "metadata.\n");
+
+        g_vrOpenVrLoggedFirstSubmit = true;
+    }
+
+    KisakCrash_SetVrState(
+        true,
+        true,
+        static_cast<int>(
+            g_vrSessionState),
+        static_cast<unsigned int>(
+            g_vrUploadedStereoSerial &
+            0xFFFFFFFFu),
+        g_vrCapturedStereoWidth,
+        g_vrCapturedStereoHeight);
+}
+
 void VR_Frame()
 {
+    KisakCrash_SetVrState(
+        g_vrInitialized,
+        g_vrSessionRunning,
+        static_cast<int>(g_vrSessionState),
+        static_cast<unsigned int>(
+            g_vrUploadedStereoSerial & 0xFFFFFFFFu),
+        g_vrCapturedStereoWidth,
+        g_vrCapturedStereoHeight);
+
+    if (g_vrRuntimeBackend ==
+        VrRuntimeBackend::OpenVr)
+    {
+        VR_FrameOpenVr();
+        return;
+    }
+
     if (!g_vrInitialized ||
         g_vrInstance == XR_NULL_HANDLE ||
         g_vrSession == XR_NULL_HANDLE)
@@ -14364,8 +16289,10 @@ void VR_Frame()
 
     // CL_InitRenderer rebuilds ScreenPlacement during a vid_restart.
     // Reassert the stereo-only UI width before the next game frame.
+    KisakCrash_SetStage("VR_Frame: update packed UI placement");
     VR_UpdatePackedUiScreenPlacement();
 
+    KisakCrash_SetStage("VR_Frame: xrPollEvent");
     VR_PollEvents();
 
     if (!g_vrSessionRunning ||
@@ -14419,6 +16346,7 @@ void VR_Frame()
     XrFrameWaitInfo waitInfo{XR_TYPE_FRAME_WAIT_INFO};
     XrFrameState frameState{XR_TYPE_FRAME_STATE};
 
+    KisakCrash_SetStage("VR_Frame: xrWaitFrame");
     XrResult result =
         xrWaitFrame(
             g_vrSession,
@@ -14436,6 +16364,7 @@ void VR_Frame()
 
     XrFrameBeginInfo beginInfo{XR_TYPE_FRAME_BEGIN_INFO};
 
+    KisakCrash_SetStage("VR_Frame: xrBeginFrame");
     result =
         xrBeginFrame(g_vrSession, &beginInfo);
 
@@ -14460,6 +16389,7 @@ void VR_Frame()
     const auto vrPerfRenderStart =
         VrPerfClock::now();
 
+    KisakCrash_SetStage("VR_Frame: render and composite eyes");
     if (frameState.shouldRender)
     {
         submittedProjectionLayer =
@@ -14536,6 +16466,7 @@ void VR_Frame()
     const auto vrPerfEndStart =
         VrPerfClock::now();
 
+    KisakCrash_SetStage("VR_Frame: xrEndFrame");
     result =
         xrEndFrame(g_vrSession, &endInfo);
 
@@ -14552,7 +16483,10 @@ void VR_Frame()
     // fences again so the D3D9 producer sees a free slot before the next
     // Com_Frame handoff. This lets a single queued capture survive a temporary
     // producer/consumer phase crossing instead of being overwritten.
+    KisakCrash_SetStage("VR_Frame: retire shared capture frames");
     VR_PollRetiredSharedFrames();
+
+    KisakCrash_SetStage("VR_Frame: performance diagnostics");
 
     const double vrPerfWaitMilliseconds =
         std::chrono::duration<double, std::milli>(
@@ -15040,13 +16974,24 @@ void VR_Frame()
         vrPerfGameplayPoseAgeMaximum = 0.0;
         vrPerfGameplayProducerIntervalMaximum = 0.0;
     }
+
+    KisakCrash_SetVrState(
+        g_vrInitialized,
+        g_vrSessionRunning,
+        static_cast<int>(g_vrSessionState),
+        static_cast<unsigned int>(
+            g_vrUploadedStereoSerial & 0xFFFFFFFFu),
+        g_vrCapturedStereoWidth,
+        g_vrCapturedStereoHeight);
 }
 
 void VR_Shutdown()
 {
+    KisakCrash_SetStage("shutdown: VR runtime resources");
     VR_ResetHeadOrientation();
     if (g_vrInstance == XR_NULL_HANDLE &&
-        g_vrSession == XR_NULL_HANDLE)
+        g_vrSession == XR_NULL_HANDLE &&
+        !g_vrOpenVrInitialized)
     {
         VR_ResetState();
         return;
@@ -15054,11 +16999,27 @@ void VR_Shutdown()
 
     Com_Printf(
         0,
-        "[VR] Shutting down OpenXR D3D11 subsystem...\n");
+        "[VR] Shutting down %s D3D11 subsystem...\n",
+        VR_RuntimeBackendName());
 
     VR_D3D9CaptureSetEnabled(false);
 
     g_vrSessionRunning = false;
+
+    if (g_vrOpenVrInitialized)
+    {
+        if (g_vrOpenVrCompositor != nullptr)
+        {
+            g_vrOpenVrCompositor
+                ->ClearLastSubmittedFrame();
+        }
+
+        vr::VR_Shutdown();
+        g_vrOpenVrCompositor = nullptr;
+        g_vrOpenVrSystem = nullptr;
+        g_vrOpenVrInitialized = false;
+        g_vrOpenVrRenderPoses = {};
+    }
 
     VR_DestroyControllerInput();
 
@@ -15097,6 +17058,15 @@ void VR_Shutdown()
         g_vrD3dContext->Flush();
     }
 
+    for (VrOpenVrEyeTarget& target :
+         g_vrOpenVrEyeTargets)
+    {
+        target.renderTargetView.Reset();
+        target.texture.Reset();
+        target.width = 0;
+        target.height = 0;
+    }
+
     g_vrCapturedStereoView.Reset();
     g_vrCapturedStereoTexture.Reset();
 
@@ -15128,6 +17098,7 @@ void VR_Shutdown()
     g_vrBlitSampler.Reset();
     g_vrMenuBlitVertexBuffer.Reset();
     g_vrPauseMenuBlitVertexBuffer.Reset();
+    g_vrQuitConfirmationBlitVertexBuffer.Reset();
     g_vrLoggedMenuComfortScreen = false;
 
     for (auto& vertexBuffer :
@@ -15214,12 +17185,17 @@ bool VR_IsInitialized()
     return g_vrInitialized;
 }
 
+const char* VR_GetActiveBackendName()
+{
+    return VR_RuntimeBackendName();
+}
+
 const char* VR_GetLastStartupError()
 {
     if (g_vrLastStartupError[0] == '\0')
     {
         return
-            "OpenXR initialization failed without a runtime error code. "
+            "VR initialization failed without a runtime error code. "
             "Check OpenXR-Startup.log and main\\console.log.";
     }
 

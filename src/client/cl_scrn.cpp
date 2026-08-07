@@ -15,6 +15,7 @@
 #include <win32/win_local.h>
 #include <qcommon/cmd.h>
 #include <gfx_d3d/r_screenshot.h>
+#include <vr/vr_openxr.h>
 
 const char *WeaponStateNames_51[27] =
 {
@@ -96,7 +97,12 @@ int __cdecl CL_CGameRendering()
     DemoType = CL_GetDemoType();
     if (!CG_DrawActiveFrame(0, clients[0].serverTime, DemoType, CUBEMAPSHOT_NONE, 0, animFrametime))
         return 0;
-    if ((clientUIActives[0].keyCatchers & 0x10) != 0)
+    // KISAK_SP_VR_QUIT_CONFIRMATION_MONO_V45
+    // The final shared command list below already paints active UI.  Do not
+    // also attach a nested quit confirmation to both stereo view lists: the
+    // two passes use different viewports and become visibly separated in VR.
+    if ((clientUIActives[0].keyCatchers & 0x10) != 0 &&
+        !VR_IsQuitConfirmationMenuActive())
         UI_Refresh();
     R_AddCmdEndOfList();
     return 1;
@@ -196,6 +202,7 @@ void __cdecl SCR_DrawScreenField(int refreshedUI)
         }
     }
 }
+
 
 float __cdecl CL_GetMenuBlurRadius(int localClientNum)
 {
@@ -455,4 +462,3 @@ LABEL_20:
             displayWidth - 2);
     }
 }
-

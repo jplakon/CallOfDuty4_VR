@@ -1,24 +1,27 @@
 #pragma once
 
-// Initializes OpenXR, creates a dedicated D3D11 device, creates an OpenXR
-// session, and prepares one color swapchain for each eye.
+// Initializes OpenXR first and automatically falls back to SteamVR's 32-bit
+// OpenVR client when no compatible 32-bit OpenXR runtime is available.
 //
 // The normal Call of Duty Direct3D 9 renderer remains untouched.
 bool VR_Init();
 
-// Returns the last human-readable OpenXR initialization failure. This remains
+// Returns the last human-readable VR initialization failure. This remains
 // valid after VR_Init returns false so WinMain can stop with a useful message.
 const char* VR_GetLastStartupError();
 
-// Polls OpenXR events and, while the session is running, renders a stereo, head-tracked cube and floor grid
-// to the headset. Call once per game frame.
+// Polls the active runtime and submits one stereo frame. Call once per game
+// frame.
 void VR_Frame();
 
-// Releases swapchains, session, D3D11 resources, and the OpenXR instance.
+// Releases the active runtime and its D3D11 resources.
 void VR_Shutdown();
 
-// Returns true after OpenXR and its D3D11 session have initialized.
+// Returns true after either backend and its D3D11 compositor have initialized.
 bool VR_IsInitialized();
+
+// Returns "OpenXR", "OpenVR/SteamVR", or "none".
+const char* VR_GetActiveBackendName();
 
 // KISAK_SP_VR_CAPTURE_POSE_METADATA_V32
 // Associates the current OpenXR render views with the exact legacy renderer
@@ -29,6 +32,12 @@ void VR_RecordRenderFramePose(
 // High-volume controller, hand-model, and retired mission diagnostics are
 // release-disabled unless KISAK_VR_VERBOSE_DIAGNOSTICS=1 is set.
 bool VR_VerboseDiagnosticsEnabled();
+
+// KISAK_SP_VR_QUIT_CONFIRMATION_MONO_V45
+// True while the top UI menu is a quit/leave-game confirmation.  These
+// nested dialogs are painted as one full packed 2D canvas rather than as
+// ordinary pause UI inside a stereo-eye command list.
+bool VR_IsQuitConfirmationMenuActive();
 
 // KISAK_SP_VR_FIXED_SCOPED_TURRET_VIEW_FIX_V1
 // Publishes whether CoD4 currently has the player locked to a fixed weapon
@@ -234,9 +243,12 @@ bool VR_GetHmdOrientedMovement(
 bool VR_TransferHmdYawToBody(
     float* bodyYawDeltaDegrees);
 
-// Consumes one latched 45-degree right-stick snap turn.
-// Positive CoD yaw turns left, so right-stick right returns -45 degrees.
-bool VR_ConsumeSnapTurn(
+// Returns this client frame's configured right-stick turn delta. Snap mode
+// preserves the existing latched 45-degree turn. Smooth mode applies an
+// analog degrees-per-second delta using elapsedSeconds. Positive CoD yaw
+// turns left, so right-stick right returns a negative delta.
+bool VR_GetTurnYawDelta(
+    float elapsedSeconds,
     float* yawDeltaDegrees);
 
 // Returns the first Touch gameplay-control set:
@@ -293,12 +305,13 @@ bool VR_GetLocomotionCombatButtons(
     bool* meleeHeld,
     bool* stanceHeld);
 
-// Consumes one latched vertical right-stick gesture.  Up requests the native
-// jump/stand path and down requests crouch.  Neutral re-arms the gesture;
-// horizontal stick dominance remains reserved for snap turning.
+// Consumes one latched vertical right-stick gesture.  The client maps up to
+// one higher stance (or jump while already standing) and down to one lower
+// stance.  Neutral re-arms the gesture; horizontal stick dominance remains
+// reserved for configured turning.
 bool VR_ConsumeRightStickVerticalActions(
-    bool* jumpPressed,
-    bool* crouchPressed);
+    bool* upPressed,
+    bool* downPressed);
 
 // Returns weapon-utility controls:
 // right grip = held offhand input, left Y = held utility input.

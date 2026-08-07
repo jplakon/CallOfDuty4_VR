@@ -1,6 +1,6 @@
 # Release checklist
 
-This checklist is for `v0.10.0-beta.2`.
+This checklist is for `v0.10.0-beta.3`.
 
 ## Documentation blockers
 
@@ -47,8 +47,10 @@ This checklist is for `v0.10.0-beta.2`.
 - Start a new campaign.
 - Test save/resume and at least one checkpoint reload.
 - Test ordinary rifles, grenades, use, reload, sprint, crouch/prone, and melee.
-- Test right-stick up jump/stand, right-stick down crouch, horizontal snap
-  turning, neutral re-arming, and right-stick-click melee.
+- Test both 45-degree snap and analog smooth turning, partial/full stick
+  deflection, configured speed, neutral behavior, and right-stick-click melee.
+- Test down stand -> crouch -> prone and up prone -> crouch -> stand -> jump,
+  returning the stick to neutral between every stance step.
 - Test ejecting, hip-drawing, rotating, inserting, and dropping a physical
   magazine on supported rifles, SMGs, and pistols.
 - Test the tracked left hand in free, rifle-grip, and magazine-grip states.
@@ -67,13 +69,17 @@ This checklist is for `v0.10.0-beta.2`.
 - Test the Airlift helicopter sequence and other long looping sounds for
   scratchy, metallic, doubled, or corrupted playback.
 - Confirm the normal launcher hides developer errors and the red FPS marker.
+- Confirm frontend and active-mission quit confirmations appear once, centered,
+  and monoscopic in the headset.
+- Run the intentional crash-recorder self-test, collect its Desktop ZIP, and
+  confirm the report, minidump, and system summary are present.
 - Confirm shadows can be toggled in `VR-Settings.bat`.
 - Confirm the documented Death From Above skip method reaches the next mission.
 
 ## Tag and package
 
-- Create annotated tag `v0.10.0-beta.2` only after the cumulative frame, camera,
-  audio, tracked-hand, reload, and controller state is validated.
+- Create annotated tag `v0.10.0-beta.3` only after the cumulative menu, turning, stance,
+  crash-diagnostic, frame, camera, audio, tracked-hand, and reload state is validated.
 - Run `tools/package_release.py`.
 - The packager must refuse to run if any documentation placeholder or
   controller-map `VERIFY` marker remains.
@@ -82,8 +88,9 @@ This checklist is for `v0.10.0-beta.2`.
 - Confirm `SOURCE.txt` points to the exact tag and commit.
 - Confirm `SHA256SUMS.txt` matches all package files.
 - Confirm the package contains only the allowlisted Steamworks, Bink, and
-  Miles runtime files from the KisakCOD dependency tree, and no `.pdb`, `.iwd`,
-  `.ff`, save, log, or original game executable.
+  Miles runtime files from the KisakCOD dependency tree, the corrected crash
+  collector, and required OpenVR license; confirm it contains no `.pdb`, `.iwd`,
+  `.ff`, save, log, dump, or original game executable.
 
 ## Publish
 

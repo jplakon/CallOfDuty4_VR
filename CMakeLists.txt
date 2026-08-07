@@ -51,6 +51,15 @@ set_property(
 )
 # KISAK_OPENXR_SDK_END
 
+# KISAK_SP_VR_OPENVR_FALLBACK_V49
+# Build Valve's pinned public x86 client shim. It dynamically locates and
+# loads SteamVR's own 32-bit vrclient.dll when OpenXR is unavailable.
+add_subdirectory(
+    ${DEPS_DIR}/openvr
+    ${CMAKE_BINARY_DIR}/openvr
+    EXCLUDE_FROM_ALL
+)
+
 # Set the output directories
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${BIN_DIR})
 

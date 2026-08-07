@@ -14,12 +14,13 @@ copy of the original game.
 
 ## Current status
 
-The current public beta is `v0.10.0-beta.2`.
+The current public beta is `v0.10.0-beta.3`.
 
-This update substantially improves frame delivery and head-turn stability,
-keeps the VR horizon level during game-authored camera motion, fixes corrupted
-looping audio, and adds right-stick jump/crouch gestures. It includes the
-tracked-hand and physical-reloading features introduced in `v0.10.0-beta.1`.
+This update fixes frontend and active-mission quit confirmations in VR, adds
+a choice between 45-degree snap and analog smooth turning, and completes the
+right-stick stand/crouch/prone stance ladder. It also includes crash-report
+collection while retaining beta.2's frame, horizon, audio, tracked-hand, and
+physical-reloading improvements.
 
 - The single-player campaign is playable from beginning to end when
   **Death From Above** is skipped.

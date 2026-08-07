@@ -26,6 +26,12 @@ set "KISAK_VR_BRIGHTNESS=1.00"
 rem High-volume retired mission/controller traces. Leave off for normal play.
 set "KISAK_VR_VERBOSE_DIAGNOSTICS=0"
 
+rem KISAK_SP_VR_SMOOTH_TURN_OPTION_V50
+rem Right-stick turning: snap preserves the existing 45-degree comfort turn;
+rem smooth applies analog continuous turning. Restart after changing either.
+set "KISAK_VR_TURN_MODE=snap"
+set "KISAK_VR_SMOOTH_TURN_SPEED=120"
+
 rem Physical magazines for supported rifles, SMGs, and pistols.
 rem Right A ejects; squeeze at the left hip draws; release at the magazine
 rem well inserts. Set to 0 to make right A use COD4's native reload.

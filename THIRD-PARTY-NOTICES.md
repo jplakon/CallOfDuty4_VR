@@ -17,6 +17,12 @@ package.
 Tracy Profiler is distributed under the 3-clause BSD license. Its license text
 is included in each binary package.
 
+The experimental SteamVR fallback vendors Valve OpenVR SDK 2.15.6 at commit
+`0924064316de3effbcd1acf1e309182a2deb1c05` and statically links its public
+x86 client shim. The shim loads the user's installed SteamVR `vrclient.dll` at
+runtime; no SteamVR binary is redistributed. Valve's BSD-style OpenVR license
+is included in each binary package.
+
 The retained audio-diagnostic path uses `dr_mp3` 0.7.4 from David Reid's
 `dr_libs` project. The source header includes its public-domain dedication and
 alternative MIT No Attribution license statement.

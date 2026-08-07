@@ -1,5 +1,36 @@
 # Changelog
 
+## v0.10.0-beta.3
+
+VR interface, turning, stance-control, and diagnostic update over
+`v0.10.0-beta.2`.
+
+### VR menus
+
+- Renders frontend quit confirmations once as a centered monoscopic dialog
+  instead of attaching separated copies to both stereo eye command lists
+- Applies the same correction to the active-mission Pause -> Quit flow
+
+### Turning and stance controls
+
+- Adds configurable `snap` and `smooth` right-stick turn modes while preserving
+  45-degree snap as the default
+- Adds analog smooth-turn speed control from 30 through 360 degrees per second,
+  proportional stick response, deadzone handling, and hitch rotation limiting
+- Routes vertical right-stick gestures through COD4's native stance state:
+  down lowers stand -> crouch -> prone, while up raises prone -> crouch -> stand
+  and jumps only when already standing
+- Requires a return to neutral between stance steps and preserves right-stick
+  click melee plus right B's original tap/hold behavior
+
+### Diagnostics and compatibility
+
+- Adds early main/worker-thread crash recording, minidumps, session-stage
+  markers, and a corrected crash-report collector
+- Adds an experimental statically linked x86 OpenVR client fallback when a
+  usable 32-bit OpenXR runtime is unavailable; normal gameplay remains OpenXR
+  first
+
 ## v0.10.0-beta.2
 
 Frame-pacing, comfort, audio, and controls update over `v0.10.0-beta.1`.

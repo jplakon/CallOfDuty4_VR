@@ -30,6 +30,8 @@ PACKAGE_TEMPLATES = (
     "Launch-KisakCOD-VR.bat",
     "Launch-KisakCOD-VR-Diagnostics.bat",
     "VR-Settings.bat",
+    "Collect-KisakCOD-VR-Crash-Report.bat",
+    "Collect-KisakCOD-VR-Crash-Report.ps1",
     "README-FIRST.txt",
     "licenses/Tracy-LICENSE.txt",
 )
@@ -235,6 +237,9 @@ def main() -> int:
     )
     payload["licenses/OpenXR-SDK-Source-LICENSE.txt"] = read_required(
         root / "deps" / "openxr-sdk-source" / "LICENSE"
+    )
+    payload["licenses/OpenVR-LICENSE.txt"] = read_required(
+        root / "deps" / "openvr" / "LICENSE"
     )
 
     source_text = f"""KisakCOD VR v{args.version}
