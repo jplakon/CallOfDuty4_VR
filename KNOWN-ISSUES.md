@@ -10,11 +10,18 @@ This list applies to `v0.10.0-beta.3`.
 ## Hardware and runtimes
 
 - The primary tested configuration is Meta Quest 3 through Virtual Desktop's
-  OpenXR runtime.
+  VDXR OpenXR runtime. VDXR is recommended for Quest headsets.
 - Other OpenXR headsets, controller profiles, and runtimes are experimental.
-- The experimental 32-bit SteamVR/OpenVR fallback does not yet map motion
-  controllers and may show projection/pose distortion or incorrect tilt on
-  some systems. Use a working OpenXR runtime for normal play.
+- Meta Quest Link's 32-bit OpenXR runtime can crash inside `xrCreateSession`
+  after D3D11 initialization. Because this terminates the process,
+  `KISAK_VR_BACKEND=auto` cannot recover by falling back to OpenVR. A
+  per-launch `XR_RUNTIME_JSON` override to Virtual Desktop's 32-bit VDXR
+  manifest (`C:\Program Files\Virtual Desktop Streamer\OpenXR\virtualdesktop-openxr-32.json`)
+  is documented in `INSTALL.md`.
+- The experimental 32-bit SteamVR/OpenVR fallback currently lacks
+  motion-controller input. It provides headset tracking and stereo rendering
+  only, and may show projection/pose distortion or incorrect tilt on some
+  systems. Use a working OpenXR runtime for normal play.
 - The default `6016x2688` / output-scale `1.0` mode is demanding. The supported
   lower preset is `4768x2016` / output-scale `0.75`.
 - `3072x1536` is incompatible with the packed renderer because it cannot hold

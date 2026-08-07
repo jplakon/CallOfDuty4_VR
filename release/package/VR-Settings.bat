@@ -2,6 +2,14 @@
 rem KisakCOD VR settings
 rem Fully close and restart the game after editing this file.
 
+rem Runtime backend selection:
+rem   auto   = normal behavior; use OpenXR first and OpenVR only when no
+rem            compatible 32-bit OpenXR runtime can be enumerated.
+rem   openxr = force OpenXR (VDXR or Pimax OpenXR).
+rem   openvr = force the experimental 32-bit SteamVR/OpenVR fallback.
+rem OpenVR currently has no motion-controller input.
+set "KISAK_VR_BACKEND=auto"
+
 rem Current Quest 3 / Virtual Desktop native packed mode.
 rem Valid lower preset: use VR_CUSTOM_MODE=4768x2016 together with
 rem KISAK_VR_OUTPUT_SCALE=0.75 below. Do not use the obsolete 3072x1536 mode;

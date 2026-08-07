@@ -11,10 +11,13 @@ other Call of Duty game data.
 This beta is tested primarily with:
 
 - Meta Quest 3
-- Virtual Desktop using its OpenXR runtime
+- Virtual Desktop using VDXR, its OpenXR runtime
 - NVIDIA RTX 3080 Ti
 
-Other OpenXR configurations may work but are experimental.
+For Quest headsets, VDXR is the recommended and known-working runtime. Meta
+Quest Link's 32-bit OpenXR runtime can crash inside `xrCreateSession` on
+affected systems. Other headset and runtime configurations may work but are
+experimental.
 
 ## Installation
 
@@ -23,7 +26,8 @@ Other OpenXR configurations may work but are experimental.
 3. Choose **Manage → Browse local files**.
 4. Confirm that the opened folder contains `iw3sp.exe` and a `main` folder.
 5. Extract every file from the KisakCOD VR ZIP directly into this folder.
-6. Start Virtual Desktop, SteamVR, Meta Quest Link, or another OpenXR runtime.
+6. Start the intended runtime. Quest users should use Virtual Desktop with
+   VDXR; the SteamVR/OpenVR backend is experimental.
 7. Double-click `Launch-KisakCOD-VR.bat`.
 
 The mod executable must remain beside `iw3sp.exe`. Do not replace or rename
@@ -34,6 +38,7 @@ The mod executable must remain beside `iw3sp.exe`. Do not replace or rename
 Open `VR-Settings.bat` in Notepad. The supplied defaults reproduce the
 developer's current Quest 3 configuration:
 
+- Automatic backend selection (`auto`)
 - Render/window mode: `6016x2688`
 - GPU bridge enabled
 - Native output scale
@@ -75,6 +80,28 @@ set "KISAK_VR_SMOOTH_TURN_SPEED=120"
 
 The smooth-turn speed is full-stick degrees per second and accepts values from
 30 through 360. Fully close and restart COD4 after changing either value.
+
+### Runtime backend
+
+The default setting is:
+
+```bat
+set "KISAK_VR_BACKEND=auto"
+```
+
+Available values are:
+
+- `auto` keeps the normal behavior: OpenXR remains primary, with the
+  experimental 32-bit SteamVR/OpenVR client used only when no compatible
+  32-bit OpenXR runtime can be enumerated.
+- `openxr` forces OpenXR. Use this with Virtual Desktop's VDXR or Pimax
+  OpenXR.
+- `openvr` forces the experimental 32-bit SteamVR/OpenVR fallback. It currently
+  provides headset tracking and stereo rendering but no motion-controller
+  input.
+
+Changing this setting does not make SteamVR a 32-bit OpenXR runtime. Fully
+close and restart COD4 after changing it.
 
 The HUD controls are also in `VR-Settings.bat`. Lowering
 `KISAK_VR_HUD_SAFE_X` moves the left-side ammo/action information farther
@@ -135,8 +162,27 @@ runtime.
 
 ### The game opens but no image appears in the headset
 
-Start the intended OpenXR runtime first and make it the active system OpenXR
-runtime. Then restart both the runtime and the game.
+With `auto` or `openxr`, start the intended OpenXR runtime first and make it the
+active system OpenXR runtime. With `openvr`, start SteamVR and connect the
+headset before launching the mod. Then restart both the runtime and the game.
+
+### Meta Quest Link crashes during OpenXR startup
+
+Meta's 32-bit OpenXR runtime can crash inside `xrCreateSession` after the mod
+has successfully created its D3D11 device. Because the runtime terminates the
+process instead of returning an OpenXR error, `KISAK_VR_BACKEND=auto` cannot
+continue to the OpenVR fallback.
+
+For Quest headsets, use Virtual Desktop with VDXR. To select VDXR only for
+KisakCOD VR without changing the system-wide OpenXR runtime, add this to
+`VR-Settings.bat` using Virtual Desktop's default installation path:
+
+```bat
+set "XR_RUNTIME_JSON=C:\Program Files\Virtual Desktop Streamer\OpenXR\virtualdesktop-openxr-32.json"
+```
+
+Leave `KISAK_VR_BACKEND=auto` selected. Fully close COD4 and restart it through
+`Launch-KisakCOD-VR.bat`.
 
 ### Performance is poor
 
