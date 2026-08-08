@@ -872,6 +872,325 @@ void __cdecl CalcMuzzlePoints(const gentity_s *ent, weaponParms *wp)
 #endif
 }
 
+#ifdef KISAK_SP
+// KISAK_SP_VR_MANUAL_GRENADE_THROW_V53
+// A controller can reach through thin world geometry.  Clamp the physical
+// release point to a normal arm-length segment from the authoritative player
+// view, then stop just before the first obstruction on that segment.
+static void VR_ClampManualGrenadeStart(
+    const gentity_s* ent,
+    float start[3])
+{
+    float viewOrigin[3] = {};
+
+    G_GetPlayerViewOrigin(
+        &ent->client->ps,
+        viewOrigin);
+
+    float viewToHand[3] = {
+        start[0] - viewOrigin[0],
+        start[1] - viewOrigin[1],
+        start[2] - viewOrigin[2],
+    };
+
+    float viewToHandDistance =
+        Vec3Length(viewToHand);
+
+    constexpr float maximumReach = 64.0f;
+
+    if (viewToHandDistance > maximumReach)
+    {
+        const float reachScale =
+            maximumReach /
+            viewToHandDistance;
+
+        start[0] =
+            viewOrigin[0] +
+            viewToHand[0] * reachScale;
+
+        start[1] =
+            viewOrigin[1] +
+            viewToHand[1] * reachScale;
+
+        start[2] =
+            viewOrigin[2] +
+            viewToHand[2] * reachScale;
+
+        viewToHand[0] = start[0] - viewOrigin[0];
+        viewToHand[1] = start[1] - viewOrigin[1];
+        viewToHand[2] = start[2] - viewOrigin[2];
+
+        viewToHandDistance = maximumReach;
+    }
+
+    trace_t releaseTrace = {};
+
+    G_LocationalTrace(
+        &releaseTrace,
+        viewOrigin,
+        start,
+        ent->s.number,
+        0x2806891,
+        bulletPriorityMap);
+
+    if (releaseTrace.startsolid)
+    {
+        start[0] = viewOrigin[0];
+        start[1] = viewOrigin[1];
+        start[2] = viewOrigin[2];
+    }
+    else if (releaseTrace.fraction < 1.0f)
+    {
+        const float surfacePaddingFraction =
+            viewToHandDistance > 0.001f
+                ? 2.0f / viewToHandDistance
+                : 0.0f;
+
+        float safeFraction =
+            releaseTrace.fraction -
+            surfacePaddingFraction;
+
+        if (safeFraction < 0.0f)
+        {
+            safeFraction = 0.0f;
+        }
+
+        start[0] =
+            viewOrigin[0] +
+            viewToHand[0] * safeFraction;
+
+        start[1] =
+            viewOrigin[1] +
+            viewToHand[1] * safeFraction;
+
+        start[2] =
+            viewOrigin[2] +
+            viewToHand[2] * safeFraction;
+    }
+}
+
+
+// KISAK_SP_VR_MANUAL_GRENADE_RELEASE_CALIBRATION_V54
+// Controller velocity is measured in real-world inches per second. COD4's
+// stock grenade assets use deliberately exaggerated projectile speeds, so a
+// raw one-to-one velocity override turns a natural VR throw into a short drop.
+// Preserve the physical horizontal direction and strength variation while
+// mapping a real throw onto the selected grenade's native launch-speed scale.
+// A genuinely still release remains an intentional drop.
+static void VR_BuildManualGrenadeLaunchVelocity(
+    const WeaponDef* weaponDef,
+    const float physicalVelocity[3],
+    const float fallbackForward[3],
+    float launchVelocity[3],
+    bool* deliberateDrop,
+    bool* usedFallbackDirection,
+    float* normalizedStrength)
+{
+    if (weaponDef == nullptr ||
+        physicalVelocity == nullptr ||
+        fallbackForward == nullptr ||
+        launchVelocity == nullptr ||
+        deliberateDrop == nullptr ||
+        usedFallbackDirection == nullptr ||
+        normalizedStrength == nullptr)
+    {
+        return;
+    }
+
+    constexpr float deliberateDropSpeed = 35.0f;
+    constexpr float fullStrengthHandSpeed = 260.0f;
+    constexpr float stableHorizontalDirectionSpeed = 45.0f;
+
+    const float physicalSpeed =
+        Vec3Length(physicalVelocity);
+
+    *deliberateDrop =
+        physicalSpeed < deliberateDropSpeed;
+
+    *usedFallbackDirection = false;
+    *normalizedStrength = 0.0f;
+
+    if (*deliberateDrop)
+    {
+        launchVelocity[0] = physicalVelocity[0];
+        launchVelocity[1] = physicalVelocity[1];
+        launchVelocity[2] = physicalVelocity[2];
+        return;
+    }
+
+    float strength =
+        (physicalSpeed - deliberateDropSpeed) /
+        (fullStrengthHandSpeed - deliberateDropSpeed);
+
+    if (strength < 0.0f)
+    {
+        strength = 0.0f;
+    }
+    else if (strength > 1.0f)
+    {
+        strength = 1.0f;
+    }
+
+    *normalizedStrength = strength;
+
+    float horizontalDirection[2] = {
+        physicalVelocity[0],
+        physicalVelocity[1],
+    };
+
+    float horizontalDirectionLength =
+        Vec2Length(horizontalDirection);
+
+    if (horizontalDirectionLength <
+        stableHorizontalDirectionSpeed)
+    {
+        horizontalDirection[0] = fallbackForward[0];
+        horizontalDirection[1] = fallbackForward[1];
+        horizontalDirectionLength =
+            Vec2Length(horizontalDirection);
+        *usedFallbackDirection = true;
+    }
+
+    if (horizontalDirectionLength < 0.001f)
+    {
+        horizontalDirection[0] = 1.0f;
+        horizontalDirection[1] = 0.0f;
+        horizontalDirectionLength = 1.0f;
+        *usedFallbackDirection = true;
+    }
+
+    horizontalDirection[0] /=
+        horizontalDirectionLength;
+
+    horizontalDirection[1] /=
+        horizontalDirectionLength;
+
+    float nativeHorizontalSpeed =
+        static_cast<float>(
+            weaponDef->iProjectileSpeed);
+
+    if (weaponDef->iProjectileSpeedForward > 0)
+    {
+        nativeHorizontalSpeed +=
+            static_cast<float>(
+                weaponDef->iProjectileSpeedForward);
+    }
+
+    if (nativeHorizontalSpeed < 1.0f)
+    {
+        // A player-thrown grenade asset should always configure this, but a
+        // safe stock-like fallback prevents a malformed mission asset from
+        // reverting to V53's zero-distance drop.
+        nativeHorizontalSpeed = 700.0f;
+    }
+
+    const float horizontalLaunchSpeed =
+        nativeHorizontalSpeed *
+        (0.70f + 0.45f * strength);
+
+    launchVelocity[0] =
+        horizontalDirection[0] *
+        horizontalLaunchSpeed;
+
+    launchVelocity[1] =
+        horizontalDirection[1] *
+        horizontalLaunchSpeed;
+
+    float nativeUpSpeed =
+        static_cast<float>(
+            weaponDef->iProjectileSpeedUp);
+
+    if (nativeUpSpeed < 0.0f)
+    {
+        nativeUpSpeed = 0.0f;
+    }
+
+    float verticalLaunchSpeed =
+        nativeUpSpeed +
+        physicalVelocity[2] * 0.65f;
+
+    float minimumArcSpeed =
+        nativeUpSpeed * 0.35f;
+
+    if (minimumArcSpeed < 80.0f)
+    {
+        minimumArcSpeed = 80.0f;
+    }
+
+    float maximumArcSpeed =
+        nativeUpSpeed +
+        nativeHorizontalSpeed * 0.55f;
+
+    if (maximumArcSpeed < 400.0f)
+    {
+        maximumArcSpeed = 400.0f;
+    }
+
+    if (verticalLaunchSpeed < minimumArcSpeed)
+    {
+        verticalLaunchSpeed = minimumArcSpeed;
+    }
+    else if (verticalLaunchSpeed > maximumArcSpeed)
+    {
+        verticalLaunchSpeed = maximumArcSpeed;
+    }
+
+    launchVelocity[2] =
+        verticalLaunchSpeed;
+}
+
+
+static gentity_s* VR_ThrowManualGrenade(
+    gentity_s* ent,
+    const uint32_t grenadeWeaponIndex,
+    const uint8_t grenadeModel,
+    const int fuseTimeMilliseconds,
+    float start[3],
+    float velocity[3])
+{
+    gentity_s* grenade =
+        G_FireGrenade(
+            ent,
+            start,
+            velocity,
+            grenadeWeaponIndex,
+            grenadeModel,
+            1,
+            fuseTimeMilliseconds);
+
+    const float throwSpeed =
+        Vec3Length(velocity);
+
+    if (throwSpeed > 0.001f)
+    {
+        float throwDirection[3] = {
+            velocity[0],
+            velocity[1],
+            velocity[2],
+        };
+
+        Vec3Scale(
+            throwDirection,
+            1.0f / throwSpeed,
+            throwDirection);
+
+        const float inheritedPlayerSpeed =
+            Vec3Dot(
+                ent->client->ps.velocity,
+                throwDirection);
+
+        Vec3Mad(
+            grenade->s.lerp.pos.trDelta,
+            inheritedPlayerSpeed,
+            throwDirection,
+            grenade->s.lerp.pos.trDelta);
+    }
+
+    return grenade;
+}
+#endif
+
+
 void __cdecl G_UseOffHand(gentity_s *ent)
 {
     weaponParms wp; // [esp+0h] [ebp-40h] BYREF
@@ -884,6 +1203,99 @@ void __cdecl G_UseOffHand(gentity_s *ent)
     if (wp.weapDef->weapType != WEAPTYPE_GRENADE)
         MyAssertHandler(".\\game\\g_weapon.cpp", 550, 0, "%s", "wp.weapDef->weapType == WEAPTYPE_GRENADE");
     CalcMuzzlePoints(ent, &wp);
+
+#ifdef KISAK_SP
+    float manualReleaseOrigin[3] = {};
+    float manualPhysicalVelocity[3] = {};
+    float manualReleaseFallbackForward[3] = {};
+    unsigned int manualVelocitySampleAgeMilliseconds = 0u;
+    unsigned int manualReleaseAgeMilliseconds = 0u;
+
+    if (VR_ConsumeManualGrenadeThrow(
+            ent->client->ps.offHandIndex,
+            manualReleaseOrigin,
+            manualPhysicalVelocity,
+            manualReleaseFallbackForward,
+            &manualVelocitySampleAgeMilliseconds,
+            &manualReleaseAgeMilliseconds))
+    {
+        VR_ClampManualGrenadeStart(
+            ent,
+            manualReleaseOrigin);
+
+        const int remainingFuseMilliseconds =
+            ent->client->ps.grenadeTimeLeft;
+
+        const int projectileFuseMilliseconds =
+            remainingFuseMilliseconds > 0
+                ? remainingFuseMilliseconds
+                : wp.weapDef->fuseTime;
+
+        float calibratedLaunchVelocity[3] = {};
+        bool deliberateDrop = false;
+        bool usedFallbackDirection = false;
+        float normalizedStrength = 0.0f;
+
+        VR_BuildManualGrenadeLaunchVelocity(
+            wp.weapDef,
+            manualPhysicalVelocity,
+            manualReleaseFallbackForward,
+            calibratedLaunchVelocity,
+            &deliberateDrop,
+            &usedFallbackDirection,
+            &normalizedStrength);
+
+        gentity_s* grenade =
+            VR_ThrowManualGrenade(
+                ent,
+                ent->client->ps.offHandIndex,
+                ent->client->ps.weaponmodels[
+                    ent->client->ps.offHandIndex],
+                projectileFuseMilliseconds,
+                manualReleaseOrigin,
+                calibratedLaunchVelocity);
+
+        Com_Printf(
+            0,
+            "[VR][GRENADE] Launched weapon %u from %.2f %.2f %.2f "
+            "after %u ms; selected hand velocity %.2f %.2f %.2f "
+            "(sample age %u ms, speed %.2f); calibrated launch "
+            "%.2f %.2f %.2f (speed %.2f, strength %.2f, direction %s, "
+            "deliberate drop %s); native speeds %d/%d/%d; resulting "
+            "velocity %.2f %.2f %.2f; fuse %d ms.\n",
+            ent->client->ps.offHandIndex,
+            manualReleaseOrigin[0],
+            manualReleaseOrigin[1],
+            manualReleaseOrigin[2],
+            manualReleaseAgeMilliseconds,
+            manualPhysicalVelocity[0],
+            manualPhysicalVelocity[1],
+            manualPhysicalVelocity[2],
+            manualVelocitySampleAgeMilliseconds,
+            Vec3Length(manualPhysicalVelocity),
+            calibratedLaunchVelocity[0],
+            calibratedLaunchVelocity[1],
+            calibratedLaunchVelocity[2],
+            Vec3Length(calibratedLaunchVelocity),
+            normalizedStrength,
+            usedFallbackDirection
+                ? "view-forward fallback"
+                : "physical horizontal",
+            deliberateDrop
+                ? "yes"
+                : "no",
+            wp.weapDef->iProjectileSpeed,
+            wp.weapDef->iProjectileSpeedForward,
+            wp.weapDef->iProjectileSpeedUp,
+            grenade->s.lerp.pos.trDelta[0],
+            grenade->s.lerp.pos.trDelta[1],
+            grenade->s.lerp.pos.trDelta[2],
+            projectileFuseMilliseconds);
+
+        return;
+    }
+#endif
+
     Weapon_Throw_Grenade(
         ent,
         ent->client->ps.offHandIndex,
@@ -1073,4 +1485,3 @@ void __cdecl G_SetEquippedOffHand(int clientNum, uint32_t offHandIndex)
     SV_GameSendServerCommand(clientNum, va("offhand %i", offHandIndex));
 #endif
 }
-

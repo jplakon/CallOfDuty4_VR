@@ -158,6 +158,7 @@ if "%KISAK_VR_DIAGNOSTICS%"=="1" (
   +set r_smp_backend 1 ^
   +set r_smp_worker 1 ^
   +set cg_gun_z 36 ^
+  +set mis_cheat 1 ^
   +set sm_enable 1 ^
   +set sm_sunEnable 1 ^
   +set sm_spotEnable 1 ^

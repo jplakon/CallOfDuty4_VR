@@ -92,6 +92,21 @@ struct VrManualReloadClipRenderObject
 static VrManualReloadClipRenderObject
     s_vrManualReloadClipObjects[128] = {};
 
+// KISAK_SP_VR_MANUAL_GRENADE_THROW_V53
+// The stock offhand DObj includes canned arms and is rooted at the firearm
+// hand.  Cache a one-model projectile DObj per grenade weapon so the actual
+// frag/flash/smoke asset can instead follow the tracked left grip.
+struct VrManualGrenadeRenderObject
+{
+    DObj_s object = {};
+    XModel* model = nullptr;
+    cpose_t heldPose = {};
+    bool created = false;
+};
+
+static VrManualGrenadeRenderObject
+    s_vrManualGrenadeRenderObjects[128] = {};
+
 // KISAK_SP_VR_TRACKED_HANDS_V27_MAGAZINE_GRIP_POSE
 // V27 preserves V26's corrected XR_EXT_palm_pose orientation and adds the
 // missing third left-hand render state: neutral tracking, weapon support, or
@@ -4358,6 +4373,18 @@ static void VR_FreeManualReloadClipRenderObjects()
         clipObject =
             VrManualReloadClipRenderObject{};
     }
+
+    for (VrManualGrenadeRenderObject& grenadeObject :
+         s_vrManualGrenadeRenderObjects)
+    {
+        if (grenadeObject.created)
+        {
+            DObjFree(&grenadeObject.object);
+        }
+
+        grenadeObject =
+            VrManualGrenadeRenderObject{};
+    }
 }
 
 void VR_FreeManualReloadClipRenderObjectsForShutdown()
@@ -4444,6 +4471,140 @@ static void VR_SetManualReloadClipPose(
     AxisToAngles(
         *reinterpret_cast<const mat3x3*>(axis),
         pose->angles);
+}
+
+
+static VrManualGrenadeRenderObject*
+VR_GetManualGrenadeRenderObject(
+    const uint32_t weaponNum,
+    XModel* projectileModel)
+{
+    if (weaponNum >=
+            ARRAY_COUNT(
+                s_vrManualGrenadeRenderObjects) ||
+        projectileModel == nullptr)
+    {
+        return nullptr;
+    }
+
+    VrManualGrenadeRenderObject& grenadeObject =
+        s_vrManualGrenadeRenderObjects[weaponNum];
+
+    if (grenadeObject.created &&
+        grenadeObject.model != projectileModel)
+    {
+        DObjFree(&grenadeObject.object);
+
+        grenadeObject =
+            VrManualGrenadeRenderObject{};
+    }
+
+    if (!grenadeObject.created)
+    {
+        DObjModel_s modelDescription = {};
+        modelDescription.model = projectileModel;
+        modelDescription.boneName = 0;
+        modelDescription.ignoreCollision = false;
+
+        DObjCreate(
+            &modelDescription,
+            1u,
+            nullptr,
+            &grenadeObject.object,
+            0);
+
+        grenadeObject.model = projectileModel;
+        grenadeObject.created = true;
+        grenadeObject.heldPose.eType = ET_GENERAL;
+
+        Com_Printf(
+            0,
+            "[VR][GRENADE] Prepared tracked left-hand model '%s' "
+            "for weapon %u.\n",
+            XModelGetName(projectileModel),
+            weaponNum);
+    }
+
+    return &grenadeObject;
+}
+
+
+static void VR_AddManualGrenadeModelToScene(
+    const float lightingOrigin[3])
+{
+    if (lightingOrigin == nullptr)
+    {
+        return;
+    }
+
+    int grenadeWeaponIndex = 0;
+    float heldOrigin[3] = {};
+    float heldAxis[3][3] = {};
+
+    if (!VR_GetManualGrenadeRenderState(
+            &grenadeWeaponIndex,
+            heldOrigin,
+            heldAxis) ||
+        grenadeWeaponIndex <= 0 ||
+        grenadeWeaponIndex >=
+            static_cast<int>(BG_GetNumWeapons()))
+    {
+        return;
+    }
+
+    WeaponDef* grenadeWeaponDef =
+        BG_GetWeaponDef(
+            grenadeWeaponIndex);
+
+    if (grenadeWeaponDef == nullptr ||
+        grenadeWeaponDef->projectileModel == nullptr)
+    {
+        static bool loggedMissingGrenadeModel = false;
+
+        if (!loggedMissingGrenadeModel)
+        {
+            Com_PrintWarning(
+                0,
+                "[VR][GRENADE] The held offhand weapon has no "
+                "projectile model; physical input remains active.\n");
+
+            loggedMissingGrenadeModel = true;
+        }
+
+        return;
+    }
+
+    VrManualGrenadeRenderObject* grenadeObject =
+        VR_GetManualGrenadeRenderObject(
+            static_cast<uint32_t>(
+                grenadeWeaponIndex),
+            grenadeWeaponDef->projectileModel);
+
+    if (grenadeObject == nullptr)
+    {
+        return;
+    }
+
+    VR_SetManualReloadClipPose(
+        &grenadeObject->heldPose,
+        heldOrigin,
+        heldAxis);
+
+    float mutableLightingOrigin[3] = {
+        lightingOrigin[0],
+        lightingOrigin[1],
+        lightingOrigin[2],
+    };
+
+    // The ordinary viewmodel already owns ENTITYNUM_NONE.  Submit this
+    // independent first-person object through the untracked path so it can
+    // coexist with the firearm and floating glove in both stereo eyes.
+    R_AddDObjToSceneUntracked(
+        &grenadeObject->object,
+        &grenadeObject->heldPose,
+        3u,
+        mutableLightingOrigin,
+        0.0f);
 }
 
 static void VR_AddManualReloadClipModelsToScene(
@@ -5125,11 +5286,17 @@ void __cdecl CG_AddPlayerWeapon(
 
 #ifdef KISAK_SP
     bool deferPhysicalScopeViewWeapon = false;
+    bool manualGrenadeViewOverride = false;
 
     if (ps != nullptr)
     {
         s_vrPhysicalScopeViewWeaponDeferred =
             false;
+
+        manualGrenadeViewOverride =
+            bDrawGun &&
+            ps->weapon > 0 &&
+            VR_IsManualGrenadeViewOverrideActive();
 
         if (bDrawGun &&
             VR_IsPhysicalSniperScopeAimActive())
@@ -5158,9 +5325,23 @@ void __cdecl CG_AddPlayerWeapon(
 #endif
 
     if (ps)
+    {
+#ifdef KISAK_SP
+        // V53 leaves the ordinary firearm in the tracked right hand while a
+        // standalone projectile model follows the left hand.  Native offhand
+        // simulation still owns ps->offHandIndex and all grenade events.
+        weaponNum =
+            manualGrenadeViewOverride
+                ? ps->weapon
+                : BG_GetViewmodelWeaponIndex(ps);
+#else
         weaponNum = BG_GetViewmodelWeaponIndex(ps);
+#endif
+    }
     else
+    {
         weaponNum = cent->nextState.weapon;
+    }
 
     // KISAKFIX: IDA CG_AddPlayerWeapon (sub_8215C3B8) gates on BOTH
     // `(eFlags & 0x300) == 0` (not turret) AND `(eFlags & 0x20000) == 0` (not in vehicle).
@@ -5646,6 +5827,9 @@ void __cdecl CG_AddPlayerWeapon(
                 VR_AddManualReloadClipModelsToScene(
                     weaponNum,
                     weapDef->worldClipModel,
+                    manualReloadLightingOrigin);
+
+                VR_AddManualGrenadeModelToScene(
                     manualReloadLightingOrigin);
 
                 static bool loggedManualReloadSupport = false;

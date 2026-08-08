@@ -297,6 +297,49 @@ bool VR_ManualMagazineReloadSuppressesAutomaticReload(
 bool VR_IsManualMagazineReloadCommitActive(
     int weaponIndex);
 
+// KISAK_SP_VR_MANUAL_GRENADE_THROW_V53
+// Advances the left-grip hip interaction and returns the native offhand
+// buttons that must remain held for COD4's existing cook/throw state machine.
+// The selected indices come from the predicted player state: left hip owns
+// frag, while right hip owns the mission's equipped flash or smoke grenade.
+bool VR_UpdateManualGrenadeInput(
+    int fragWeaponIndex,
+    int tacticalWeaponIndex,
+    const float cameraOrigin[3],
+    const float cameraAxis[3][3],
+    bool* manualModeEnabled,
+    bool* fragHeld,
+    bool* tacticalHeld);
+
+// Returns the tracked grenade pose rendered in the left hand while grip is
+// held.  The model is resolved by cgame from weaponIndex.
+bool VR_GetManualGrenadeRenderState(
+    int* weaponIndex,
+    float heldOrigin[3],
+    float heldAxis[3][3]);
+
+// Keeps the ordinary firearm visible in the tracked right hand while the
+// native offhand state temporarily selects the grenade viewmodel.
+bool VR_IsManualGrenadeViewOverrideActive();
+
+// Shared prediction uses this to remove the canned post-release delay.  The
+// native pullback/cook states are preserved; only the final physical release
+// is committed on the next simulation step.
+bool VR_IsManualGrenadeReleasePending(
+    int weaponIndex);
+
+// The SP listen server consumes exactly one release sample when EV_USE_OFFHAND
+// fires. Position, recent physical velocity, and the release-time view-forward
+// fallback are already transformed into CoD world space. V54 also returns the
+// selected history sample age for diagnostics.
+bool VR_ConsumeManualGrenadeThrow(
+    int weaponIndex,
+    float releaseOrigin[3],
+    float releaseVelocity[3],
+    float releaseFallbackForward[3],
+    unsigned int* velocitySampleAgeMilliseconds,
+    unsigned int* releaseAgeMilliseconds);
+
 // Returns the next Touch gameplay-control set:
 // left-stick click = sprint, right-stick click = melee,
 // right B = tap crouch/stand or hold prone/stand.
@@ -313,8 +356,9 @@ bool VR_ConsumeRightStickVerticalActions(
     bool* upPressed,
     bool* downPressed);
 
-// Returns weapon-utility controls:
-// right grip = held offhand input, left Y = held utility input.
+// Returns legacy weapon-utility controls.  Manual-grenade mode consumes the
+// left grip separately; when that mode is disabled, right grip remains the
+// tactical-grenade input and left Y retains its hold-frag/tap-cycle behavior.
 bool VR_GetWeaponUtilityButtons(
     bool* rightGripHeld,
     bool* leftYHeld);

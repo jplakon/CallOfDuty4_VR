@@ -1,6 +1,6 @@
 # Known issues
 
-This list applies to `v0.10.0-beta.5`.
+This list applies to `v0.10.0-beta.6`.
 
 ## Unsupported mission
 
@@ -46,6 +46,16 @@ This list applies to `v0.10.0-beta.5`.
   a usable detachable clip model. Other weapons retain COD4's native reload.
 - Meta Quest 3 with Virtual Desktop OpenXR is the tested palm-pose path. Hand
   alignment on other controller profiles and runtimes is experimental.
+
+## Manual grenades
+
+- Grenade belt placement, palm fit, and throw calibration were developed on
+  Meta Quest 3 with Virtual Desktop OpenXR. Other controllers may require
+  alignment or strength tuning.
+- A completely still grip release is intentionally treated as a drop rather
+  than a throw.
+- Manual reload owns the left grip after a magazine has been ejected. Finish
+  or cancel that interaction before drawing a grenade.
 
 ## Campaign scripting
 

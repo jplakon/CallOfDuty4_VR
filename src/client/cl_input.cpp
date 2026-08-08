@@ -1847,12 +1847,62 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
             &vrRightGripHeld,
             &vrLeftYHeld);
 
-        // CoD4 routes smoke and flash grenades through +smoke.
-        // Keep the right grip as the intuitive tactical-grenade control.
-        if (vrRightGripHeld)
+        // KISAK_SP_VR_MANUAL_GRENADE_THROW_V53
+        // Resolve the exact grenade equipped in each native offhand class,
+        // then let the left-grip hip state machine hold COD4's original
+        // buttons.  That preserves ammo, pullback, cooking, mission-specific
+        // flash/smoke selection, predictable events, and script callbacks.
+        cg_s* vrGrenadeCgameGlob =
+            CG_GetLocalClientGlobals(0);
+
+        playerState_s* vrGrenadePlayerState =
+            &vrGrenadeCgameGlob->predictedPlayerState;
+
+        const int vrFragWeaponIndex =
+            BG_GetFirstAvailableOffhand(
+                vrGrenadePlayerState,
+                OFFHAND_CLASS_FRAG_GRENADE);
+
+        const OffhandClass vrTacticalClass =
+            vrGrenadePlayerState->offhandSecondary
+                ? OFFHAND_CLASS_FLASH_GRENADE
+                : OFFHAND_CLASS_SMOKE_GRENADE;
+
+        const int vrTacticalWeaponIndex =
+            BG_GetFirstAvailableOffhand(
+                vrGrenadePlayerState,
+                vrTacticalClass);
+
+        bool vrManualGrenadesEnabled = false;
+        bool vrManualFragHeld = false;
+        bool vrManualTacticalHeld = false;
+
+        VR_UpdateManualGrenadeInput(
+            vrFragWeaponIndex,
+            vrTacticalWeaponIndex,
+            vrGrenadeCgameGlob->refdef.vieworg,
+            vrGrenadeCgameGlob->refdef.viewaxis,
+            &vrManualGrenadesEnabled,
+            &vrManualFragHeld,
+            &vrManualTacticalHeld);
+
+        if (vrManualFragHeld)
         {
-            result->buttons |=
-                BUTTON_SMOKE;
+            result->buttons |= BUTTON_FRAG;
+        }
+
+        if (vrManualTacticalHeld)
+        {
+            result->buttons |= BUTTON_SMOKE;
+        }
+
+        // CoD4 routes smoke and flash grenades through +smoke.  Preserve the
+        // beta.5 right-grip control only when the manual interaction is
+        // explicitly disabled with KISAK_VR_MANUAL_GRENADES=0.
+        if (!vrManualGrenadesEnabled &&
+            vrRightGripHeld)
+        {
+            result->buttons |= BUTTON_SMOKE;
 
             static bool loggedVrTacticalGrenade = false;
 
@@ -1866,68 +1916,95 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
             }
         }
 
-        // Preserve weapon cycling while giving frag grenades their own
-        // controller path: tap Y to cycle, hold Y to cook, release to throw.
+        // Manual mode frees left Y from its ambiguous hold timer, so weapon
+        // cycling happens immediately on the press edge.  Legacy mode keeps
+        // beta.5's tap-cycle/hold-frag fallback unchanged.
         constexpr int vrFragHoldThresholdMs = 300;
 
         static bool vrLeftYWasHeld = false;
         static bool vrLeftYFragActivated = false;
         static int vrLeftYPressTime = 0;
 
-        if (vrLeftYHeld &&
-            !vrLeftYWasHeld)
+        if (vrManualGrenadesEnabled)
         {
-            vrLeftYPressTime =
-                com_frameTime;
+            if (vrLeftYHeld &&
+                !vrLeftYWasHeld)
+            {
+                CG_NextWeapon_f();
+
+                static bool loggedVrImmediateNextWeapon = false;
+
+                if (!loggedVrImmediateNextWeapon)
+                {
+                    Com_Printf(
+                        0,
+                        "[VR][GRENADE] Manual mode freed left Y "
+                        "for immediate next-weapon input.\n");
+
+                    loggedVrImmediateNextWeapon = true;
+                }
+            }
 
             vrLeftYFragActivated =
                 false;
         }
-
-        if (vrLeftYHeld &&
-            !vrLeftYFragActivated &&
-            com_frameTime - vrLeftYPressTime >=
-                vrFragHoldThresholdMs)
+        else
         {
-            vrLeftYFragActivated =
-                true;
-        }
-
-        if (vrLeftYHeld &&
-            vrLeftYFragActivated)
-        {
-            result->buttons |=
-                BUTTON_FRAG;
-
-            static bool loggedVrFragHold = false;
-
-            if (!loggedVrFragHold)
+            if (vrLeftYHeld &&
+                !vrLeftYWasHeld)
             {
-                Com_Printf(
-                    0,
-                    "[VR] Bound left Y hold to frag grenade "
-                    "and tap to next weapon.\n");
+                vrLeftYPressTime =
+                    com_frameTime;
 
-                loggedVrFragHold = true;
+                vrLeftYFragActivated =
+                    false;
             }
-        }
 
-        if (!vrLeftYHeld &&
-            vrLeftYWasHeld &&
-            !vrLeftYFragActivated)
-        {
-            CG_NextWeapon_f();
-
-            static bool loggedVrNextWeaponTap = false;
-
-            if (!loggedVrNextWeaponTap)
+            if (vrLeftYHeld &&
+                !vrLeftYFragActivated &&
+                com_frameTime - vrLeftYPressTime >=
+                    vrFragHoldThresholdMs)
             {
-                Com_Printf(
-                    0,
-                    "[VR] Bound left Y tap to the existing "
-                    "single-player next-weapon command.\n");
+                vrLeftYFragActivated =
+                    true;
+            }
 
-                loggedVrNextWeaponTap = true;
+            if (vrLeftYHeld &&
+                vrLeftYFragActivated)
+            {
+                result->buttons |=
+                    BUTTON_FRAG;
+
+                static bool loggedVrFragHold = false;
+
+                if (!loggedVrFragHold)
+                {
+                    Com_Printf(
+                        0,
+                        "[VR] Bound left Y hold to frag grenade "
+                        "and tap to next weapon.\n");
+
+                    loggedVrFragHold = true;
+                }
+            }
+
+            if (!vrLeftYHeld &&
+                vrLeftYWasHeld &&
+                !vrLeftYFragActivated)
+            {
+                CG_NextWeapon_f();
+
+                static bool loggedVrNextWeaponTap = false;
+
+                if (!loggedVrNextWeaponTap)
+                {
+                    Com_Printf(
+                        0,
+                        "[VR] Bound left Y tap to the existing "
+                        "single-player next-weapon command.\n");
+
+                    loggedVrNextWeaponTap = true;
+                }
             }
         }
 

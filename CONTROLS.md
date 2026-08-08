@@ -28,9 +28,9 @@ animation. Touch-driven finger curling is not implemented yet.
 | Lower stance | Flick right thumbstick down: stand -> crouch -> prone; tapping right B also remains available |
 | Prone | Flick right thumbstick down while crouched, or hold right B button |
 | Melee | Click right thumbstick |
-| Frag grenade | Hold left Y for at least 0.3 seconds, then release to throw |
-| Flashbang / tactical grenade | Right grip |
-| Next weapon | Tap left Y |
+| Frag grenade | With the left grip released, reach to the left hip and squeeze; hold/cook, physically swing, then release to throw |
+| Flashbang / smoke grenade | With the left grip released, reach to the right hip and squeeze; the mission-equipped tactical type is selected |
+| Next weapon | Press left Y |
 | Pause / menu | Left controller menu button |
 
 ## Right-thumbrest mission controls
@@ -44,6 +44,18 @@ thumbstick. Normal locomotion is suspended while this modifier is active.
 | Left stick down | Night vision |
 | Left stick left | Airstrike / mission action slot 6 |
 | Left stick right | C4 / mission action slot 7 |
+
+## Manual grenade interaction
+
+- The virtual belt follows headset yaw only, so looking down does not rotate
+  the hip zones. A grenade requires a new left-grip press inside a zone.
+- Interaction ownership is manual magazine reload first, an already-held
+  grenade second, a new hip grab third, and the two-handed rifle grip last.
+- A stationary release deliberately drops the grenade. A throwing motion uses
+  recent controller velocity and the grenade asset's native speed. Release
+  position is limited to arm's reach and traced against nearby geometry.
+- Set `KISAK_VR_MANUAL_GRENADES=0` in `VR-Settings.bat` to restore beta.5's
+  right-grip tactical grenade and left-Y hold-frag/tap-cycle controls.
 
 ## Mission-specific weapons
 

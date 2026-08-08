@@ -45,6 +45,11 @@ rem Right A ejects; squeeze at the left hip draws; release at the magazine
 rem well inserts. Set to 0 to make right A use COD4's native reload.
 set "KISAK_VR_MANUAL_RELOAD=1"
 
+rem Physical hip-drawn grenades. Left hip selects frag; right hip selects
+rem the mission-equipped flashbang or smoke. Hold/cook, then physically swing
+rem and release the left grip. Set to 0 for beta.5's legacy grenade controls.
+set "KISAK_VR_MANUAL_GRENADES=1"
+
 rem Two-bone IK left hand at the physical OpenXR grip pose without stretching.
 rem The right hand follows the right-controller rifle. Set to 0 for stock arms.
 set "KISAK_VR_TRACKED_HANDS=1"

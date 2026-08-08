@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.10.0-beta.6
+
+Manual-grenade and campaign-access update over `v0.10.0-beta.5`.
+
+### Manual grenades
+
+- Adds physical grenade selection: squeeze the left grip at the left hip for a
+  frag or at the right hip for the mission-equipped flashbang/smoke grenade
+- Keeps COD4's native offhand state machine for ammunition, pin/pullback,
+  cooking, fuse timing, sounds, damage, AI reactions, and mission scripting
+- Renders the projectile grenade model in the tracked left hand while keeping
+  the firearm visible in the tracked right hand
+- Releases from the physical left-controller position and maps a short recent
+  motion history onto the selected grenade's native launch-speed scale
+- Preserves intentional stationary drops, adds a controlled upward arc, and
+  clamps/traces the release point so reaching through a wall cannot throw
+  through it
+- Gives manual magazine insertion priority over grenade grabs, disables the
+  two-hand rifle grip while a grenade is held, and requires a fresh grip press
+  inside a hip zone
+- Frees left Y for immediate weapon cycling in manual mode; set
+  `KISAK_VR_MANUAL_GRENADES=0` for beta.5's legacy grenade controls
+
+### Mission Select
+
+- Starts the normal launcher with COD4's built-in `mis_cheat 1` campaign
+  unlock, making every standard campaign mission selectable on a new profile
+- Leaves developer mode and the intermittent DEV mission category disabled
+- Does not alter saves, campaign completion, difficulty records, or profiles
+- Still requires **Death From Above** to be skipped because that mission is not
+  supported in VR
+
 ## v0.10.0-beta.5
 
 Snap-turn input hotfix over `v0.10.0-beta.4`.

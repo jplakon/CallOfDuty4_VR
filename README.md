@@ -14,13 +14,14 @@ copy of the original game.
 
 ## Current status
 
-The current public beta is `v0.10.0-beta.5`.
+The current public beta is `v0.10.0-beta.6`.
 
-This hotfix restores reliable repeated 45-degree snap turns after the
-smooth-turn update by re-arming the latch whenever the right stick returns to
-neutral. It retains beta.4's launcher compatibility and crash-report privacy
-fixes, beta.3's smooth-turn option and stance controls, and all earlier
-gameplay improvements.
+This beta adds physical manual grenade handling and unlocks the standard
+Mission Select list for new profiles. Frags are drawn from the left hip;
+mission-equipped flashbangs or smoke grenades are drawn from the right hip.
+Grenades retain COD4's native ammo, cooking, fuse, sound, damage, AI, and
+scripting behavior while using the tracked left hand for release position and
+throw motion. It also retains beta.5's snap-turn fix and all earlier VR work.
 
 - The single-player campaign is playable from beginning to end when
   **Death From Above** is skipped.

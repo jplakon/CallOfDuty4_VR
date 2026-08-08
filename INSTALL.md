@@ -47,6 +47,7 @@ developer's current Quest 3 configuration:
 - Synchronized shadows enabled
 - Physical scope capture: `1024`
 - Physical magazine reloading enabled
+- Physical hip-drawn grenades enabled
 - Controller-tracked hands enabled
 - 45-degree snap turning enabled by default
 
@@ -80,6 +81,19 @@ set "KISAK_VR_SMOOTH_TURN_SPEED=120"
 
 The smooth-turn speed is full-stick degrees per second and accepts values from
 30 through 360. Fully close and restart COD4 after changing either value.
+
+### Manual grenades
+
+Manual grenades are enabled by default:
+
+```bat
+set "KISAK_VR_MANUAL_GRENADES=1"
+```
+
+With the left grip released, squeeze at the left hip for a frag or the right
+hip for the mission-equipped flashbang/smoke grenade. Keep holding to hold or
+cook it, then physically swing and release the grip. Set the value to `0` to
+restore beta.5's right-grip tactical and left-Y hold-frag controls.
 
 ### Runtime backend
 
@@ -130,7 +144,11 @@ process memory and should not be posted publicly.
 
 ## Known campaign limitation
 
-**Death From Above is not supported in `v0.10.0-beta.5`.**
+Every standard campaign mission is unlocked in Mission Select at startup,
+including on a new profile. Developer mode remains disabled.
+
+**Death From Above is not supported in `v0.10.0-beta.6`, even though it appears
+unlocked.**
 
 To skip **Death From Above**:
 

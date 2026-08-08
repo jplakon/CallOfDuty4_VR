@@ -24,6 +24,14 @@ INSTALL
 Edit VR-Settings.bat to change resolution, brightness, shadows, HUD placement,
 or physical-scope alignment. Fully restart the game after changing it.
 
+NEW IN BETA.6
+---------------
+
+- Left grip at the left hip draws a frag grenade.
+- Left grip at the right hip draws the equipped flashbang or smoke grenade.
+- Hold/cook normally, physically swing, and release the grip to throw.
+- Every standard campaign mission is unlocked in Mission Select.
+
 KNOWN LIMITATION
 ----------------
 

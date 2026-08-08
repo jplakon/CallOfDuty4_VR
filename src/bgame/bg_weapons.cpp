@@ -3080,9 +3080,29 @@ void __cdecl PM_Weapon_OffHandStart(pmove_t *pm)
     }
     else
     {
+        // KISAK_SP_VR_MANUAL_GRENADE_THROW_V53
+        // Once the physical grip has been released, preserve the native
+        // throw animation/event but commit EV_USE_OFFHAND on the next
+        // simulation step instead of waiting through the canned arm swing.
+        bool manualGrenadeReleasePending = false;
+
+#ifdef KISAK_SP
+        manualGrenadeReleasePending =
+            VR_IsManualGrenadeReleasePending(
+                ps->offHandIndex);
+#endif
+
         ps->weaponstate = WEAPON_OFFHAND_HOLD;
-        ps->weaponTime = weapDef->iFireTime;
-        ps->weaponDelay = weapDef->iFireDelay;
+        ps->weaponTime =
+            manualGrenadeReleasePending
+                ? 0
+                : weapDef->iFireTime;
+
+        ps->weaponDelay =
+            manualGrenadeReleasePending
+                ? 1
+                : weapDef->iFireDelay;
+
         ps->weapFlags |= 2u;
         PM_StartWeaponAnim(ps, 2);
 #ifdef KISAK_MP

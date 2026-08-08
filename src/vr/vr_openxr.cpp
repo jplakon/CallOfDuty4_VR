@@ -178,6 +178,16 @@ bool g_vrLeftControllerSqueezePressedRaw = false;
 
 float g_vrLeftControllerForegripPosition[3] = {};
 
+// KISAK_SP_VR_MANUAL_GRENADE_THROW_V53
+// Linear velocity is stored in the same HMD-local CoD basis as the tracked
+// grip position, in game units per second.  The gameplay thread transforms it
+// through the current camera axis when grip release is observed.
+bool g_vrLeftControllerLinearVelocityValid = false;
+float g_vrLeftControllerLinearVelocity[3] = {};
+bool g_vrLeftControllerPositionSampleValid = false;
+std::uint32_t g_vrLeftControllerPositionSampleMilliseconds = 0u;
+float g_vrLeftControllerPreviousPosition[3] = {};
+
 float g_vrLeftControllerForegripAxis[3][3] = {
     {1.0f, 0.0f, 0.0f},
     {0.0f, 1.0f, 0.0f},
@@ -660,6 +670,74 @@ struct VrManualMagazineReloadState
 
 VrManualMagazineReloadState
     g_vrManualMagazineReload;
+
+// KISAK_SP_VR_MANUAL_GRENADE_THROW_V53
+enum class VrManualGrenadeStage : std::uint32_t
+{
+    Ready = 0u,
+    Holding,
+    ReleasedPending,
+};
+
+enum class VrManualGrenadeSlot : std::uint32_t
+{
+    None = 0u,
+    Frag,
+    Tactical,
+};
+
+// KISAK_SP_VR_MANUAL_GRENADE_RELEASE_CALIBRATION_V54
+// OpenXR supplies a smooth physical velocity, but the button-release edge can
+// arrive just after the fastest part of a throw.  Retain a short, fixed-size
+// history so release can select a recent swing sample without allocating in
+// the input path.
+constexpr std::size_t
+    kVrManualGrenadeVelocitySampleCapacity = 12u;
+
+struct VrManualGrenadeVelocitySample
+{
+    bool valid = false;
+    std::uint32_t recordedAtMilliseconds = 0u;
+    float velocity[3] = {};
+};
+
+struct VrManualGrenadeState
+{
+    bool settingRead = false;
+    bool enabled = true;
+    bool inputInitialized = false;
+    bool leftSqueezeWasHeld = false;
+    VrManualGrenadeStage stage =
+        VrManualGrenadeStage::Ready;
+    VrManualGrenadeSlot slot =
+        VrManualGrenadeSlot::None;
+    int weaponIndex = 0;
+    std::uint32_t releasedAtMilliseconds = 0u;
+    std::uint32_t pendingUntilMilliseconds = 0u;
+    std::uint32_t viewOverrideUntilMilliseconds = 0u;
+    std::uint32_t releaseVelocitySampleAgeMilliseconds = 0u;
+    std::size_t velocitySampleWriteIndex = 0u;
+    float heldOrigin[3] = {};
+    float heldAxis[3][3] = {
+        {1.0f, 0.0f, 0.0f},
+        {0.0f, 1.0f, 0.0f},
+        {0.0f, 0.0f, 1.0f},
+    };
+    float releaseOrigin[3] = {};
+    float releaseVelocity[3] = {};
+    float releaseFallbackForward[3] = {
+        1.0f,
+        0.0f,
+        0.0f,
+    };
+    std::array<
+        VrManualGrenadeVelocitySample,
+        kVrManualGrenadeVelocitySampleCapacity>
+        velocitySamples = {};
+};
+
+VrManualGrenadeState
+    g_vrManualGrenade;
 
 
 std::vector<XrViewConfigurationView> g_vrViewConfigs;
@@ -7328,6 +7406,9 @@ void VR_DestroyControllerInput()
         g_vrLeftControllerPalmPoseValid = false;
         g_vrLeftControllerForegripPressed = false;
         g_vrLeftControllerSqueezePressedRaw = false;
+        g_vrLeftControllerLinearVelocityValid = false;
+        g_vrLeftControllerPositionSampleValid = false;
+        g_vrLeftControllerPositionSampleMilliseconds = 0u;
         g_vrTwoHandWeaponBlend = 0.0f;
         g_vrTwoHandWeaponTargetActive = false;
         g_vrPoseFocusAimPoseHeld = false;
@@ -7339,6 +7420,18 @@ void VR_DestroyControllerInput()
             0,
             sizeof(
                 g_vrLeftControllerForegripPosition));
+
+        std::memset(
+            g_vrLeftControllerLinearVelocity,
+            0,
+            sizeof(
+                g_vrLeftControllerLinearVelocity));
+
+        std::memset(
+            g_vrLeftControllerPreviousPosition,
+            0,
+            sizeof(
+                g_vrLeftControllerPreviousPosition));
 
         std::memset(
             g_vrLeftControllerForegripAxis,
@@ -7372,6 +7465,9 @@ void VR_DestroyControllerInput()
 
         g_vrManualMagazineReload =
             VrManualMagazineReloadState{};
+
+        g_vrManualGrenade =
+            VrManualGrenadeState{};
     }
 }
 
@@ -8229,7 +8325,8 @@ bool VR_GetControllerBooleanState(
 bool VR_LocateControllerSpace(
     const XrSpace controllerSpace,
     const XrTime displayTime,
-    XrSpaceLocation* location)
+    XrSpaceLocation* location,
+    XrSpaceVelocity* velocity = nullptr)
 {
     if (controllerSpace == XR_NULL_HANDLE ||
         location == nullptr)
@@ -8241,6 +8338,17 @@ bool VR_LocateControllerSpace(
         XrSpaceLocation{
             XR_TYPE_SPACE_LOCATION
         };
+
+    if (velocity != nullptr)
+    {
+        *velocity =
+            XrSpaceVelocity{
+                XR_TYPE_SPACE_VELOCITY
+            };
+
+        location->next =
+            velocity;
+    }
 
     const XrResult result =
         xrLocateSpace(
@@ -8299,7 +8407,9 @@ void VR_LogControllerPoseSnapshot(
 void VR_PublishLeftControllerForegripPose(
     const XrPosef& controllerGripPose,
     const bool gripValid,
-    const bool squeezePressed)
+    const bool squeezePressed,
+    const XrVector3f& controllerLinearVelocity,
+    const bool linearVelocityValid)
 {
     if (!gripValid ||
         g_vrViews.size() < kVrStereoEyeCount)
@@ -8310,6 +8420,9 @@ void VR_PublishLeftControllerForegripPose(
         g_vrLeftControllerForegripPoseValid = false;
         g_vrLeftControllerForegripPressed = false;
         g_vrLeftControllerSqueezePressedRaw = false;
+        g_vrLeftControllerLinearVelocityValid = false;
+        g_vrLeftControllerPositionSampleValid = false;
+        g_vrLeftControllerPositionSampleMilliseconds = 0u;
         return;
     }
 
@@ -8348,6 +8461,19 @@ void VR_PublishLeftControllerForegripPose(
         VR_OpenXrVectorToCod(
             controllerOffsetHeadLocal);
 
+    const VrHeadVector controllerVelocityHeadLocal =
+        VR_RotateHeadVector(
+            inverseHeadOrientation,
+            {
+                controllerLinearVelocity.x,
+                controllerLinearVelocity.y,
+                controllerLinearVelocity.z,
+            });
+
+    const VrHeadVector controllerVelocityCod =
+        VR_OpenXrVectorToCod(
+            controllerVelocityHeadLocal);
+
     const XrQuaternionf controllerOrientation =
         VR_NormalizeQuaternion(
             controllerGripPose.orientation);
@@ -8379,17 +8505,102 @@ void VR_PublishLeftControllerForegripPose(
     std::lock_guard<std::mutex> lock(
         g_vrWeaponControllerPoseMutex);
 
-    g_vrLeftControllerForegripPosition[0] =
+    const std::uint32_t nowMilliseconds =
+        static_cast<std::uint32_t>(
+            Sys_Milliseconds());
+
+    const float controllerPositionGameUnits[3] = {
         controllerPositionCod.x *
-        kVrGameUnitsPerMeter;
+            kVrGameUnitsPerMeter,
+        controllerPositionCod.y *
+            kVrGameUnitsPerMeter,
+        controllerPositionCod.z *
+            kVrGameUnitsPerMeter,
+    };
+
+    g_vrLeftControllerForegripPosition[0] =
+        controllerPositionGameUnits[0];
 
     g_vrLeftControllerForegripPosition[1] =
-        controllerPositionCod.y *
-        kVrGameUnitsPerMeter;
+        controllerPositionGameUnits[1];
 
     g_vrLeftControllerForegripPosition[2] =
-        controllerPositionCod.z *
-        kVrGameUnitsPerMeter;
+        controllerPositionGameUnits[2];
+
+    g_vrLeftControllerLinearVelocityValid =
+        linearVelocityValid &&
+        std::isfinite(controllerVelocityCod.x) &&
+        std::isfinite(controllerVelocityCod.y) &&
+        std::isfinite(controllerVelocityCod.z);
+
+    if (g_vrLeftControllerLinearVelocityValid)
+    {
+        g_vrLeftControllerLinearVelocity[0] =
+            controllerVelocityCod.x *
+            kVrGameUnitsPerMeter;
+
+        g_vrLeftControllerLinearVelocity[1] =
+            controllerVelocityCod.y *
+            kVrGameUnitsPerMeter;
+
+        g_vrLeftControllerLinearVelocity[2] =
+            controllerVelocityCod.z *
+            kVrGameUnitsPerMeter;
+    }
+    else
+    {
+        // Some OpenXR runtimes omit XR_SPACE_VELOCITY_LINEAR_VALID_BIT.
+        // Fall back to a short finite difference in the same HMD-local basis
+        // so physical throwing remains available on those runtimes.
+        const std::uint32_t elapsedMilliseconds =
+            nowMilliseconds -
+            g_vrLeftControllerPositionSampleMilliseconds;
+
+        if (g_vrLeftControllerPositionSampleValid &&
+            elapsedMilliseconds >= 4u &&
+            elapsedMilliseconds <= 100u)
+        {
+            const float samplesPerSecond =
+                1000.0f /
+                static_cast<float>(elapsedMilliseconds);
+
+            for (int component = 0;
+                 component < 3;
+                 ++component)
+            {
+                g_vrLeftControllerLinearVelocity[component] =
+                    (controllerPositionGameUnits[component] -
+                     g_vrLeftControllerPreviousPosition[component]) *
+                    samplesPerSecond;
+            }
+
+            g_vrLeftControllerLinearVelocityValid =
+                std::isfinite(
+                    g_vrLeftControllerLinearVelocity[0]) &&
+                std::isfinite(
+                    g_vrLeftControllerLinearVelocity[1]) &&
+                std::isfinite(
+                    g_vrLeftControllerLinearVelocity[2]);
+        }
+
+        if (!g_vrLeftControllerLinearVelocityValid)
+        {
+            g_vrLeftControllerLinearVelocity[0] = 0.0f;
+            g_vrLeftControllerLinearVelocity[1] = 0.0f;
+            g_vrLeftControllerLinearVelocity[2] = 0.0f;
+        }
+    }
+
+    std::memcpy(
+        g_vrLeftControllerPreviousPosition,
+        controllerPositionGameUnits,
+        sizeof(
+            g_vrLeftControllerPreviousPosition));
+
+    g_vrLeftControllerPositionSampleMilliseconds =
+        nowMilliseconds;
+
+    g_vrLeftControllerPositionSampleValid = true;
 
     g_vrLeftControllerForegripAxis[0][0] =
         forwardCod.x;
@@ -8423,7 +8634,9 @@ void VR_PublishLeftControllerForegripPose(
     g_vrLeftControllerForegripPressed =
         squeezePressed &&
         g_vrManualMagazineReload.stage ==
-            VrManualMagazineReloadStage::Ready;
+            VrManualMagazineReloadStage::Ready &&
+        g_vrManualGrenade.stage ==
+            VrManualGrenadeStage::Ready;
 }
 
 
@@ -9119,6 +9332,10 @@ void VR_UpdateControllerActions(
             XR_TYPE_SPACE_LOCATION
         };
 
+        XrSpaceVelocity gripVelocity{
+            XR_TYPE_SPACE_VELOCITY
+        };
+
         XrSpaceLocation palmLocation{
             XR_TYPE_SPACE_LOCATION
         };
@@ -9133,7 +9350,8 @@ void VR_UpdateControllerActions(
                 g_vrControllerGripSpaces[
                     handIndex],
                 displayTime,
-                &gripLocation);
+                &gripLocation,
+                &gripVelocity);
 
         const bool palmValid =
             palmActive &&
@@ -9360,7 +9578,11 @@ void VR_UpdateControllerActions(
             VR_PublishLeftControllerForegripPose(
                 gripLocation.pose,
                 gripValid,
-                squeezePressed);
+                squeezePressed,
+                gripVelocity.linearVelocity,
+                gripValid &&
+                    (gripVelocity.velocityFlags &
+                     XR_SPACE_VELOCITY_LINEAR_VALID_BIT) != 0);
 
             VR_PublishLeftControllerPalmPose(
                 palmLocation.pose,
@@ -12944,6 +13166,856 @@ bool VR_IsManualMagazineReloadCommitActive(
                g_vrManualMagazineReload
                    .commitUntilMilliseconds -
                nowMilliseconds) > 0;
+}
+
+
+// KISAK_SP_VR_MANUAL_GRENADE_RELEASE_CALIBRATION_V54
+static void VR_ClearManualGrenadeVelocityHistoryLocked()
+{
+    for (VrManualGrenadeVelocitySample& sample :
+         g_vrManualGrenade.velocitySamples)
+    {
+        sample = VrManualGrenadeVelocitySample{};
+    }
+
+    g_vrManualGrenade.velocitySampleWriteIndex = 0u;
+    g_vrManualGrenade.releaseVelocitySampleAgeMilliseconds = 0u;
+}
+
+
+static void VR_RecordManualGrenadeVelocityLocked(
+    const std::uint32_t nowMilliseconds,
+    const float velocity[3])
+{
+    if (velocity == nullptr)
+    {
+        return;
+    }
+
+    VrManualGrenadeVelocitySample& sample =
+        g_vrManualGrenade.velocitySamples[
+            g_vrManualGrenade.velocitySampleWriteIndex];
+
+    sample.valid = true;
+    sample.recordedAtMilliseconds = nowMilliseconds;
+
+    std::memcpy(
+        sample.velocity,
+        velocity,
+        sizeof(sample.velocity));
+
+    g_vrManualGrenade.velocitySampleWriteIndex =
+        (g_vrManualGrenade.velocitySampleWriteIndex + 1u) %
+        kVrManualGrenadeVelocitySampleCapacity;
+}
+
+
+static bool VR_SelectManualGrenadeReleaseVelocityLocked(
+    const std::uint32_t nowMilliseconds,
+    float velocity[3],
+    std::uint32_t* sampleAgeMilliseconds)
+{
+    if (velocity == nullptr ||
+        sampleAgeMilliseconds == nullptr)
+    {
+        return false;
+    }
+
+    constexpr std::uint32_t historyWindowMilliseconds = 140u;
+    constexpr float historyAgePenalty = 0.35f;
+    constexpr float maximumPhysicalHandSpeed = 500.0f;
+
+    bool selected = false;
+    float selectedScore = -1.0f;
+    float selectedSpeed = 0.0f;
+    std::uint32_t selectedAgeMilliseconds = 0u;
+
+    for (const VrManualGrenadeVelocitySample& sample :
+         g_vrManualGrenade.velocitySamples)
+    {
+        if (!sample.valid)
+        {
+            continue;
+        }
+
+        const std::uint32_t ageMilliseconds =
+            nowMilliseconds -
+            sample.recordedAtMilliseconds;
+
+        if (ageMilliseconds > historyWindowMilliseconds)
+        {
+            continue;
+        }
+
+        const float speed =
+            std::sqrt(
+                sample.velocity[0] * sample.velocity[0] +
+                sample.velocity[1] * sample.velocity[1] +
+                sample.velocity[2] * sample.velocity[2]);
+
+        if (!std::isfinite(speed))
+        {
+            continue;
+        }
+
+        const float normalizedAge =
+            static_cast<float>(ageMilliseconds) /
+            static_cast<float>(historyWindowMilliseconds);
+
+        const float score =
+            speed *
+            (1.0f - historyAgePenalty * normalizedAge);
+
+        if (!selected || score > selectedScore)
+        {
+            selected = true;
+            selectedScore = score;
+            selectedSpeed = speed;
+            selectedAgeMilliseconds = ageMilliseconds;
+
+            std::memcpy(
+                velocity,
+                sample.velocity,
+                sizeof(sample.velocity));
+        }
+    }
+
+    if (!selected)
+    {
+        velocity[0] = 0.0f;
+        velocity[1] = 0.0f;
+        velocity[2] = 0.0f;
+        *sampleAgeMilliseconds = 0u;
+        return false;
+    }
+
+    if (selectedSpeed > maximumPhysicalHandSpeed)
+    {
+        const float scale =
+            maximumPhysicalHandSpeed /
+            selectedSpeed;
+
+        velocity[0] *= scale;
+        velocity[1] *= scale;
+        velocity[2] *= scale;
+    }
+
+    *sampleAgeMilliseconds =
+        selectedAgeMilliseconds;
+
+    return true;
+}
+
+
+// KISAK_SP_VR_MANUAL_GRENADE_THROW_V53
+static void VR_ResetManualGrenadeInteractionLocked()
+{
+    g_vrManualGrenade.stage =
+        VrManualGrenadeStage::Ready;
+
+    g_vrManualGrenade.slot =
+        VrManualGrenadeSlot::None;
+
+    g_vrManualGrenade.weaponIndex = 0;
+    g_vrManualGrenade.releasedAtMilliseconds = 0u;
+    g_vrManualGrenade.pendingUntilMilliseconds = 0u;
+
+    VR_ClearManualGrenadeVelocityHistoryLocked();
+}
+
+
+bool VR_UpdateManualGrenadeInput(
+    const int fragWeaponIndex,
+    const int tacticalWeaponIndex,
+    const float cameraOrigin[3],
+    const float cameraAxis[3][3],
+    bool* manualModeEnabled,
+    bool* fragHeld,
+    bool* tacticalHeld)
+{
+    if (cameraOrigin == nullptr ||
+        cameraAxis == nullptr ||
+        manualModeEnabled == nullptr ||
+        fragHeld == nullptr ||
+        tacticalHeld == nullptr)
+    {
+        return false;
+    }
+
+    *manualModeEnabled = false;
+    *fragHeld = false;
+    *tacticalHeld = false;
+
+    const std::uint32_t nowMilliseconds =
+        static_cast<std::uint32_t>(
+            Sys_Milliseconds());
+
+    bool logSetting = false;
+    bool logGrab = false;
+    bool logRelease = false;
+    bool logEmptySlot = false;
+    bool logPendingTimeout = false;
+    bool loggedUsedPalmPose = false;
+    VrManualGrenadeSlot loggedSlot =
+        VrManualGrenadeSlot::None;
+    int loggedWeaponIndex = 0;
+    std::uint32_t loggedVelocitySampleAgeMilliseconds = 0u;
+    float loggedLocalPosition[3] = {};
+    float loggedReleaseOrigin[3] = {};
+    float loggedReleaseVelocity[3] = {};
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrWeaponControllerPoseMutex);
+
+        if (!g_vrManualGrenade.settingRead)
+        {
+            const char* requestedSetting =
+                std::getenv(
+                    "KISAK_VR_MANUAL_GRENADES");
+
+            if (requestedSetting != nullptr &&
+                requestedSetting[0] != '\0')
+            {
+                if (std::strcmp(
+                        requestedSetting,
+                        "0") == 0)
+                {
+                    g_vrManualGrenade.enabled = false;
+                }
+                else if (std::strcmp(
+                             requestedSetting,
+                             "1") != 0)
+                {
+                    Com_PrintWarning(
+                        0,
+                        "[VR][GRENADE] Ignoring invalid "
+                        "KISAK_VR_MANUAL_GRENADES='%s'; using 1. "
+                        "Valid values are 0 and 1.\n",
+                        requestedSetting);
+                }
+            }
+
+            g_vrManualGrenade.settingRead = true;
+            logSetting = true;
+        }
+
+        const bool leftSqueezeHeld =
+            g_vrLeftControllerSqueezePressedRaw;
+
+        if (!g_vrManualGrenade.inputInitialized)
+        {
+            // A grip already held when the map starts cannot grab a belt
+            // object.  Releasing once arms the required press edge.
+            g_vrManualGrenade.leftSqueezeWasHeld =
+                leftSqueezeHeld;
+
+            g_vrManualGrenade.inputInitialized = true;
+        }
+
+        if (!g_vrManualGrenade.enabled)
+        {
+            VR_ResetManualGrenadeInteractionLocked();
+            g_vrManualGrenade.leftSqueezeWasHeld =
+                leftSqueezeHeld;
+        }
+        else
+        {
+            *manualModeEnabled = true;
+
+            if (g_vrManualGrenade.stage ==
+                    VrManualGrenadeStage::ReleasedPending &&
+                static_cast<std::int32_t>(
+                    g_vrManualGrenade.pendingUntilMilliseconds -
+                    nowMilliseconds) <= 0)
+            {
+                VR_ResetManualGrenadeInteractionLocked();
+                logPendingTimeout = true;
+            }
+
+            const bool squeezePressedEdge =
+                leftSqueezeHeld &&
+                !g_vrManualGrenade.leftSqueezeWasHeld;
+
+            const bool squeezeReleasedEdge =
+                !leftSqueezeHeld &&
+                g_vrManualGrenade.leftSqueezeWasHeld;
+
+            const bool poseValid =
+                g_vrLeftControllerForegripPoseValid;
+
+            float currentOrigin[3] = {};
+            float currentAxis[3][3] = {};
+            float currentVelocity[3] = {};
+            bool currentOriginUsesPalmPose = false;
+
+            if (poseValid)
+            {
+                for (int worldComponent = 0;
+                     worldComponent < 3;
+                     ++worldComponent)
+                {
+                    currentOrigin[worldComponent] =
+                        cameraOrigin[worldComponent] +
+                        g_vrLeftControllerForegripPosition[0] *
+                            cameraAxis[0][worldComponent] +
+                        g_vrLeftControllerForegripPosition[1] *
+                            cameraAxis[1][worldComponent] +
+                        g_vrLeftControllerForegripPosition[2] *
+                            cameraAxis[2][worldComponent];
+
+                    currentVelocity[worldComponent] =
+                        g_vrLeftControllerLinearVelocity[0] *
+                            cameraAxis[0][worldComponent] +
+                        g_vrLeftControllerLinearVelocity[1] *
+                            cameraAxis[1][worldComponent] +
+                        g_vrLeftControllerLinearVelocity[2] *
+                            cameraAxis[2][worldComponent];
+                }
+
+                for (int axisRow = 0;
+                     axisRow < 3;
+                     ++axisRow)
+                {
+                    for (int worldComponent = 0;
+                         worldComponent < 3;
+                         ++worldComponent)
+                    {
+                        currentAxis[axisRow][worldComponent] =
+                            g_vrLeftControllerForegripAxis[axisRow][0] *
+                                cameraAxis[0][worldComponent] +
+                            g_vrLeftControllerForegripAxis[axisRow][1] *
+                                cameraAxis[1][worldComponent] +
+                            g_vrLeftControllerForegripAxis[axisRow][2] *
+                                cameraAxis[2][worldComponent];
+                    }
+                }
+
+                // KISAK_SP_VR_MANUAL_GRENADE_PALM_FIT_V54
+                // The floating glove is registered to grip_surface/palm_ext,
+                // whereas V53 placed the grenade at grip/pose.  Use the same
+                // palm pose for both objects and move the grenade center a
+                // small distance into the left palm so it no longer hovers
+                // outside the fingers while the grip is held.
+                if (g_vrLeftControllerPalmPoseValid)
+                {
+                    const XrQuaternionf palmOrientation =
+                        VR_NormalizeQuaternion(
+                            g_vrLeftControllerPalmOrientationHeadLocalOpenXr);
+
+                    const std::array<VrHeadVector, 3> palmAxisCameraLocal = {
+                        VR_OpenXrVectorToCod(
+                            VR_RotateHeadVector(
+                                palmOrientation,
+                                {0.0f, 0.0f, -1.0f})),
+                        VR_OpenXrVectorToCod(
+                            VR_RotateHeadVector(
+                                palmOrientation,
+                                {-1.0f, 0.0f, 0.0f})),
+                        VR_OpenXrVectorToCod(
+                            VR_RotateHeadVector(
+                                palmOrientation,
+                                {0.0f, 1.0f, 0.0f})),
+                    };
+
+                    for (int worldComponent = 0;
+                         worldComponent < 3;
+                         ++worldComponent)
+                    {
+                        currentOrigin[worldComponent] =
+                            cameraOrigin[worldComponent] +
+                            g_vrLeftControllerPalmPosition[0] *
+                                cameraAxis[0][worldComponent] +
+                            g_vrLeftControllerPalmPosition[1] *
+                                cameraAxis[1][worldComponent] +
+                            g_vrLeftControllerPalmPosition[2] *
+                                cameraAxis[2][worldComponent];
+
+                        for (int axisRow = 0;
+                             axisRow < 3;
+                             ++axisRow)
+                        {
+                            currentAxis[axisRow][worldComponent] =
+                                palmAxisCameraLocal[axisRow].x *
+                                    cameraAxis[0][worldComponent] +
+                                palmAxisCameraLocal[axisRow].y *
+                                    cameraAxis[1][worldComponent] +
+                                palmAxisCameraLocal[axisRow].z *
+                                    cameraAxis[2][worldComponent];
+                        }
+                    }
+
+                    constexpr float grenadePalmInset = 0.60f;
+
+                    for (int worldComponent = 0;
+                         worldComponent < 3;
+                         ++worldComponent)
+                    {
+                        currentOrigin[worldComponent] +=
+                            currentAxis[1][worldComponent] *
+                            grenadePalmInset;
+                    }
+
+                    currentOriginUsesPalmPose = true;
+                }
+            }
+
+            const float localForward =
+                g_vrLeftControllerForegripPosition[0];
+
+            const float localLeft =
+                g_vrLeftControllerForegripPosition[1];
+
+            const float localUp =
+                g_vrLeftControllerForegripPosition[2];
+
+            const bool insideBeltHeight =
+                poseValid &&
+                localForward >= -18.0f &&
+                localForward <= 18.0f &&
+                localUp >= -42.0f &&
+                localUp <= -14.0f;
+
+            const bool insideLeftHip =
+                insideBeltHeight &&
+                localLeft >= 2.0f &&
+                localLeft <= 24.0f;
+
+            const bool insideRightHip =
+                insideBeltHeight &&
+                localLeft <= -2.0f &&
+                localLeft >= -24.0f;
+
+            const bool magazineOwnsLeftGrip =
+                g_vrManualMagazineReload.stage !=
+                    VrManualMagazineReloadStage::Ready;
+
+            if (g_vrManualGrenade.stage ==
+                    VrManualGrenadeStage::Ready &&
+                squeezePressedEdge &&
+                !magazineOwnsLeftGrip &&
+                (insideLeftHip || insideRightHip))
+            {
+                const VrManualGrenadeSlot selectedSlot =
+                    insideLeftHip
+                        ? VrManualGrenadeSlot::Frag
+                        : VrManualGrenadeSlot::Tactical;
+
+                const int selectedWeaponIndex =
+                    selectedSlot ==
+                            VrManualGrenadeSlot::Frag
+                        ? fragWeaponIndex
+                        : tacticalWeaponIndex;
+
+                loggedSlot = selectedSlot;
+                loggedWeaponIndex = selectedWeaponIndex;
+                loggedLocalPosition[0] = localForward;
+                loggedLocalPosition[1] = localLeft;
+                loggedLocalPosition[2] = localUp;
+
+                if (selectedWeaponIndex > 0)
+                {
+                    VR_ClearManualGrenadeVelocityHistoryLocked();
+
+                    g_vrManualGrenade.stage =
+                        VrManualGrenadeStage::Holding;
+
+                    g_vrManualGrenade.slot =
+                        selectedSlot;
+
+                    g_vrManualGrenade.weaponIndex =
+                        selectedWeaponIndex;
+
+                    std::memcpy(
+                        g_vrManualGrenade.heldOrigin,
+                        currentOrigin,
+                        sizeof(
+                            g_vrManualGrenade.heldOrigin));
+
+                    std::memcpy(
+                        g_vrManualGrenade.heldAxis,
+                        currentAxis,
+                        sizeof(
+                            g_vrManualGrenade.heldAxis));
+
+                    g_vrLeftControllerForegripPressed = false;
+                    g_vrTwoHandWeaponTargetActive = false;
+                    loggedUsedPalmPose =
+                        currentOriginUsesPalmPose;
+                    logGrab = true;
+                }
+                else
+                {
+                    // Pulse the corresponding native button for one command
+                    // so COD4 can show its existing no-grenade hint.
+                    if (selectedSlot ==
+                        VrManualGrenadeSlot::Frag)
+                    {
+                        *fragHeld = true;
+                    }
+                    else
+                    {
+                        *tacticalHeld = true;
+                    }
+
+                    logEmptySlot = true;
+                }
+            }
+
+            if (g_vrManualGrenade.stage ==
+                VrManualGrenadeStage::Holding)
+            {
+                if (poseValid)
+                {
+                    std::memcpy(
+                        g_vrManualGrenade.heldOrigin,
+                        currentOrigin,
+                        sizeof(
+                            g_vrManualGrenade.heldOrigin));
+
+                    std::memcpy(
+                        g_vrManualGrenade.heldAxis,
+                        currentAxis,
+                        sizeof(
+                            g_vrManualGrenade.heldAxis));
+                }
+
+                if (poseValid &&
+                    g_vrLeftControllerLinearVelocityValid)
+                {
+                    VR_RecordManualGrenadeVelocityLocked(
+                        nowMilliseconds,
+                        currentVelocity);
+                }
+
+                if (squeezeReleasedEdge ||
+                    !leftSqueezeHeld)
+                {
+                    std::memcpy(
+                        g_vrManualGrenade.releaseOrigin,
+                        g_vrManualGrenade.heldOrigin,
+                        sizeof(
+                            g_vrManualGrenade.releaseOrigin));
+
+                    if (!VR_SelectManualGrenadeReleaseVelocityLocked(
+                            nowMilliseconds,
+                            g_vrManualGrenade.releaseVelocity,
+                            &g_vrManualGrenade
+                                .releaseVelocitySampleAgeMilliseconds))
+                    {
+                        g_vrManualGrenade.releaseVelocity[0] = 0.0f;
+                        g_vrManualGrenade.releaseVelocity[1] = 0.0f;
+                        g_vrManualGrenade.releaseVelocity[2] = 0.0f;
+                    }
+
+                    // The server uses this only when the physical sample has
+                    // too little horizontal motion to establish a stable
+                    // direction.  It is the release-time view forward, not a
+                    // later camera orientation.
+                    std::memcpy(
+                        g_vrManualGrenade.releaseFallbackForward,
+                        cameraAxis[0],
+                        sizeof(
+                            g_vrManualGrenade.releaseFallbackForward));
+
+                    g_vrManualGrenade.stage =
+                        VrManualGrenadeStage::ReleasedPending;
+
+                    g_vrManualGrenade.releasedAtMilliseconds =
+                        nowMilliseconds;
+
+                    g_vrManualGrenade.pendingUntilMilliseconds =
+                        nowMilliseconds + 3000u;
+
+                    g_vrManualGrenade.viewOverrideUntilMilliseconds =
+                        nowMilliseconds + 3000u;
+
+                    std::memcpy(
+                        loggedReleaseOrigin,
+                        g_vrManualGrenade.releaseOrigin,
+                        sizeof(loggedReleaseOrigin));
+
+                    std::memcpy(
+                        loggedReleaseVelocity,
+                        g_vrManualGrenade.releaseVelocity,
+                        sizeof(loggedReleaseVelocity));
+
+                    loggedVelocitySampleAgeMilliseconds =
+                        g_vrManualGrenade
+                            .releaseVelocitySampleAgeMilliseconds;
+
+                    loggedSlot =
+                        g_vrManualGrenade.slot;
+
+                    loggedWeaponIndex =
+                        g_vrManualGrenade.weaponIndex;
+
+                    logRelease = true;
+                }
+                else if (g_vrManualGrenade.slot ==
+                         VrManualGrenadeSlot::Frag)
+                {
+                    *fragHeld = true;
+                }
+                else
+                {
+                    *tacticalHeld = true;
+                }
+
+                g_vrLeftControllerForegripPressed = false;
+                g_vrTwoHandWeaponTargetActive = false;
+            }
+            else if (g_vrManualGrenade.stage ==
+                     VrManualGrenadeStage::ReleasedPending)
+            {
+                g_vrLeftControllerForegripPressed = false;
+                g_vrTwoHandWeaponTargetActive = false;
+            }
+
+            g_vrManualGrenade.leftSqueezeWasHeld =
+                leftSqueezeHeld;
+        }
+    }
+
+    if (logSetting)
+    {
+        Com_Printf(
+            0,
+            "[VR][GRENADE] V54 calibrated manual hip grenades are %s. "
+            "Left hip = frag; right hip = flash/smoke; "
+            "release left grip to throw.\n",
+            *manualModeEnabled
+                ? "enabled"
+                : "disabled");
+    }
+
+    const char* loggedSlotName =
+        loggedSlot == VrManualGrenadeSlot::Frag
+            ? "frag/left"
+            : "tactical/right";
+
+    if (logGrab)
+    {
+        Com_Printf(
+            0,
+            "[VR][GRENADE] Grabbed %s hip weapon %d at "
+            "HMD-local %.2f %.2f %.2f; held-model anchor %s.\n",
+            loggedSlotName,
+            loggedWeaponIndex,
+            loggedLocalPosition[0],
+            loggedLocalPosition[1],
+            loggedLocalPosition[2],
+            loggedUsedPalmPose
+                ? "palm_ext/pose"
+                : "grip/pose fallback");
+    }
+
+    if (logEmptySlot)
+    {
+        Com_Printf(
+            0,
+            "[VR][GRENADE] %s hip grab had no available "
+            "grenade; pulsed COD4's native empty hint.\n",
+            loggedSlotName);
+    }
+
+    if (logRelease)
+    {
+        const float releaseSpeed =
+            std::sqrt(
+                loggedReleaseVelocity[0] *
+                    loggedReleaseVelocity[0] +
+                loggedReleaseVelocity[1] *
+                    loggedReleaseVelocity[1] +
+                loggedReleaseVelocity[2] *
+                    loggedReleaseVelocity[2]);
+
+        Com_Printf(
+            0,
+            "[VR][GRENADE] Released %s weapon %d at "
+            "%.2f %.2f %.2f using recent hand velocity "
+            "%.2f %.2f %.2f (speed %.2f; sample age %u ms).\n",
+            loggedSlotName,
+            loggedWeaponIndex,
+            loggedReleaseOrigin[0],
+            loggedReleaseOrigin[1],
+            loggedReleaseOrigin[2],
+            loggedReleaseVelocity[0],
+            loggedReleaseVelocity[1],
+            loggedReleaseVelocity[2],
+            releaseSpeed,
+            loggedVelocitySampleAgeMilliseconds);
+    }
+
+    if (logPendingTimeout)
+    {
+        Com_PrintWarning(
+            0,
+            "[VR][GRENADE] A released grenade did not reach "
+            "EV_USE_OFFHAND within 3000 ms; cleared the stale "
+            "physical throw sample.\n");
+    }
+
+    return true;
+}
+
+
+bool VR_GetManualGrenadeRenderState(
+    int* weaponIndex,
+    float heldOrigin[3],
+    float heldAxis[3][3])
+{
+    if (weaponIndex == nullptr ||
+        heldOrigin == nullptr ||
+        heldAxis == nullptr)
+    {
+        return false;
+    }
+
+    *weaponIndex = 0;
+
+    std::lock_guard<std::mutex> lock(
+        g_vrWeaponControllerPoseMutex);
+
+    if (!g_vrManualGrenade.enabled ||
+        g_vrManualGrenade.stage !=
+            VrManualGrenadeStage::Holding ||
+        g_vrManualGrenade.weaponIndex <= 0)
+    {
+        return false;
+    }
+
+    *weaponIndex =
+        g_vrManualGrenade.weaponIndex;
+
+    std::memcpy(
+        heldOrigin,
+        g_vrManualGrenade.heldOrigin,
+        sizeof(g_vrManualGrenade.heldOrigin));
+
+    std::memcpy(
+        heldAxis,
+        g_vrManualGrenade.heldAxis,
+        sizeof(g_vrManualGrenade.heldAxis));
+
+    return true;
+}
+
+
+bool VR_IsManualGrenadeViewOverrideActive()
+{
+    const std::uint32_t nowMilliseconds =
+        static_cast<std::uint32_t>(
+            Sys_Milliseconds());
+
+    std::lock_guard<std::mutex> lock(
+        g_vrWeaponControllerPoseMutex);
+
+    const bool recoveryWindowActive =
+        g_vrManualGrenade
+            .viewOverrideUntilMilliseconds != 0u &&
+        static_cast<std::int32_t>(
+            g_vrManualGrenade
+                .viewOverrideUntilMilliseconds -
+            nowMilliseconds) > 0;
+
+    return
+        g_vrManualGrenade.enabled &&
+        (g_vrManualGrenade.stage !=
+             VrManualGrenadeStage::Ready ||
+         recoveryWindowActive);
+}
+
+
+bool VR_IsManualGrenadeReleasePending(
+    const int weaponIndex)
+{
+    const std::uint32_t nowMilliseconds =
+        static_cast<std::uint32_t>(
+            Sys_Milliseconds());
+
+    std::lock_guard<std::mutex> lock(
+        g_vrWeaponControllerPoseMutex);
+
+    return
+        g_vrManualGrenade.enabled &&
+        g_vrManualGrenade.stage ==
+            VrManualGrenadeStage::ReleasedPending &&
+        g_vrManualGrenade.weaponIndex ==
+            weaponIndex &&
+        static_cast<std::int32_t>(
+            g_vrManualGrenade.pendingUntilMilliseconds -
+            nowMilliseconds) > 0;
+}
+
+
+bool VR_ConsumeManualGrenadeThrow(
+    const int weaponIndex,
+    float releaseOrigin[3],
+    float releaseVelocity[3],
+    float releaseFallbackForward[3],
+    unsigned int* velocitySampleAgeMilliseconds,
+    unsigned int* releaseAgeMilliseconds)
+{
+    if (releaseOrigin == nullptr ||
+        releaseVelocity == nullptr ||
+        releaseFallbackForward == nullptr ||
+        velocitySampleAgeMilliseconds == nullptr ||
+        releaseAgeMilliseconds == nullptr)
+    {
+        return false;
+    }
+
+    const std::uint32_t nowMilliseconds =
+        static_cast<std::uint32_t>(
+            Sys_Milliseconds());
+
+    std::lock_guard<std::mutex> lock(
+        g_vrWeaponControllerPoseMutex);
+
+    if (!g_vrManualGrenade.enabled ||
+        g_vrManualGrenade.stage !=
+            VrManualGrenadeStage::ReleasedPending ||
+        g_vrManualGrenade.weaponIndex !=
+            weaponIndex ||
+        static_cast<std::int32_t>(
+            g_vrManualGrenade.pendingUntilMilliseconds -
+            nowMilliseconds) <= 0)
+    {
+        return false;
+    }
+
+    std::memcpy(
+        releaseOrigin,
+        g_vrManualGrenade.releaseOrigin,
+        sizeof(g_vrManualGrenade.releaseOrigin));
+
+    std::memcpy(
+        releaseVelocity,
+        g_vrManualGrenade.releaseVelocity,
+        sizeof(g_vrManualGrenade.releaseVelocity));
+
+    std::memcpy(
+        releaseFallbackForward,
+        g_vrManualGrenade.releaseFallbackForward,
+        sizeof(g_vrManualGrenade.releaseFallbackForward));
+
+    *velocitySampleAgeMilliseconds =
+        g_vrManualGrenade
+            .releaseVelocitySampleAgeMilliseconds;
+
+    *releaseAgeMilliseconds =
+        nowMilliseconds -
+        g_vrManualGrenade.releasedAtMilliseconds;
+
+    VR_ResetManualGrenadeInteractionLocked();
+
+    // Keep the primary firearm selected visually through the native offhand
+    // recovery frames after the projectile has been committed.
+    g_vrManualGrenade.viewOverrideUntilMilliseconds =
+        nowMilliseconds + 750u;
+
+    return true;
 }
 
 
