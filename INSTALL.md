@@ -130,7 +130,7 @@ process memory and should not be posted publicly.
 
 ## Known campaign limitation
 
-**Death From Above is not supported in `v0.10.0-beta.3`.**
+**Death From Above is not supported in `v0.10.0-beta.4`.**
 
 To skip **Death From Above**:
 

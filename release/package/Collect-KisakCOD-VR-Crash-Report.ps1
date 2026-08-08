@@ -223,7 +223,7 @@ try {
     @(
         'KisakCOD VR V48 crash diagnostic report',
         '',
-        'Send this complete ZIP to JplayUltimate. The .dmp and matching .txt file are both required.',
+        'Send this complete ZIP to JplayUltimate privately. The .dmp and matching .txt file are both required.',
         'The collector includes the latest two crash/fatal dumps, console.log, OpenXR-Startup.log,',
         'VR-Settings.bat, executable hash, OpenXR runtime registration, OS/GPU/memory summaries,',
         'and only the names/IDs of relevant running VR processes.',
@@ -243,7 +243,7 @@ try {
     Write-Host 'KISAKCOD VR CRASH REPORT READY'
     Write-Host $zipPath
     Write-Host ''
-    Write-Host 'Attach that complete ZIP to the bug report.'
+    Write-Host 'Send that complete ZIP privately; do not attach it to a public bug report.'
 }
 finally {
     if (Test-Path -LiteralPath $stagingRoot) {

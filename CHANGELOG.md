@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.10.0-beta.4
+
+Launcher compatibility and crash-report privacy hotfix over
+`v0.10.0-beta.3`. The game executable and VR gameplay code are unchanged.
+
+### Launcher
+
+- Fixes the batch launcher exiting before starting the game when COD4 is
+  installed in a path containing parentheses, including Steam's default
+  `C:\Program Files (x86)\...` location
+- Restores normal launcher settings and diagnostics for affected installs,
+  avoiding the blurry low-resolution result caused by starting
+  `KisakCOD-sp.exe` directly
+
+### Crash-report privacy
+
+- Clarifies throughout the packaged collector that minidump ZIPs must be sent
+  privately and must not be attached to public GitHub issues
+
 ## v0.10.0-beta.3
 
 VR interface, turning, stance-control, and diagnostic update over

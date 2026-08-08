@@ -22,7 +22,6 @@ if not "%COLLECT_STATUS%"=="0" (
 )
 
 echo.
-echo Collection complete. Attach the ZIP shown above; do not attach only a screenshot.
+echo Collection complete. Send the ZIP shown above privately; do not post it publicly.
 pause
 exit /b 0
-

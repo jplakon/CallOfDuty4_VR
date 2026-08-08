@@ -1,6 +1,6 @@
 # Release checklist
 
-This checklist is for `v0.10.0-beta.3`.
+This checklist is for `v0.10.0-beta.4`.
 
 ## Documentation blockers
 
@@ -78,7 +78,7 @@ This checklist is for `v0.10.0-beta.3`.
 
 ## Tag and package
 
-- Create annotated tag `v0.10.0-beta.3` only after the cumulative menu, turning, stance,
+- Create annotated tag `v0.10.0-beta.4` only after the cumulative menu, turning, stance,
   crash-diagnostic, frame, camera, audio, tracked-hand, and reload state is validated.
 - Run `tools/package_release.py`.
 - The packager must refuse to run if any documentation placeholder or

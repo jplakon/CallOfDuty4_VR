@@ -14,13 +14,12 @@ copy of the original game.
 
 ## Current status
 
-The current public beta is `v0.10.0-beta.3`.
+The current public beta is `v0.10.0-beta.4`.
 
-This update fixes frontend and active-mission quit confirmations in VR, adds
-a choice between 45-degree snap and analog smooth turning, and completes the
-right-stick stand/crouch/prone stance ladder. It also includes crash-report
-collection while retaining beta.2's frame, horizon, audio, tracked-hand, and
-physical-reloading improvements.
+This hotfix repairs the launcher for Steam's default `Program Files (x86)`
+installation path and clarifies that minidump crash reports must be shared
+privately. It retains beta.3's VR menus, smooth-turn option, stance controls,
+crash diagnostics, and all earlier gameplay improvements.
 
 - The single-player campaign is playable from beginning to end when
   **Death From Above** is skipped.

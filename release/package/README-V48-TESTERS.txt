@@ -23,8 +23,8 @@ After a crash
 -------------
 1. Do not relaunch the game first.
 2. Double-click Collect-KisakCOD-VR-Crash-Report.bat.
-3. Attach the complete KisakCOD-VR-Crash-Report-*.zip it creates on the
-   Desktop. A screenshot or console.log alone is not enough.
+3. Send the complete KisakCOD-VR-Crash-Report-*.zip it creates on the Desktop
+   privately. Do not post a minidump ZIP to a public issue.
 
 The collector includes the newest crash text/minidump pair, console and OpenXR
 startup logs, VR settings, executable identity, and basic OS/GPU/runtime

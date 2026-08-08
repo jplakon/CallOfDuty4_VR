@@ -50,7 +50,7 @@ set "KISAK_VR_CRASH_DIR=%~dp0CrashDumps"
 if not exist "%KISAK_VR_CRASH_DIR%\" mkdir "%KISAK_VR_CRASH_DIR%" >nul 2>&1
 if not exist "%KISAK_VR_CRASH_DIR%\" (
   echo ERROR: Could not create the crash-diagnostics folder:
-  echo   %KISAK_VR_CRASH_DIR%
+  echo   "%KISAK_VR_CRASH_DIR%"
   pause
   exit /b 1
 )
@@ -182,7 +182,7 @@ if not "%VR_EXIT_CODE%"=="0" (
     echo KisakCOD VR exited with code %VR_EXIT_CODE%.
     if exist "%KISAK_VR_CRASH_DIR%\LATEST.txt" (
       echo A V48 crash report and minidump were recorded in CrashDumps.
-      echo Run Collect-KisakCOD-VR-Crash-Report.bat and send the ZIP.
+      echo Run Collect-KisakCOD-VR-Crash-Report.bat and send the ZIP privately.
     ) else (
       echo No V48 minidump was recorded.
       echo Run Collect-KisakCOD-VR-Crash-Report.bat to collect the remaining logs.

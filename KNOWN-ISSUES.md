@@ -1,6 +1,6 @@
 # Known issues
 
-This list applies to `v0.10.0-beta.3`.
+This list applies to `v0.10.0-beta.4`.
 
 ## Unsupported mission
 
