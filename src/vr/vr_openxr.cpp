@@ -13967,14 +13967,35 @@ bool VR_GetTurnYawDelta(
         {
             Com_Printf(
                 0,
-                "[VR][CONTROLS] V50 turn mode: 45-degree "
-                "snap.\n");
+                "[VR][CONTROLS] V52 turn mode: 45-degree "
+                "snap with neutral latch rearm.\n");
         }
 
         g_vrTurnSettingsLoaded = true;
     }
 
     if (!g_vrRightThumbstickValid)
+    {
+        g_vrSnapTurnArmed = true;
+        return false;
+    }
+
+    // KISAK_SP_VR_SNAP_TURN_REARM_V52
+    // Re-arm snap turning before classifying horizontal versus vertical
+    // intent.  At neutral, both axes are zero, so the dominance margin below
+    // otherwise classifies the centered stick as vertical and returns before
+    // the latch can reset.  That regression made another snap possible only
+    // through the narrow horizontal band between the dominance margin and
+    // this release threshold.
+    constexpr float snapReleaseThreshold =
+        0.35f;
+
+    if (g_vrTurnMode ==
+            VrTurnMode::Snap &&
+        g_vrRightThumbstickX >
+            -snapReleaseThreshold &&
+        g_vrRightThumbstickX <
+            snapReleaseThreshold)
     {
         g_vrSnapTurnArmed = true;
         return false;
@@ -14033,17 +14054,7 @@ bool VR_GetTurnYawDelta(
     }
 
     constexpr float engageThreshold = 0.75f;
-    constexpr float releaseThreshold = 0.35f;
     constexpr float snapAngleDegrees = 45.0f;
-
-    if (g_vrRightThumbstickX >
-            -releaseThreshold &&
-        g_vrRightThumbstickX <
-            releaseThreshold)
-    {
-        g_vrSnapTurnArmed = true;
-        return false;
-    }
 
     if (!g_vrSnapTurnArmed)
     {

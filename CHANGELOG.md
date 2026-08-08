@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.10.0-beta.5
+
+Snap-turn input hotfix over `v0.10.0-beta.4`.
+
+### Turning controls
+
+- Restores reliable repeated 45-degree snap turns after the smooth-turn
+  refactor
+- Re-arms the snap-turn latch at true stick neutral before the
+  horizontal/vertical dominance filter runs
+- Preserves the 0.75 engagement threshold, 0.35 release threshold, 45-degree
+  angle, analog smooth turning, and right-stick stance gestures
+
 ## v0.10.0-beta.4
 
 Launcher compatibility and crash-report privacy hotfix over
