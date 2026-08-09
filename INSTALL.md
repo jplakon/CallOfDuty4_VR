@@ -35,65 +35,35 @@ The mod executable must remain beside `iw3sp.exe`. Do not replace or rename
 
 ## Adjusting VR settings
 
-Open `VR-Settings.bat` in Notepad. The supplied defaults reproduce the
-developer's current Quest 3 configuration:
+Run `KisakCOD-VR-Configurator.exe` from the COD4 folder. For the first launch,
+keep **Tested Quest 3** selected and click **Save & Launch**. The other built-in
+presets are Performance, Comfort Snap, Smooth Turn, Seated, and Minimal HUD;
+every setting can also be customized individually.
 
-- Automatic backend selection (`auto`)
-- Render/window mode: `6016x2688`
-- GPU bridge enabled
-- Native output scale
-- FSR disabled
-- Brightness: `1.00` (neutral after sRGB correction)
-- Synchronized shadows enabled
-- Physical scope capture: `1024`
-- Physical magazine reloading enabled
-- Physical hip-drawn grenades enabled
-- Controller-tracked hands enabled
-- 45-degree snap turning enabled by default
+The configurator covers:
 
-If performance is poor, change both packed-render settings to the supported
-lower preset:
+- snap angle, smooth-turn speed, movement direction, and stick deadzones
+- native/performance rendering, FSR, brightness, shadows, and scope quality
+- HUD, mission text, compass, crosshair, and subtitle placement/visibility
+- right-hand weapon and left-hand position, rotation, and tracking response
+- manual/automatic reload, belt and grenade calibration, and two-hand strength
+- physical-scope alignment and supported Quest face-button roles
 
-```bat
-set "VR_CUSTOM_MODE=4768x2016"
-set "KISAK_VR_OUTPUT_SCALE=0.75"
+It validates the selected combination, offers live previews, and can launch the
+normal or one-run diagnostic mode. Personal settings are written to:
+
+```text
+%LOCALAPPDATA%\KisakCOD-VR\VR-User-Settings.bat
 ```
 
-Do not use `3072x1536`. It cannot contain both rectangular eye images and the
-dedicated physical-scope panel. Fully close and restart the game after changing
-environment settings.
+The previous profile is backed up on every save. Import and Export can move a
+profile between installations. If upgrading from an earlier beta with a
+hand-edited `VR-Settings.bat`, keep a copy and import it after installing.
+Fully close and restart COD4 after changing settings.
 
-
-### Turning mode
-
-Snap turning remains the default:
-
-```bat
-set "KISAK_VR_TURN_MODE=snap"
-```
-
-To use analog smooth turning, set:
-
-```bat
-set "KISAK_VR_TURN_MODE=smooth"
-set "KISAK_VR_SMOOTH_TURN_SPEED=120"
-```
-
-The smooth-turn speed is full-stick degrees per second and accepts values from
-30 through 360. Fully close and restart COD4 after changing either value.
-
-### Manual grenades
-
-Manual grenades are enabled by default:
-
-```bat
-set "KISAK_VR_MANUAL_GRENADES=1"
-```
-
-With the left grip released, squeeze at the left hip for a frag or the right
-hip for the mission-equipped flashbang/smoke grenade. Keep holding to hold or
-cook it, then physically swing and release the grip. Set the value to `0` to
-restore beta.5's right-grip tactical and left-Y hold-frag controls.
+The verified render pairs remain `6016x2688` with output scale `1.00` (Native)
+and `4768x2016` with output scale `0.75` (Performance). Do not use
+`3072x1536`; it cannot contain both eyes and the dedicated scope panel.
 
 ### Runtime backend
 
@@ -117,9 +87,9 @@ Available values are:
 Changing this setting does not make SteamVR a 32-bit OpenXR runtime. Fully
 close and restart COD4 after changing it.
 
-The HUD controls are also in `VR-Settings.bat`. Lowering
-`KISAK_VR_HUD_SAFE_X` moves the left-side ammo/action information farther
-right. Scope offsets are measured in meters.
+HUD, compass, game-text, weapon/hand, belt, and physical-scope controls
+are exposed by the configurator. Advanced users may still inspect the generated
+batch profile; scope offsets are measured in meters.
 
 ## Normal and diagnostic launchers
 
@@ -147,7 +117,7 @@ process memory and should not be posted publicly.
 Every standard campaign mission is unlocked in Mission Select at startup,
 including on a new profile. Developer mode remains disabled.
 
-**Death From Above is not supported in `v0.10.0-beta.6`, even though it appears
+**Death From Above is not supported in `v0.10.0-beta.7`, even though it appears
 unlocked.**
 
 To skip **Death From Above**:

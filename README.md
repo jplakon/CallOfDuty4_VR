@@ -14,14 +14,15 @@ copy of the original game.
 
 ## Current status
 
-The current public beta is `v0.10.0-beta.6`.
+The current public beta is `v0.10.0-beta.7`.
 
-This beta adds physical manual grenade handling and unlocks the standard
-Mission Select list for new profiles. Frags are drawn from the left hip;
-mission-equipped flashbangs or smoke grenades are drawn from the right hip.
-Grenades retain COD4's native ammo, cooking, fuse, sound, damage, AI, and
-scripting behavior while using the tracked left hand for release position and
-throw motion. It also retains beta.5's snap-turn fix and all earlier VR work.
+This beta adds a portable graphical VR configurator with tested presets and a
+full custom mode. Users can configure snap or smooth turning, rendering,
+HUD/text/compass placement, weapon and hand fit, belt/reload/grenade behavior,
+scope alignment, and supported controller roles without editing batch files.
+Personal settings are stored separately so later package updates preserve them.
+It retains beta.6's physical grenades and Mission Select unlock plus all earlier
+VR work.
 
 - The single-player campaign is playable from beginning to end when
   **Death From Above** is skipped.
@@ -53,9 +54,9 @@ other Call of Duty game data.
 3. Extract the contents of the KisakCOD VR ZIP into that folder, beside
    `iw3sp.exe`.
 4. Start the OpenXR runtime you intend to use.
-5. Run `Launch-KisakCOD-VR.bat`.
-6. Edit `VR-Settings.bat` if the default Quest 3 settings are too demanding or
-   the HUD/scope needs calibration.
+5. Run `KisakCOD-VR-Configurator.exe`.
+6. Choose a preset or custom settings, then click **Save & Launch**. The batch
+   launcher remains available for starting with the last saved profile.
 
 Full instructions are in [INSTALL.md](INSTALL.md).
 
@@ -76,13 +77,15 @@ git clone --recurse-submodules \
 
 cd CallOfDuty4_VR
 cmake -S . -B build -G "Visual Studio 17 2022" -A Win32
-cmake --build build --config Release --target KisakCOD-sp --parallel 8
+cmake --build build --config Release \
+  --target KisakCOD-sp KisakCOD-VR-Configurator --parallel 8
 ```
 
-The compiled executable is written to:
+The compiled executables are written to:
 
 ```text
 bin/Release/KisakCOD-sp.exe
+bin/Release/KisakCOD-VR-Configurator.exe
 ```
 
 It must be run from a directory containing the files supplied by the user's

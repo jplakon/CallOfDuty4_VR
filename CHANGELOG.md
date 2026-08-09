@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.10.0-beta.7
+
+VR configurator and customization update over `v0.10.0-beta.6`.
+
+### VR Configurator
+
+- Adds the portable `KisakCOD-VR-Configurator.exe` with Tested Quest 3,
+  Performance, Comfort Snap, Smooth Turn, Seated, and Minimal HUD presets
+- Adds full custom pages and visual previews for comfort, rendering,
+  HUD/text/compass placement, weapon/hand/belt fit, physical interactions,
+  scope alignment, and supported controller roles
+- Validates settings before saving and provides Save & Launch plus a one-run
+  diagnostic launch
+- Stores personal settings separately under LocalAppData, keeps automatic
+  backups, and supports profile import/export so package upgrades preserve the
+  active profile
+
+### Runtime customization
+
+- Makes snap angle, smooth-turn speed, stick deadzones, and head/body/left-hand
+  movement direction configurable
+- Adds configurable compass visibility, scale, rotation, inset, mission-text
+  placement, crosshair, subtitles, camera shake, and weapon bob
+- Adds right-weapon and left-hand position/orientation calibration, tracking
+  response, two-hand strength, belt geometry, reload insertion radius, grenade
+  throw calibration, and physical-scope placement/quality controls
+- Allows automatic/native or physical magazine reloading and remapping of the
+  supported face-button roles while preserving fixed pose-sensitive inputs
+- Adds automated configurator settings tests to the Windows build workflow
+
 ## v0.10.0-beta.6
 
 Manual-grenade and campaign-access update over `v0.10.0-beta.5`.

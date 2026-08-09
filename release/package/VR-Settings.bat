@@ -1,67 +1,99 @@
 @echo off
-rem KisakCOD VR settings
-rem Fully close and restart the game after editing this file.
+rem KisakCOD VR release defaults (V56 configurator schema).
+rem Do not put personal changes here: KisakCOD-VR-Configurator.exe writes a
+rem separate VR-User-Settings.bat under LocalAppData so upgrades preserve them.
 
-rem Runtime backend selection:
-rem   auto   = normal behavior; use OpenXR first and OpenVR only when no
-rem            compatible 32-bit OpenXR runtime can be enumerated.
-rem   openxr = force OpenXR (VDXR or Pimax OpenXR).
-rem   openvr = force the experimental 32-bit SteamVR/OpenVR fallback.
-rem OpenVR currently has no motion-controller input.
+rem Runtime backend: auto, openxr, or the experimental openvr fallback.
 set "KISAK_VR_BACKEND=auto"
 
-rem Current Quest 3 / Virtual Desktop native packed mode.
-rem Valid lower preset: use VR_CUSTOM_MODE=4768x2016 together with
-rem KISAK_VR_OUTPUT_SCALE=0.75 below. Do not use the obsolete 3072x1536 mode;
-rem it cannot contain two rectangular eyes plus the dedicated scope panel.
+rem Verified packed rendering layouts. Never use the obsolete 3072x1536 mode.
 set "VR_CUSTOM_MODE=6016x2688"
+set "KISAK_VR_OUTPUT_SCALE=1.00"
+set "KISAK_VR_FSR=0"
+set "KISAK_VR_FSR_SHARPNESS=0.60"
+set "KISAK_VR_BRIGHTNESS=1.00"
+set "KISAK_VR_SHADOWS=1"
+set "KISAK_VR_GPU_BRIDGE=1"
+set "KISAK_VR_ALLOW_OVERSIZED_WINDOW=1"
 
-rem Physical scope placement, measured in meters.
+rem Comfort and locomotion.
+set "KISAK_VR_TURN_MODE=snap"
+set "KISAK_VR_SNAP_TURN_ANGLE=45"
+set "KISAK_VR_SMOOTH_TURN_SPEED=120"
+set "KISAK_VR_TURN_DEADZONE=0.25"
+set "KISAK_VR_MOVEMENT_DIRECTION=head"
+set "KISAK_VR_MOVEMENT_DEADZONE=0.18"
+
+rem HUD, compass, and mission text placement.
+set "KISAK_VR_HUD_SAFE_X=0.50"
+set "KISAK_VR_HUD_SAFE_Y=1.00"
+set "KISAK_VR_HUD_BOTTOM_LEFT_SCALE=0.50"
+set "KISAK_VR_COMPASS_ENABLED=1"
+set "KISAK_VR_COMPASS_SIZE=1.00"
+set "KISAK_VR_COMPASS_ROTATION=1"
+set "KISAK_VR_COMPASS_INSET_X=220"
+set "KISAK_VR_COMPASS_INSET_Y=48"
+set "KISAK_VR_GAME_MESSAGE_X_OFFSET=0"
+set "KISAK_VR_GAME_MESSAGE_Y_OFFSET=72"
+set "KISAK_VR_GAME_MESSAGE_SCALE=1.00"
+set "KISAK_VR_CROSSHAIR=1"
+set "KISAK_VR_SUBTITLES=1"
+
+rem Right-hand weapon calibration and tracking response.
+set "KISAK_VR_WEAPON_OFFSET_FORWARD=0.00"
+set "KISAK_VR_WEAPON_OFFSET_LEFT=0.00"
+set "KISAK_VR_WEAPON_OFFSET_UP=0.00"
+set "KISAK_VR_WEAPON_PITCH=0.0"
+set "KISAK_VR_WEAPON_YAW=0.0"
+set "KISAK_VR_WEAPON_ROLL=0.0"
+set "KISAK_VR_WEAPON_POSITION_RESPONSE=0.45"
+set "KISAK_VR_WEAPON_ORIENTATION_RESPONSE=0.55"
+
+rem Floating left-hand fit and two-hand stabilization.
+set "KISAK_VR_TRACKED_HANDS=1"
+set "KISAK_VR_LEFT_HAND_OFFSET_FORWARD=0.00"
+set "KISAK_VR_LEFT_HAND_OFFSET_LEFT=0.00"
+set "KISAK_VR_LEFT_HAND_OFFSET_UP=0.00"
+set "KISAK_VR_LEFT_HAND_PITCH=0.0"
+set "KISAK_VR_LEFT_HAND_YAW=0.0"
+set "KISAK_VR_LEFT_HAND_ROLL=0.0"
+set "KISAK_VR_LEFT_HAND_GRIP_RADIUS=14.0"
+set "KISAK_VR_TWO_HAND_STRENGTH=1.00"
+
+rem Physical interactions and shared belt calibration.
+set "KISAK_VR_MANUAL_RELOAD=1"
+set "KISAK_VR_MANUAL_GRENADES=1"
+set "KISAK_VR_BELT_FORWARD_OFFSET=0.0"
+set "KISAK_VR_BELT_HEIGHT=-28.0"
+set "KISAK_VR_BELT_HIP_DISTANCE=13.0"
+set "KISAK_VR_BELT_GRAB_RADIUS=11.0"
+set "KISAK_VR_RELOAD_INSERT_RADIUS=6.5"
+
+rem Physical grenade calibration. Defaults reproduce beta.6 behavior.
+set "KISAK_VR_GRENADE_DROP_SPEED=35"
+set "KISAK_VR_GRENADE_FULL_THROW_SPEED=260"
+set "KISAK_VR_GRENADE_MIN_STRENGTH=0.70"
+set "KISAK_VR_GRENADE_MAX_STRENGTH=1.15"
+set "KISAK_VR_GRENADE_VERTICAL_SCALE=0.65"
+
+rem Rifle-attached physical scope placement and capture quality.
 set "KISAK_VR_SCOPE_FORWARD_METERS=-0.10"
-set "KISAK_VR_SCOPE_LEFT_METERS=0"
-set "KISAK_VR_SCOPE_UP_METERS=0"
+set "KISAK_VR_SCOPE_LEFT_METERS=0.000"
+set "KISAK_VR_SCOPE_UP_METERS=0.000"
 set "KISAK_VR_SCOPE_RADIUS_METERS=0.024"
 set "KISAK_VR_SCOPE_CAPTURE_SIZE=1024"
 
-rem GPU bridge and compositor.
-rem Keep 1.0 for 6016x2688; use 0.75 with the 4768x2016 lower preset.
-set "KISAK_VR_GPU_BRIDGE=1"
-set "KISAK_VR_ALLOW_OVERSIZED_WINDOW=1"
-set "KISAK_VR_OUTPUT_SCALE=1.0"
-set "KISAK_VR_FSR=0"
-set "KISAK_VR_BRIGHTNESS=1.00"
+rem Remappable face-button roles. Trigger, grip, sticks, and the menu button
+rem remain fixed because they own pose-sensitive or system interactions.
+set "KISAK_VR_BIND_USE=x"
+set "KISAK_VR_BIND_SPRINT=stick"
+set "KISAK_VR_BIND_NEXT_WEAPON=y"
+set "KISAK_VR_BIND_RELOAD=a"
+set "KISAK_VR_BIND_MELEE=stick"
+set "KISAK_VR_BIND_STANCE=b"
 
-rem High-volume retired mission/controller traces. Leave off for normal play.
+rem Advanced gameplay and diagnostics.
+set "KISAK_VR_UNLOCK_MISSIONS=1"
 set "KISAK_VR_VERBOSE_DIAGNOSTICS=0"
-
-rem KISAK_SP_VR_SMOOTH_TURN_OPTION_V50
-rem Right-stick turning: snap preserves the existing 45-degree comfort turn;
-rem smooth applies analog continuous turning. Restart after changing either.
-set "KISAK_VR_TURN_MODE=snap"
-set "KISAK_VR_SMOOTH_TURN_SPEED=120"
-
-rem Physical magazines for supported rifles, SMGs, and pistols.
-rem Right A ejects; squeeze at the left hip draws; release at the magazine
-rem well inserts. Set to 0 to make right A use COD4's native reload.
-set "KISAK_VR_MANUAL_RELOAD=1"
-
-rem Physical hip-drawn grenades. Left hip selects frag; right hip selects
-rem the mission-equipped flashbang or smoke. Hold/cook, then physically swing
-rem and release the left grip. Set to 0 for beta.5's legacy grenade controls.
-set "KISAK_VR_MANUAL_GRENADES=1"
-
-rem Two-bone IK left hand at the physical OpenXR grip pose without stretching.
-rem The right hand follows the right-controller rifle. Set to 0 for stock arms.
-set "KISAK_VR_TRACKED_HANDS=1"
-
-rem Set to 0 if synchronized shadows cause corruption or poor performance.
-set "KISAK_VR_SHADOWS=1"
-
-rem HUD placement. Lower HUD_SAFE_X moves the left-side ammo/action HUD right.
-set "KISAK_VR_HUD_SAFE_X=0.50"
-set "KISAK_VR_HUD_SAFE_Y=1.0"
-set "KISAK_VR_HUD_BOTTOM_LEFT_SCALE=0.50"
-
-rem Compass inset in pixels.
-set "KISAK_VR_COMPASS_INSET_X=220"
-set "KISAK_VR_COMPASS_INSET_Y=48"
+set "KISAK_VR_CAMERA_SHAKE=1"
+set "KISAK_VR_WEAPON_BOB_AMPLITUDE=0.16"

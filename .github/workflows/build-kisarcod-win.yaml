@@ -68,6 +68,9 @@ jobs:
         run: |
           pushd
           cmake --build build-${{ matrix.config }} --config ${{ matrix.config }} --target "KisakCOD-sp"
+          cmake --build build-${{ matrix.config }} --config ${{ matrix.config }} --target "KisakCOD-VR-Configurator"
+          cmake --build build-${{ matrix.config }} --config ${{ matrix.config }} --target "KisakCOD-VR-Configurator-Tests"
+          .\bin\${{ matrix.config }}\KisakCOD-VR-Configurator-Tests.exe .\release\package\VR-Settings.bat
           cmake --build build-${{ matrix.config }} --config ${{ matrix.config }} --target "KisakCOD-mp"
           cmake --build build-${{ matrix.config }} --config ${{ matrix.config }} --target "KisakCOD-dedi"
           popd

@@ -5,8 +5,8 @@ controllers may use different runtime bindings.
 
 Right-stick vertical gestures move one native stance step and must return near
 neutral before they can trigger again. Vertically dominant input prevents a
-stance gesture from also turning. Horizontal turning can use the default
-45-degree snap mode or optional analog smooth mode.
+stance gesture from also turning. Horizontal turning supports configurable snap
+angles or analog smooth mode through `KisakCOD-VR-Configurator.exe`.
 
 The tracked-hands build keeps COD4's original combined hand mesh
 and uses two-bone shoulder/elbow IK to place the left wrist at the left OpenXR
@@ -18,11 +18,11 @@ animation. Touch-driven finger curling is not implemented yet.
 | Action | Controller binding |
 |---|---|
 | Move | Left thumbstick; movement follows HMD direction |
-| Turn | Right thumbstick left or right; 45-degree snap by default or configurable smooth turn |
+| Turn | Right thumbstick left or right; configurable snap angle or analog smooth turn |
 | Fire | Right index trigger |
 | Aim / scope | Hold the left grip and physically shoulder the weapon near the headset sight line |
 | Raise stance / jump | Flick right thumbstick up: prone -> crouch -> stand -> jump; left index trigger also remains available |
-| Manual magazine reload | Right A to eject or reload; squeeze the left grip at the left hip to draw; release at the magazine well to insert |
+| Magazine reload | Manual mode: right A ejects, left grip at the left hip draws, and release at the magazine well inserts; automatic mode uses COD4's native reload |
 | Use / interact | Left X button |
 | Sprint | Click left thumbstick |
 | Lower stance | Flick right thumbstick down: stand -> crouch -> prone; tapping right B also remains available |
@@ -32,6 +32,15 @@ animation. Touch-driven finger curling is not implemented yet.
 | Flashbang / smoke grenade | With the left grip released, reach to the right hip and squeeze; the mission-equipped tactical type is selected |
 | Next weapon | Press left Y |
 | Pause / menu | Left controller menu button |
+
+## Configurator and remapping
+
+The table above shows the default Quest Touch layout. The configurator can
+remap the supported face-button roles for use, next weapon, reload, stance,
+sprint, and melee. Trigger, grip, thumbstick axes, and the menu button remain
+fixed because they own pose-sensitive or system interactions. It can also
+switch locomotion among head-relative, body-relative, and left-hand-relative
+movement.
 
 ## Right-thumbrest mission controls
 

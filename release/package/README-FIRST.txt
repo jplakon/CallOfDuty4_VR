@@ -19,13 +19,27 @@ INSTALL
 2. Confirm that the folder contains iw3sp.exe.
 3. Extract every file from this ZIP into that folder, beside iw3sp.exe.
 4. Start your OpenXR runtime.
-5. Run Launch-KisakCOD-VR.bat.
+5. Run KisakCOD-VR-Configurator.exe, choose a preset, and click Save & Launch.
 
-Edit VR-Settings.bat to change resolution, brightness, shadows, HUD placement,
-or physical-scope alignment. Fully restart the game after changing it.
+The configurator covers comfort, graphics, HUD/text/compass placement, weapon
+and hand fit, belt/reload/grenade interactions, scope alignment, and controller
+roles. Personal settings are stored separately and survive future updates.
+If you hand-edited VR-Settings.bat in an earlier beta, keep a copy and use the
+configurator's Import button after installing. You can still run
+Launch-KisakCOD-VR.bat directly with the last saved profile. Fully restart the
+game after changing settings.
 
-NEW IN BETA.6
----------------
+CONFIGURATOR
+------------
+
+- Tested comfort/performance/seated/minimal-HUD presets plus full custom mode.
+- Snap or smooth turning, movement direction and stick deadzones.
+- Live HUD, weapon/hand/belt, and controller-binding previews.
+- Safe validation, profile import/export, and automatic settings backups.
+- Save & Launch and one-run diagnostic launch buttons.
+
+PHYSICAL INTERACTIONS
+---------------------
 
 - Left grip at the left hip draws a frag grenade.
 - Left grip at the right hip draws the equipped flashbang or smoke grenade.

@@ -18,6 +18,7 @@
 #endif
 #include <sound/snd_public.h>
 
+#include <cmath>
 #include <cstdlib>
 
 enum {
@@ -1761,6 +1762,90 @@ static int32_t VR_GetGameMessageYOffset()
 
     return yOffset;
 }
+
+static int32_t VR_GetGameMessageXOffset()
+{
+    static const int32_t xOffset = []() -> int32_t
+    {
+        constexpr int32_t defaultOffset = 0;
+        constexpr long minimumOffset = -300;
+        constexpr long maximumOffset = 300;
+
+        const char *requestedOffset =
+            std::getenv("KISAK_VR_GAME_MESSAGE_X_OFFSET");
+
+        if (requestedOffset == nullptr || requestedOffset[0] == '\0')
+        {
+            return defaultOffset;
+        }
+
+        char *parseEnd = nullptr;
+        const long parsedOffset =
+            std::strtol(requestedOffset, &parseEnd, 10);
+
+        if (parseEnd == requestedOffset || parseEnd == nullptr ||
+            parseEnd[0] != '\0' || parsedOffset < minimumOffset ||
+            parsedOffset > maximumOffset)
+        {
+            Com_PrintWarning(
+                0,
+                "[VR][HUD] Ignoring invalid "
+                "KISAK_VR_GAME_MESSAGE_X_OFFSET='%s'; using %d. "
+                "Valid range is %ld through %ld.\n",
+                requestedOffset,
+                defaultOffset,
+                minimumOffset,
+                maximumOffset);
+            return defaultOffset;
+        }
+
+        return static_cast<int32_t>(parsedOffset);
+    }();
+
+    return xOffset;
+}
+
+static float VR_GetGameMessageScale()
+{
+    static const float scale = []()
+    {
+        constexpr float defaultScale = 1.0f;
+        constexpr float minimumScale = 0.5f;
+        constexpr float maximumScale = 1.5f;
+
+        const char *requestedScale =
+            std::getenv("KISAK_VR_GAME_MESSAGE_SCALE");
+
+        if (requestedScale == nullptr || requestedScale[0] == '\0')
+        {
+            return defaultScale;
+        }
+
+        char *parseEnd = nullptr;
+        const float parsedScale =
+            std::strtof(requestedScale, &parseEnd);
+
+        if (parseEnd == requestedScale || parseEnd == nullptr ||
+            parseEnd[0] != '\0' || !std::isfinite(parsedScale) ||
+            parsedScale < minimumScale || parsedScale > maximumScale)
+        {
+            Com_PrintWarning(
+                0,
+                "[VR][HUD] Ignoring invalid "
+                "KISAK_VR_GAME_MESSAGE_SCALE='%s'; using %.2f. "
+                "Valid range is %.2f through %.2f.\n",
+                requestedScale,
+                defaultScale,
+                minimumScale,
+                maximumScale);
+            return defaultScale;
+        }
+
+        return parsedScale;
+    }();
+
+    return scale;
+}
 #endif
 
 void __cdecl Con_DrawGameMessageWindow(
@@ -1783,10 +1868,18 @@ void __cdecl Con_DrawGameMessageWindow(
     if (VR_IsInitialized() &&
         windowIndex == 0u)
     {
+        const int32_t xOffset =
+            VR_GetGameMessageXOffset();
+
         const int32_t yOffset =
             VR_GetGameMessageYOffset();
 
+        const float vrScale =
+            VR_GetGameMessageScale();
+
+        xPos += xOffset;
         yPos += yOffset;
+        fontScale *= vrScale;
 
         static bool loggedVrGameMessageOffset = false;
 
@@ -1794,9 +1887,11 @@ void __cdecl Con_DrawGameMessageWindow(
         {
             Com_Printf(
                 0,
-                "[VR][HUD] Game notifications moved down by "
-                "%d virtual pixels.\n",
-                yOffset);
+                "[VR][HUD] Game notifications offset by %d/%d virtual "
+                "pixels at %.2f scale.\n",
+                xOffset,
+                yOffset,
+                vrScale);
 
             loggedVrGameMessageOffset = true;
         }

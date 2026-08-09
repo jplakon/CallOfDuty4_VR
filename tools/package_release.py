@@ -186,6 +186,16 @@ def main() -> int:
     if len(binary) < 1_000_000:
         fail(f"compiled executable looks unexpectedly small: {binary_path}")
 
+    configurator_path = (
+        root / "bin" / "Release" / "KisakCOD-VR-Configurator.exe"
+    )
+    configurator = read_required(configurator_path)
+    if len(configurator) < 100_000:
+        fail(
+            "compiled configurator looks unexpectedly small: "
+            f"{configurator_path}"
+        )
+
     package_root = root / "release" / "package"
     replacements = {
         "@VERSION@": args.version,
@@ -209,6 +219,7 @@ def main() -> int:
         )
 
     payload["KisakCOD-sp.exe"] = binary
+    payload["KisakCOD-VR-Configurator.exe"] = configurator
     runtime_files = {
         "steam_api.dll": root / "deps" / "steamsdk" / "steam_api.dll",
         "binkw32.dll": root / "deps" / "binklib" / "binkw32.dll",
@@ -264,6 +275,8 @@ Commit: {head}
 Packaged UTC: {built_at}
 Executable source: bin/Release/KisakCOD-sp.exe
 Executable SHA-256: {sha256(binary)}
+Configurator source: bin/Release/KisakCOD-VR-Configurator.exe
+Configurator SHA-256: {sha256(configurator)}
 """
     payload["BUILD-INFO.txt"] = build_info.replace("\n", "\r\n").encode("utf-8")
 

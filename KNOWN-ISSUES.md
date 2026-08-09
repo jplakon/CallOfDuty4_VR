@@ -1,6 +1,6 @@
 # Known issues
 
-This list applies to `v0.10.0-beta.6`.
+This list applies to `v0.10.0-beta.7`.
 
 ## Unsupported mission
 
@@ -31,12 +31,21 @@ This list applies to `v0.10.0-beta.6`.
 
 - Synchronized dynamic shadows can have a significant performance cost.
 - Physical scope alignment can require small headset-specific calibration
-  changes in `VR-Settings.bat`.
+  changes in `KisakCOD-VR-Configurator.exe`.
 - Some original flat-screen post-processing and camera animation has been
   suppressed because it is uncomfortable or incorrect in VR.
 - The exact-pose capture path substantially reduces frame reuse and
   head-turn judder, but occasional runtime- or performance-dependent
   judder may still occur. Include `[VR][PERF]` lines with bug reports.
+
+## Configurator
+
+- Setting changes take effect on the next launch, not in the already-running
+  game.
+- Only the supported face-button roles are remappable. Trigger, grip,
+  thumbstick axes, and the menu button remain fixed.
+- The active profile is stored under `%LOCALAPPDATA%\KisakCOD-VR`; use Restore
+  Defaults or a saved backup if manual edits make a profile invalid.
 
 ## Tracked hands and physical reloading
 

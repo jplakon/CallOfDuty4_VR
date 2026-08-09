@@ -5,6 +5,9 @@
 #include <server/sv_game.h>
 #include "bullet.h"
 
+#include <cmath>
+#include <cstdlib>
+
 #ifdef KISAK_MP
 #include <game_mp/g_utils_mp.h>
 #include <server_mp/server_mp.h>
@@ -977,6 +980,110 @@ static void VR_ClampManualGrenadeStart(
 // Preserve the physical horizontal direction and strength variation while
 // mapping a real throw onto the selected grenade's native launch-speed scale.
 // A genuinely still release remains an intentional drop.
+struct VrManualGrenadeCalibrationSettings
+{
+    float deliberateDropSpeed = 35.0f;
+    float fullStrengthHandSpeed = 260.0f;
+    float minimumNativeStrength = 0.70f;
+    float maximumNativeStrength = 1.15f;
+    float verticalHandScale = 0.65f;
+};
+
+static const VrManualGrenadeCalibrationSettings&
+VR_GetManualGrenadeCalibrationSettings()
+{
+    static const VrManualGrenadeCalibrationSettings settings = []()
+    {
+        VrManualGrenadeCalibrationSettings loaded;
+
+        const auto readFloat = [](
+            const char* name,
+            const float defaultValue,
+            const float minimumValue,
+            const float maximumValue)
+        {
+            const char* requestedValue = std::getenv(name);
+            if (requestedValue == nullptr || requestedValue[0] == '\0')
+            {
+                return defaultValue;
+            }
+
+            char* parseEnd = nullptr;
+            const float parsedValue =
+                std::strtof(requestedValue, &parseEnd);
+
+            if (parseEnd == requestedValue || parseEnd == nullptr ||
+                parseEnd[0] != '\0' || !std::isfinite(parsedValue) ||
+                parsedValue < minimumValue || parsedValue > maximumValue)
+            {
+                Com_PrintWarning(
+                    0,
+                    "[VR][CONFIG] Ignoring invalid %s='%s'; using %.2f. "
+                    "Valid range is %.2f through %.2f.\n",
+                    name,
+                    requestedValue,
+                    defaultValue,
+                    minimumValue,
+                    maximumValue);
+                return defaultValue;
+            }
+
+            return parsedValue;
+        };
+
+        loaded.deliberateDropSpeed =
+            readFloat(
+                "KISAK_VR_GRENADE_DROP_SPEED", 35.0f, 10.0f, 100.0f);
+        loaded.fullStrengthHandSpeed =
+            readFloat(
+                "KISAK_VR_GRENADE_FULL_THROW_SPEED", 260.0f, 100.0f, 500.0f);
+        loaded.minimumNativeStrength =
+            readFloat(
+                "KISAK_VR_GRENADE_MIN_STRENGTH", 0.70f, 0.30f, 1.00f);
+        loaded.maximumNativeStrength =
+            readFloat(
+                "KISAK_VR_GRENADE_MAX_STRENGTH", 1.15f, 0.80f, 1.50f);
+        loaded.verticalHandScale =
+            readFloat(
+                "KISAK_VR_GRENADE_VERTICAL_SCALE", 0.65f, 0.0f, 2.0f);
+
+        if (loaded.fullStrengthHandSpeed <=
+            loaded.deliberateDropSpeed + 25.0f)
+        {
+            Com_PrintWarning(
+                0,
+                "[VR][CONFIG] Grenade full-throw speed must exceed the "
+                "drop threshold by at least 25; using tested 35/260 values.\n");
+            loaded.deliberateDropSpeed = 35.0f;
+            loaded.fullStrengthHandSpeed = 260.0f;
+        }
+
+        if (loaded.maximumNativeStrength < loaded.minimumNativeStrength)
+        {
+            Com_PrintWarning(
+                0,
+                "[VR][CONFIG] Grenade maximum strength is below minimum; "
+                "using tested 0.70/1.15 values.\n");
+            loaded.minimumNativeStrength = 0.70f;
+            loaded.maximumNativeStrength = 1.15f;
+        }
+
+        Com_Printf(
+            0,
+            "[VR][CONFIG] Grenade calibration: drop %.0f, full hand %.0f, "
+            "native strength %.2f..%.2f, vertical %.2f.\n",
+            loaded.deliberateDropSpeed,
+            loaded.fullStrengthHandSpeed,
+            loaded.minimumNativeStrength,
+            loaded.maximumNativeStrength,
+            loaded.verticalHandScale);
+
+        return loaded;
+    }();
+
+    return settings;
+}
+
 static void VR_BuildManualGrenadeLaunchVelocity(
     const WeaponDef* weaponDef,
     const float physicalVelocity[3],
@@ -997,8 +1104,15 @@ static void VR_BuildManualGrenadeLaunchVelocity(
         return;
     }
 
-    constexpr float deliberateDropSpeed = 35.0f;
-    constexpr float fullStrengthHandSpeed = 260.0f;
+    const VrManualGrenadeCalibrationSettings& configurable =
+        VR_GetManualGrenadeCalibrationSettings();
+
+    const float deliberateDropSpeed =
+        configurable.deliberateDropSpeed;
+
+    const float fullStrengthHandSpeed =
+        configurable.fullStrengthHandSpeed;
+
     constexpr float stableHorizontalDirectionSpeed = 45.0f;
 
     const float physicalSpeed =
@@ -1086,7 +1200,10 @@ static void VR_BuildManualGrenadeLaunchVelocity(
 
     const float horizontalLaunchSpeed =
         nativeHorizontalSpeed *
-        (0.70f + 0.45f * strength);
+        (configurable.minimumNativeStrength +
+         (configurable.maximumNativeStrength -
+          configurable.minimumNativeStrength) *
+             strength);
 
     launchVelocity[0] =
         horizontalDirection[0] *
@@ -1107,7 +1224,8 @@ static void VR_BuildManualGrenadeLaunchVelocity(
 
     float verticalLaunchSpeed =
         nativeUpSpeed +
-        physicalVelocity[2] * 0.65f;
+        physicalVelocity[2] *
+            configurable.verticalHandScale;
 
     float minimumArcSpeed =
         nativeUpSpeed * 0.35f;

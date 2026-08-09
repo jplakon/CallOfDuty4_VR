@@ -26,6 +26,7 @@ void __cdecl UI_MouseEvent(int localClientNum, int x, int y);
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include <vector>
 
 #include <mutex>
@@ -599,6 +600,292 @@ float g_vrSmoothTurnSpeedDegreesPerSecond =
     120.0f;
 
 bool g_vrTurnSettingsLoaded = false;
+
+// KISAK_SP_VR_CONFIGURATOR_V56
+// Settings introduced by the standalone configurator remain environment
+// variables so the game needs no writable in-game menu state. The launcher
+// loads release defaults first and user overrides second before process start.
+enum class VrMovementDirection
+{
+    Head,
+    Body,
+    LeftHand,
+};
+
+enum class VrTouchButton
+{
+    Primary,
+    Secondary,
+    Stick,
+};
+
+struct VrConfiguratorSettings
+{
+    float snapTurnAngleDegrees = 45.0f;
+    float turnDeadzone = 0.25f;
+    VrMovementDirection movementDirection =
+        VrMovementDirection::Head;
+    float movementDeadzone = 0.18f;
+
+    float weaponOffset[3] = {};
+    float weaponAngles[3] = {};
+    float weaponPositionResponse = 0.45f;
+    float weaponOrientationResponse = 0.55f;
+    float twoHandStrength = 1.0f;
+
+    float beltForwardOffset = 0.0f;
+    float beltHeight = -28.0f;
+    float beltHipDistance = 13.0f;
+    float beltGrabRadius = 11.0f;
+    float reloadInsertRadius = 6.5f;
+
+    VrTouchButton useButton = VrTouchButton::Primary;
+    VrTouchButton sprintButton = VrTouchButton::Stick;
+    VrTouchButton nextWeaponButton = VrTouchButton::Secondary;
+    VrTouchButton reloadButton = VrTouchButton::Primary;
+    VrTouchButton meleeButton = VrTouchButton::Stick;
+    VrTouchButton stanceButton = VrTouchButton::Secondary;
+};
+
+float VR_ReadConfiguratorFloat(
+    const char* name,
+    const float defaultValue,
+    const float minimumValue,
+    const float maximumValue)
+{
+    const char* requestedValue = std::getenv(name);
+    if (requestedValue == nullptr || requestedValue[0] == '\0')
+    {
+        return defaultValue;
+    }
+
+    char* parseEnd = nullptr;
+    const float parsedValue = std::strtof(requestedValue, &parseEnd);
+    if (parseEnd == requestedValue || parseEnd == nullptr ||
+        parseEnd[0] != '\0' || !std::isfinite(parsedValue) ||
+        parsedValue < minimumValue || parsedValue > maximumValue)
+    {
+        Com_PrintWarning(
+            0,
+            "[VR][CONFIG] Ignoring invalid %s='%s'; using %.3f. "
+            "Valid range is %.3f through %.3f.\n",
+            name,
+            requestedValue,
+            defaultValue,
+            minimumValue,
+            maximumValue);
+        return defaultValue;
+    }
+
+    return parsedValue;
+}
+
+VrTouchButton VR_ReadTouchButton(
+    const char* name,
+    const VrTouchButton defaultValue,
+    const char* primaryName,
+    const char* secondaryName)
+{
+    const char* requestedValue = std::getenv(name);
+    if (requestedValue == nullptr || requestedValue[0] == '\0')
+    {
+        return defaultValue;
+    }
+
+    if (_stricmp(requestedValue, primaryName) == 0)
+    {
+        return VrTouchButton::Primary;
+    }
+    if (_stricmp(requestedValue, secondaryName) == 0)
+    {
+        return VrTouchButton::Secondary;
+    }
+    if (_stricmp(requestedValue, "stick") == 0)
+    {
+        return VrTouchButton::Stick;
+    }
+
+    Com_PrintWarning(
+        0,
+        "[VR][CONFIG] Ignoring invalid %s='%s'; valid values are "
+        "%s, %s, and stick.\n",
+        name,
+        requestedValue,
+        primaryName,
+        secondaryName);
+    return defaultValue;
+}
+
+const VrConfiguratorSettings& VR_GetConfiguratorSettings()
+{
+    static const VrConfiguratorSettings settings = []()
+    {
+        VrConfiguratorSettings loaded;
+
+        loaded.snapTurnAngleDegrees =
+            VR_ReadConfiguratorFloat(
+                "KISAK_VR_SNAP_TURN_ANGLE",
+                45.0f,
+                15.0f,
+                90.0f);
+        loaded.turnDeadzone =
+            VR_ReadConfiguratorFloat(
+                "KISAK_VR_TURN_DEADZONE",
+                0.25f,
+                0.10f,
+                0.50f);
+        loaded.movementDeadzone =
+            VR_ReadConfiguratorFloat(
+                "KISAK_VR_MOVEMENT_DEADZONE",
+                0.18f,
+                0.05f,
+                0.40f);
+
+        const char* movementDirection =
+            std::getenv("KISAK_VR_MOVEMENT_DIRECTION");
+        if (movementDirection != nullptr && movementDirection[0] != '\0')
+        {
+            if (_stricmp(movementDirection, "body") == 0)
+            {
+                loaded.movementDirection = VrMovementDirection::Body;
+            }
+            else if (_stricmp(movementDirection, "left_hand") == 0)
+            {
+                loaded.movementDirection = VrMovementDirection::LeftHand;
+            }
+            else if (_stricmp(movementDirection, "head") != 0)
+            {
+                Com_PrintWarning(
+                    0,
+                    "[VR][CONFIG] Ignoring invalid "
+                    "KISAK_VR_MOVEMENT_DIRECTION='%s'; using head.\n",
+                    movementDirection);
+            }
+        }
+
+        loaded.weaponOffset[0] =
+            VR_ReadConfiguratorFloat(
+                "KISAK_VR_WEAPON_OFFSET_FORWARD", 0.0f, -8.0f, 8.0f);
+        loaded.weaponOffset[1] =
+            VR_ReadConfiguratorFloat(
+                "KISAK_VR_WEAPON_OFFSET_LEFT", 0.0f, -8.0f, 8.0f);
+        loaded.weaponOffset[2] =
+            VR_ReadConfiguratorFloat(
+                "KISAK_VR_WEAPON_OFFSET_UP", 0.0f, -8.0f, 8.0f);
+        loaded.weaponAngles[0] =
+            VR_ReadConfiguratorFloat(
+                "KISAK_VR_WEAPON_PITCH", 0.0f, -45.0f, 45.0f);
+        loaded.weaponAngles[1] =
+            VR_ReadConfiguratorFloat(
+                "KISAK_VR_WEAPON_YAW", 0.0f, -45.0f, 45.0f);
+        loaded.weaponAngles[2] =
+            VR_ReadConfiguratorFloat(
+                "KISAK_VR_WEAPON_ROLL", 0.0f, -45.0f, 45.0f);
+        loaded.weaponPositionResponse =
+            VR_ReadConfiguratorFloat(
+                "KISAK_VR_WEAPON_POSITION_RESPONSE", 0.45f, 0.10f, 1.0f);
+        loaded.weaponOrientationResponse =
+            VR_ReadConfiguratorFloat(
+                "KISAK_VR_WEAPON_ORIENTATION_RESPONSE", 0.55f, 0.10f, 1.0f);
+        loaded.twoHandStrength =
+            VR_ReadConfiguratorFloat(
+                "KISAK_VR_TWO_HAND_STRENGTH", 1.0f, 0.0f, 1.0f);
+
+        loaded.beltForwardOffset =
+            VR_ReadConfiguratorFloat(
+                "KISAK_VR_BELT_FORWARD_OFFSET", 0.0f, -12.0f, 12.0f);
+        loaded.beltHeight =
+            VR_ReadConfiguratorFloat(
+                "KISAK_VR_BELT_HEIGHT", -28.0f, -48.0f, -8.0f);
+        loaded.beltHipDistance =
+            VR_ReadConfiguratorFloat(
+                "KISAK_VR_BELT_HIP_DISTANCE", 13.0f, 4.0f, 24.0f);
+        loaded.beltGrabRadius =
+            VR_ReadConfiguratorFloat(
+                "KISAK_VR_BELT_GRAB_RADIUS", 11.0f, 3.0f, 18.0f);
+        loaded.reloadInsertRadius =
+            VR_ReadConfiguratorFloat(
+                "KISAK_VR_RELOAD_INSERT_RADIUS", 6.5f, 3.0f, 12.0f);
+
+        if (loaded.beltGrabRadius >= loaded.beltHipDistance)
+        {
+            Com_PrintWarning(
+                0,
+                "[VR][CONFIG] Belt grab radius %.1f overlaps the left and "
+                "right hip zones; using tested 13.0/11.0 spacing.\n",
+                loaded.beltGrabRadius);
+            loaded.beltHipDistance = 13.0f;
+            loaded.beltGrabRadius = 11.0f;
+        }
+
+        loaded.useButton =
+            VR_ReadTouchButton(
+                "KISAK_VR_BIND_USE", VrTouchButton::Primary, "x", "y");
+        loaded.sprintButton =
+            VR_ReadTouchButton(
+                "KISAK_VR_BIND_SPRINT", VrTouchButton::Stick, "x", "y");
+        loaded.nextWeaponButton =
+            VR_ReadTouchButton(
+                "KISAK_VR_BIND_NEXT_WEAPON", VrTouchButton::Secondary, "x", "y");
+        loaded.reloadButton =
+            VR_ReadTouchButton(
+                "KISAK_VR_BIND_RELOAD", VrTouchButton::Primary, "a", "b");
+        loaded.meleeButton =
+            VR_ReadTouchButton(
+                "KISAK_VR_BIND_MELEE", VrTouchButton::Stick, "a", "b");
+        loaded.stanceButton =
+            VR_ReadTouchButton(
+                "KISAK_VR_BIND_STANCE", VrTouchButton::Secondary, "a", "b");
+
+        const bool leftConflict =
+            loaded.useButton == loaded.sprintButton ||
+            loaded.useButton == loaded.nextWeaponButton ||
+            loaded.sprintButton == loaded.nextWeaponButton;
+        if (leftConflict)
+        {
+            Com_PrintWarning(
+                0,
+                "[VR][CONFIG] Conflicting left-controller bindings; using "
+                "X=Use, stick=Sprint, Y=Next weapon.\n");
+            loaded.useButton = VrTouchButton::Primary;
+            loaded.sprintButton = VrTouchButton::Stick;
+            loaded.nextWeaponButton = VrTouchButton::Secondary;
+        }
+
+        const bool rightConflict =
+            loaded.reloadButton == loaded.meleeButton ||
+            loaded.reloadButton == loaded.stanceButton ||
+            loaded.meleeButton == loaded.stanceButton;
+        if (rightConflict)
+        {
+            Com_PrintWarning(
+                0,
+                "[VR][CONFIG] Conflicting right-controller bindings; using "
+                "A=Reload, stick=Melee, B=Stance.\n");
+            loaded.reloadButton = VrTouchButton::Primary;
+            loaded.meleeButton = VrTouchButton::Stick;
+            loaded.stanceButton = VrTouchButton::Secondary;
+        }
+
+        Com_Printf(
+            0,
+            "[VR][CONFIG] V56 customization loaded: snap %.0f, turn "
+            "deadzone %.2f, movement deadzone %.2f, two-hand %.2f; "
+            "belt forward %.1f, height %.1f, hip %.1f +/- %.1f.\n",
+            loaded.snapTurnAngleDegrees,
+            loaded.turnDeadzone,
+            loaded.movementDeadzone,
+            loaded.twoHandStrength,
+            loaded.beltForwardOffset,
+            loaded.beltHeight,
+            loaded.beltHipDistance,
+            loaded.beltGrabRadius);
+
+        return loaded;
+    }();
+
+    return settings;
+}
 
 // KISAK_SP_VR_POSE_FOCUS_AIM_V1
 // ADS is published by the two-hand eye-level pose detector instead of the
@@ -7541,6 +7828,43 @@ bool VR_SuggestControllerBindings()
 
     std::array<XrPath, 22> touchBindingPaths = {};
 
+    const VrConfiguratorSettings& configurable =
+        VR_GetConfiguratorSettings();
+
+    const auto touchButtonPath = [](
+        const bool leftHand,
+        const VrTouchButton button) -> const char*
+    {
+        if (leftHand)
+        {
+            switch (button)
+            {
+            case VrTouchButton::Primary:
+                return "/user/hand/left/input/x/click";
+            case VrTouchButton::Secondary:
+                return "/user/hand/left/input/y/click";
+            case VrTouchButton::Stick:
+                return "/user/hand/left/input/thumbstick/click";
+            }
+        }
+        else
+        {
+            switch (button)
+            {
+            case VrTouchButton::Primary:
+                return "/user/hand/right/input/a/click";
+            case VrTouchButton::Secondary:
+                return "/user/hand/right/input/b/click";
+            case VrTouchButton::Stick:
+                return "/user/hand/right/input/thumbstick/click";
+            }
+        }
+
+        return leftHand
+            ? "/user/hand/left/input/x/click"
+            : "/user/hand/right/input/a/click";
+    };
+
     const std::array<const char*, 22>
         touchBindingStrings = {
             "/user/hand/left/input/grip/pose",
@@ -7555,12 +7879,12 @@ bool VR_SuggestControllerBindings()
             "/user/hand/right/output/haptic",
             "/user/hand/left/input/thumbstick",
             "/user/hand/right/input/thumbstick",
-            "/user/hand/right/input/a/click",
-            "/user/hand/left/input/x/click",
-            "/user/hand/left/input/thumbstick/click",
-            "/user/hand/right/input/thumbstick/click",
-            "/user/hand/right/input/b/click",
-            "/user/hand/left/input/y/click",
+            touchButtonPath(false, configurable.reloadButton),
+            touchButtonPath(true, configurable.useButton),
+            touchButtonPath(true, configurable.sprintButton),
+            touchButtonPath(false, configurable.meleeButton),
+            touchButtonPath(false, configurable.stanceButton),
+            touchButtonPath(true, configurable.nextWeaponButton),
             "/user/hand/left/input/menu/click",
             "/user/hand/right/input/thumbrest/touch",
             "/user/hand/left/input/palm_ext/pose",
@@ -8755,8 +9079,14 @@ void VR_PublishRightControllerWeaponPose(
         {
             // Modest smoothing removes visible tracking shimmer while
             // retaining responsive one-handed aiming at typical VR rates.
-            constexpr float positionBlend = 0.45f;
-            constexpr float orientationBlend = 0.55f;
+            const VrConfiguratorSettings& configurable =
+                VR_GetConfiguratorSettings();
+
+            const float positionBlend =
+                configurable.weaponPositionResponse;
+
+            const float orientationBlend =
+                configurable.weaponOrientationResponse;
 
             g_vrRightControllerFilteredGripPosition.x +=
                 (controllerGripPose.position.x -
@@ -10019,7 +10349,7 @@ void VR_UpdateControllerActions(
 
         const float targetBlend =
             targetActive
-                ? 1.0f
+                ? VR_GetConfiguratorSettings().twoHandStrength
                 : 0.0f;
 
         const float blendRate =
@@ -12811,13 +13141,37 @@ void VR_UpdateManualMagazineReload(
             }
         }
 
+        const VrConfiguratorSettings& configurable =
+            VR_GetConfiguratorSettings();
+
+        const float beltMinimumUp =
+            configurable.beltHeight - 14.0f;
+
+        const float beltMaximumUp =
+            configurable.beltHeight + 14.0f;
+
+        const float leftHipMinimum =
+            configurable.beltHipDistance -
+            configurable.beltGrabRadius;
+
+        const float leftHipMaximum =
+            configurable.beltHipDistance +
+            configurable.beltGrabRadius;
+
         const bool leftGripAtHip =
             g_vrLeftControllerForegripPoseValid &&
-            g_vrLeftControllerForegripPosition[0] >= -18.0f &&
-            g_vrLeftControllerForegripPosition[0] <= 24.0f &&
-            g_vrLeftControllerForegripPosition[1] >= 2.0f &&
-            g_vrLeftControllerForegripPosition[2] <= -14.0f &&
-            g_vrLeftControllerForegripPosition[2] >= -42.0f;
+            g_vrLeftControllerForegripPosition[0] >=
+                -18.0f + configurable.beltForwardOffset &&
+            g_vrLeftControllerForegripPosition[0] <=
+                24.0f + configurable.beltForwardOffset &&
+            g_vrLeftControllerForegripPosition[1] >=
+                leftHipMinimum &&
+            g_vrLeftControllerForegripPosition[1] <=
+                leftHipMaximum &&
+            g_vrLeftControllerForegripPosition[2] <=
+                beltMaximumUp &&
+            g_vrLeftControllerForegripPosition[2] >=
+                beltMinimumUp;
 
         if (g_vrManualMagazineReload.stage ==
                 VrManualMagazineReloadStage::Ejected &&
@@ -12879,7 +13233,8 @@ void VR_UpdateManualMagazineReload(
                     delta[1] * delta[1] +
                     delta[2] * delta[2]);
 
-            constexpr float insertionRadius = 6.5f;
+            const float insertionRadius =
+                configurable.reloadInsertRadius;
 
             g_vrManualMagazineReload.heldNearMagazineWell =
                 distanceToMagazineWell <=
@@ -13569,22 +13924,41 @@ bool VR_UpdateManualGrenadeInput(
             const float localUp =
                 g_vrLeftControllerForegripPosition[2];
 
+            const VrConfiguratorSettings& configurable =
+                VR_GetConfiguratorSettings();
+
+            const float beltMinimumUp =
+                configurable.beltHeight - 14.0f;
+
+            const float beltMaximumUp =
+                configurable.beltHeight + 14.0f;
+
+            const float hipMinimum =
+                configurable.beltHipDistance -
+                configurable.beltGrabRadius;
+
+            const float hipMaximum =
+                configurable.beltHipDistance +
+                configurable.beltGrabRadius;
+
             const bool insideBeltHeight =
                 poseValid &&
-                localForward >= -18.0f &&
-                localForward <= 18.0f &&
-                localUp >= -42.0f &&
-                localUp <= -14.0f;
+                localForward >=
+                    -18.0f + configurable.beltForwardOffset &&
+                localForward <=
+                    18.0f + configurable.beltForwardOffset &&
+                localUp >= beltMinimumUp &&
+                localUp <= beltMaximumUp;
 
             const bool insideLeftHip =
                 insideBeltHeight &&
-                localLeft >= 2.0f &&
-                localLeft <= 24.0f;
+                localLeft >= hipMinimum &&
+                localLeft <= hipMaximum;
 
             const bool insideRightHip =
                 insideBeltHeight &&
-                localLeft <= -2.0f &&
-                localLeft >= -24.0f;
+                localLeft <= -hipMinimum &&
+                localLeft >= -hipMaximum;
 
             const bool magazineOwnsLeftGrip =
                 g_vrManualMagazineReload.stage !=
@@ -14201,6 +14575,61 @@ bool VR_ApplyRightControllerToWeaponPlacement(
 
             g_vrLoggedRightControllerWeaponCalibration = true;
         }
+    }
+
+    const VrConfiguratorSettings& configurable =
+        VR_GetConfiguratorSettings();
+
+    for (int component = 0; component < 3; ++component)
+    {
+        attachmentPosition[component] +=
+            configurable.weaponOffset[component];
+    }
+
+    float configurableRotation[3][3] = {};
+    AnglesToAxis(
+        configurable.weaponAngles,
+        configurableRotation);
+
+    float adjustedAttachmentAxis[3][3] = {};
+    for (int weaponAxisRow = 0; weaponAxisRow < 3; ++weaponAxisRow)
+    {
+        for (int controllerComponent = 0;
+             controllerComponent < 3;
+             ++controllerComponent)
+        {
+            adjustedAttachmentAxis[weaponAxisRow][controllerComponent] =
+                attachmentAxis[weaponAxisRow][0] *
+                    configurableRotation[0][controllerComponent] +
+                attachmentAxis[weaponAxisRow][1] *
+                    configurableRotation[1][controllerComponent] +
+                attachmentAxis[weaponAxisRow][2] *
+                    configurableRotation[2][controllerComponent];
+        }
+    }
+
+    std::memcpy(
+        attachmentAxis,
+        adjustedAttachmentAxis,
+        sizeof(adjustedAttachmentAxis));
+
+    static bool loggedConfiguratorWeaponCalibration = false;
+    if (!loggedConfiguratorWeaponCalibration)
+    {
+        Com_Printf(
+            0,
+            "[VR][CONFIG] Right weapon calibration: offset %.2f %.2f "
+            "%.2f; pitch/yaw/roll %.1f %.1f %.1f; response %.2f/%.2f.\n",
+            configurable.weaponOffset[0],
+            configurable.weaponOffset[1],
+            configurable.weaponOffset[2],
+            configurable.weaponAngles[0],
+            configurable.weaponAngles[1],
+            configurable.weaponAngles[2],
+            configurable.weaponPositionResponse,
+            configurable.weaponOrientationResponse);
+
+        loggedConfiguratorWeaponCalibration = true;
     }
 
     if (twoHandBlend > 0.001f)
@@ -14945,6 +15374,9 @@ bool VR_GetTurnYawDelta(
     std::lock_guard<std::mutex> lock(
         g_vrHeadOrientationMutex);
 
+    const VrConfiguratorSettings& configurable =
+        VR_GetConfiguratorSettings();
+
     // KISAK_SP_VR_SMOOTH_TURN_OPTION_V50
     // VR-Settings.bat is loaded before process creation, so turning settings
     // are immutable for this run. Read them once on the gameplay thread.
@@ -15032,15 +15464,17 @@ bool VR_GetTurnYawDelta(
                 0,
                 "[VR][CONTROLS] V50 turn mode: smooth analog "
                 "at %.0f degrees/second; right-stick deadzone "
-                "0.25.\n",
-                g_vrSmoothTurnSpeedDegreesPerSecond);
+                "%.2f.\n",
+                g_vrSmoothTurnSpeedDegreesPerSecond,
+                configurable.turnDeadzone);
         }
         else
         {
             Com_Printf(
                 0,
-                "[VR][CONTROLS] V52 turn mode: 45-degree "
-                "snap with neutral latch rearm.\n");
+                "[VR][CONTROLS] V56 turn mode: %.0f-degree "
+                "snap with neutral latch rearm.\n",
+                configurable.snapTurnAngleDegrees);
         }
 
         g_vrTurnSettingsLoaded = true;
@@ -15059,8 +15493,8 @@ bool VR_GetTurnYawDelta(
     // the latch can reset.  That regression made another snap possible only
     // through the narrow horizontal band between the dominance margin and
     // this release threshold.
-    constexpr float snapReleaseThreshold =
-        0.35f;
+    const float snapReleaseThreshold =
+        (std::min)(0.65f, configurable.turnDeadzone + 0.10f);
 
     if (g_vrTurnMode ==
             VrTurnMode::Snap &&
@@ -15087,8 +15521,8 @@ bool VR_GetTurnYawDelta(
     {
         g_vrSnapTurnArmed = true;
 
-        constexpr float smoothDeadzone =
-            0.25f;
+        const float smoothDeadzone =
+            configurable.turnDeadzone;
 
         const float absoluteStickX =
             std::abs(g_vrRightThumbstickX);
@@ -15125,8 +15559,15 @@ bool VR_GetTurnYawDelta(
             0.0001f;
     }
 
-    constexpr float engageThreshold = 0.75f;
-    constexpr float snapAngleDegrees = 45.0f;
+    const float engageThreshold =
+        (std::max)(
+            0.65f,
+            (std::min)(
+                0.90f,
+                configurable.turnDeadzone + 0.50f));
+
+    const float snapAngleDegrees =
+        configurable.snapTurnAngleDegrees;
 
     if (!g_vrSnapTurnArmed)
     {
@@ -15313,6 +15754,9 @@ bool VR_GetHmdOrientedMovement(
     float headForward = 1.0f;
     float headLeft = 0.0f;
 
+    const VrConfiguratorSettings& configurable =
+        VR_GetConfiguratorSettings();
+
     {
         std::lock_guard<std::mutex> lock(
             g_vrHeadOrientationMutex);
@@ -15334,12 +15778,34 @@ bool VR_GetHmdOrientedMovement(
             g_vrHeadOrientationAxis[0][1];
     }
 
+    if (configurable.movementDirection ==
+        VrMovementDirection::Body)
+    {
+        headForward = 1.0f;
+        headLeft = 0.0f;
+    }
+    else if (configurable.movementDirection ==
+             VrMovementDirection::LeftHand)
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrWeaponControllerPoseMutex);
+
+        if (g_vrLeftControllerForegripPoseValid)
+        {
+            headForward =
+                g_vrLeftControllerForegripAxis[0][0];
+            headLeft =
+                g_vrLeftControllerForegripAxis[0][1];
+        }
+    }
+
     const float rawMagnitude =
         std::sqrt(
             stickX * stickX +
             stickY * stickY);
 
-    constexpr float deadzone = 0.18f;
+    const float deadzone =
+        configurable.movementDeadzone;
 
     if (rawMagnitude <= deadzone)
     {

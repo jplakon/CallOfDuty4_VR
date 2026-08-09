@@ -76,3 +76,10 @@ message("Building KISAK_PLATFORM: ${KISAK_PLATFORM}")
 add_subdirectory(${SCRIPTS_DIR}/mp)
 add_subdirectory(${SCRIPTS_DIR}/sp)
 add_subdirectory(${SCRIPTS_DIR}/dedi)
+
+# KISAK_SP_VR_CONFIGURATOR_V56
+# Portable native settings UI. It shares no game code or external runtime and
+# is packaged beside the launcher on Windows builds.
+if(WIN32)
+    add_subdirectory(tools/configurator)
+endif()

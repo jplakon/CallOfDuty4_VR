@@ -43,6 +43,36 @@ if errorlevel 1 (
   exit /b 1
 )
 
+rem KISAK_SP_VR_CONFIGURATOR_V56
+rem Personal overrides live outside the game directory so Steam, extraction,
+rem and future mod updates cannot overwrite them. A portable override beside
+rem the launcher is also supported; LocalAppData wins when both exist.
+if exist "%~dp0VR-User-Settings.bat" (
+  call "%~dp0VR-User-Settings.bat"
+  if errorlevel 1 (
+    echo ERROR: Portable VR-User-Settings.bat could not be loaded.
+    pause
+    exit /b 1
+  )
+)
+
+set "KISAK_VR_USER_SETTINGS="
+if defined LOCALAPPDATA set "KISAK_VR_USER_SETTINGS=%LOCALAPPDATA%\KisakCOD-VR\VR-User-Settings.bat"
+if defined KISAK_VR_USER_SETTINGS if exist "%KISAK_VR_USER_SETTINGS%" (
+  call "%KISAK_VR_USER_SETTINGS%"
+  if errorlevel 1 (
+    echo ERROR: User settings could not be loaded:
+    echo   "%KISAK_VR_USER_SETTINGS%"
+    pause
+    exit /b 1
+  )
+)
+
+rem The diagnostics wrapper is intentionally applied after defaults and user
+rem settings so Save & Launch Diagnostics always enables the runtime markers
+rem for that one process without changing the saved profile.
+if "%KISAK_VR_DIAGNOSTICS%"=="1" set "KISAK_VR_VERBOSE_DIAGNOSTICS=1"
+
 rem KISAK_SP_VR_CRASH_DIAGNOSTICS_V48
 rem Keep crash artifacts outside main\ so they survive console-log rotation and
 rem can be collected even when the engine fails before normal logging starts.
@@ -67,9 +97,25 @@ if /I "%VR_CUSTOM_MODE%"=="3072x1536" (
   exit /b 1
 )
 
-if /I "%VR_CUSTOM_MODE%"=="4768x2016" if "%KISAK_VR_OUTPUT_SCALE%"=="1.0" (
-  echo ERROR: 4768x2016 is too small for KISAK_VR_OUTPUT_SCALE=1.0.
-  echo Set KISAK_VR_OUTPUT_SCALE=0.75 for the lower packed preset.
+if /I not "%VR_CUSTOM_MODE%"=="6016x2688" if /I not "%VR_CUSTOM_MODE%"=="4768x2016" (
+  echo ERROR: Unsupported VR_CUSTOM_MODE=%VR_CUSTOM_MODE%.
+  echo Use one of the two verified packed renderer pairs:
+  echo   VR_CUSTOM_MODE=6016x2688 with KISAK_VR_OUTPUT_SCALE=1.00
+  echo   VR_CUSTOM_MODE=4768x2016 with KISAK_VR_OUTPUT_SCALE=0.75
+  pause
+  exit /b 1
+)
+
+if /I "%VR_CUSTOM_MODE%"=="6016x2688" if not "%KISAK_VR_OUTPUT_SCALE%"=="1.00" if not "%KISAK_VR_OUTPUT_SCALE%"=="1.0" (
+  echo ERROR: 6016x2688 requires KISAK_VR_OUTPUT_SCALE=1.00.
+  echo Select Native in KisakCOD-VR-Configurator.exe.
+  pause
+  exit /b 1
+)
+
+if /I "%VR_CUSTOM_MODE%"=="4768x2016" if not "%KISAK_VR_OUTPUT_SCALE%"=="0.75" (
+  echo ERROR: 4768x2016 requires KISAK_VR_OUTPUT_SCALE=0.75.
+  echo Select Performance in KisakCOD-VR-Configurator.exe.
   pause
   exit /b 1
 )
@@ -141,7 +187,7 @@ if exist "%LOCALAPPDATA%\openvr\openvrpaths.vrpath" (
 
 set "VR_DEVELOPER=0"
 set "VR_ERROR_TIME=0"
-if "%KISAK_VR_DIAGNOSTICS%"=="1" (
+if "%KISAK_VR_VERBOSE_DIAGNOSTICS%"=="1" (
   set "VR_DEVELOPER=1"
   set "VR_ERROR_TIME=8"
 )
@@ -158,16 +204,30 @@ if "%KISAK_VR_DIAGNOSTICS%"=="1" (
   +set r_smp_backend 1 ^
   +set r_smp_worker 1 ^
   +set cg_gun_z 36 ^
-  +set mis_cheat 1 ^
+  +set vr_leftHandModelOffsetForward %KISAK_VR_LEFT_HAND_OFFSET_FORWARD% ^
+  +set vr_leftHandModelOffsetLeft %KISAK_VR_LEFT_HAND_OFFSET_LEFT% ^
+  +set vr_leftHandModelOffsetUp %KISAK_VR_LEFT_HAND_OFFSET_UP% ^
+  +set vr_leftHandModelPitch %KISAK_VR_LEFT_HAND_PITCH% ^
+  +set vr_leftHandModelYaw %KISAK_VR_LEFT_HAND_YAW% ^
+  +set vr_leftHandModelRoll %KISAK_VR_LEFT_HAND_ROLL% ^
+  +set vr_leftHandGripRadius %KISAK_VR_LEFT_HAND_GRIP_RADIUS% ^
+  +set compass %KISAK_VR_COMPASS_ENABLED% ^
+  +set compassSize %KISAK_VR_COMPASS_SIZE% ^
+  +set compassRotation %KISAK_VR_COMPASS_ROTATION% ^
+  +set cg_drawCrosshair %KISAK_VR_CROSSHAIR% ^
+  +set cg_subtitles %KISAK_VR_SUBTITLES% ^
+  +set g_earthquakeEnable %KISAK_VR_CAMERA_SHAKE% ^
+  +set cg_bobWeaponAmplitude %KISAK_VR_WEAPON_BOB_AMPLITUDE% ^
+  +set mis_cheat %KISAK_VR_UNLOCK_MISSIONS% ^
   +set sm_enable 1 ^
   +set sm_sunEnable 1 ^
   +set sm_spotEnable 1 ^
   +set sm_maxLights 4 ^
   +set cg_drawPerformanceWarnings 0 ^
-  +set developer 0 ^
+  +set developer %VR_DEVELOPER% ^
   +set developer_script 0 ^
   +set uiscript_debug 0 ^
-  +set con_errormessagetime 0 ^
+  +set con_errormessagetime %VR_ERROR_TIME% ^
   +set con_minicon 0 ^
   +set cg_drawFPS 0 ^
   +set com_statmon 0
