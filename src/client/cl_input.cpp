@@ -1524,77 +1524,56 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
         bool vrJumpHeld = false;
         bool vrUseHeld = false;
         bool vrReloadHeld = false;
-        bool vrRightStickUpPressed = false;
-        bool vrRightStickDownPressed = false;
+        bool vrLowerStanceHeld = false;
 
-        VR_ConsumeRightStickVerticalActions(
-            &vrRightStickUpPressed,
-            &vrRightStickDownPressed);
+        VR_GetLowerStanceButton(
+            &vrLowerStanceHeld);
 
-        // KISAK_SP_VR_RIGHT_STICK_STANCE_LADDER_V51
-        // Reuse COD4's native persistent-stance state machine.  Each
-        // deliberate vertical flick moves exactly one rung and the stick
-        // must return to neutral before another edge can be consumed.
-        // Up only becomes a jump after the player is already standing.
-        bool vrRightStickJumpPressed = false;
-        bool vrRightStickStanceChanged = false;
+        // Controller Input V4 restores the straightforward legacy layout:
+        // right primary-axis up is a normal Jump binding, while down owns the
+        // separate one-step lower-stance action. Any remapped Boolean source
+        // receives the same one-action-per-release behavior.
+        static bool vrLowerStanceWasHeld = false;
+        const bool vrLowerStancePressed =
+            vrLowerStanceHeld &&
+            !vrLowerStanceWasHeld;
+        vrLowerStanceWasHeld =
+            vrLowerStanceHeld;
 
-        if (vrRightStickUpPressed)
-        {
-            if (clients[0].stance ==
-                CL_STANCE_STAND)
-            {
-                vrRightStickJumpPressed =
-                    true;
-            }
-            else
-            {
-                const StanceState previousStance =
-                    clients[0].stance;
+        bool vrStanceStepChanged = false;
 
-                IN_RaiseStance();
-
-                vrRightStickStanceChanged =
-                    clients[0].stance !=
-                    previousStance;
-            }
-        }
-        else if (vrRightStickDownPressed)
+        if (vrLowerStancePressed)
         {
             const StanceState previousStance =
                 clients[0].stance;
 
             IN_LowerStance();
 
-            vrRightStickStanceChanged =
+            vrStanceStepChanged =
                 clients[0].stance !=
                 previousStance;
         }
 
-        if (vrRightStickStanceChanged)
+        if (vrStanceStepChanged)
         {
-            // CL_KeyMove already emitted this frame's stance bits before the
-            // VR gesture was consumed, so refresh them immediately.
+            // CL_KeyMove already emitted this frame's stance bits.
             CL_AddCurrentStanceToCmd(
                 result);
         }
 
-        if (vrRightStickUpPressed ||
-            vrRightStickDownPressed)
+        if (vrLowerStancePressed)
         {
-            static bool loggedVrRightStickStanceLadder =
-                false;
+            static bool loggedVrLowerStance = false;
 
-            if (!loggedVrRightStickStanceLadder)
+            if (!loggedVrLowerStance)
             {
                 Com_Printf(
                     0,
-                    "[VR][STANCE] V51 right-stick ladder active: "
-                    "down stand/crouch/prone; up "
-                    "prone/crouch/stand/jump.\n");
+                    "[VR][STANCE] Configured lower-stance action "
+                    "moves stand/crouch/prone. Jump and upward stance "
+                    "movement use the configured Jump action.\n");
 
-                loggedVrRightStickStanceLadder =
-                    true;
+                loggedVrLowerStance = true;
             }
         }
 
@@ -1634,31 +1613,22 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
             {
                 Com_Printf(
                     0,
-                    "[VR][INPUT] Separated Touch actions: left X = "
-                    "pickup/activate, left trigger = jump, right A = "
-                    "magazine eject or native reload fallback.\n");
+                    "[VR][INPUT] Controller Input V4 gameplay actions "
+                    "are active.\n");
 
                 loggedVrBasicButtons = true;
             }
         }
 
-        if (vrRightStickJumpPressed)
-        {
-            result->buttons |=
-                BUTTON_JUMP;
-        }
-
         // KISAK_SP_VR_SCRIPTED_JUMP_BRIDGE_V1
         // Mission scripts can listen for +gostand through notifyOnCommand.
         // Directly setting BUTTON_JUMP bypasses that notification, so replay
-        // one native command edge for every left-trigger press or upward
-        // right-stick gesture.
+        // one native command edge for every configured Jump-action press.
         static bool vrJumpCommandWasHeld = false;
 
         const bool vrJumpCommandPressed =
-            (vrJumpHeld &&
-             !vrJumpCommandWasHeld) ||
-            vrRightStickJumpPressed;
+            vrJumpHeld &&
+            !vrJumpCommandWasHeld;
 
         vrJumpCommandWasHeld =
             vrJumpHeld;
@@ -1689,23 +1659,14 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
                 0,
                 vrJumpUpCommand);
 
-            // CL_KeyMove already ran for this usercmd.  If +gostand raised
-            // the player from crouch or prone, refresh the command's stance
-            // bits so the upward gesture takes effect in this same frame.
-            if (vrRightStickJumpPressed)
-            {
-                CL_AddCurrentStanceToCmd(
-                    result);
-            }
-
             static bool loggedVrScriptedJumpBridge = false;
 
             if (!loggedVrScriptedJumpBridge)
             {
                 Com_Printf(
                     0,
-                    "[VR][JUMP] Routed Touch jump input through "
-                    "the native +gostand command path.\n");
+                    "[VR][JUMP] Routed the configured Jump action "
+                    "through the native +gostand command path.\n");
 
                 loggedVrScriptedJumpBridge = true;
             }
@@ -1739,7 +1700,7 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
             CL_STANCE_STAND;
 
         bool vrStanceChanged =
-            vrRightStickStanceChanged;
+            vrStanceStepChanged;
 
         if (vrStanceHeld &&
             !vrStanceWasHeld)
@@ -1840,11 +1801,11 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
                 true;
         }
 
-        bool vrRightGripHeld = false;
+        bool vrNativeOffhandHeld = false;
         bool vrLeftYHeld = false;
 
         VR_GetWeaponUtilityButtons(
-            &vrRightGripHeld,
+            &vrNativeOffhandHeld,
             &vrLeftYHeld);
 
         // KISAK_SP_VR_MANUAL_GRENADE_THROW_V53
@@ -1896,11 +1857,12 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
             result->buttons |= BUTTON_SMOKE;
         }
 
-        // CoD4 routes smoke and flash grenades through +smoke.  Preserve the
-        // beta.5 right-grip control only when the manual interaction is
-        // explicitly disabled with KISAK_VR_MANUAL_GRENADES=0.
+        // CoD4 routes smoke and flash grenades through +smoke. The optional
+        // Native off-hand action is honored only when manual interaction is
+        // explicitly disabled with KISAK_VR_MANUAL_GRENADES=0. It is unbound
+        // by default in V4.
         if (!vrManualGrenadesEnabled &&
-            vrRightGripHeld)
+            vrNativeOffhandHeld)
         {
             result->buttons |= BUTTON_SMOKE;
 
@@ -1910,7 +1872,7 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
             {
                 Com_Printf(
                     0,
-                    "[VR] Injected right-grip tactical grenade control.\n");
+                    "[VR] Injected the configured native off-hand action.\n");
 
                 loggedVrTacticalGrenade = true;
             }

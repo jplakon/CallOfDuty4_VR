@@ -428,6 +428,14 @@ double __cdecl CG_DrawStatmon(const ScreenPlacement *scrPlace, float y, meminfo_
 
 void __cdecl CG_DrawPerformanceWarnings()
 {
+    if (!com_statmon->current.enabled)
+        return;
+
+#ifdef KISAK_SP
+    if (!cg_drawPerformanceWarnings->current.enabled)
+        return;
+#endif
+
     int32_t time; // [esp+20h] [ebp-18h]
     const statmonitor_s *stats; // [esp+24h] [ebp-14h] BYREF
     int32_t i; // [esp+28h] [ebp-10h]

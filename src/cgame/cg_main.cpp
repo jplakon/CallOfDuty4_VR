@@ -244,7 +244,8 @@ void CG_RegisterDvars()
     cg_drawBreathHint = Dvar_RegisterBool("cg_drawBreathHint", 1, 1u, "Draw a 'hold breath to steady' hint");
     cg_drawMantleHint = Dvar_RegisterBool("cg_drawMantleHint", 1, 1u, "Draw a 'press key to mantle' hint");
     replay_time = Dvar_RegisterBool("replay_time", 0, 1u, "Draw replay time");
-    cg_drawFPS = Dvar_RegisterEnum("cg_drawFPS", cg_drawFpsNames, 1, 1u, "Draw frames per second");
+    cg_drawFPS = Dvar_RegisterEnum("cg_drawFPS", cg_drawFpsNames, 0, 1u, "Draw frames per second");
+    Dvar_SetInt(cg_drawFPS, 0);
     cg_drawFPSLabels = Dvar_RegisterBool("cg_drawFPSLabels", 1, 1u, "Draw FPS Info Labels");
     DvarLimits limits;
     limits.value.min = -200.0f;
@@ -271,9 +272,10 @@ void CG_RegisterDvars()
         "Draw a red box at the player's pos in noclip/ufo.");
     cg_drawPerformanceWarnings = Dvar_RegisterBool(
         "cg_drawPerformanceWarnings",
-        1,
+        0,
         0x80u,
         "Draw various debug overlays.  Only useful when cg_draw2D is off.");
+    Dvar_SetBool(cg_drawPerformanceWarnings, false);
     cg_hudStanceFlash = Dvar_RegisterColor("cg_hudStanceFlash", 1.0, 1.0, 1.0, 1.0, DVAR_NOFLAG, "The background color of the flash when the stance changes");
     cg_hudStanceHintPrints = Dvar_RegisterBool(
         "cg_hudStanceHintPrints",

@@ -646,7 +646,8 @@ void __cdecl CG_CalcViewValues(int32_t localClientNum)
     }
     VR_ApplyHeadPosition(
         cgameGlob->refdef.vieworg,
-        cgameGlob->refdef.viewaxis);
+        cgameGlob->refdef.viewaxis,
+        cgameGlob->predictedPlayerState.viewHeightCurrent);
 
     VR_ApplyHeadOrientation(
         cgameGlob->refdef.viewaxis);
@@ -1904,4 +1905,3 @@ double __cdecl CG_UpdateAdsDofValue(float currentValue, float targetValue, float
     }
     return currentValue;
 }
-

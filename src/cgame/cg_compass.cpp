@@ -10,11 +10,7 @@
 #elif KISAK_SP
 #include "cg_main.h"
 #include "cg_newdraw.h"
-#include <cstdlib>
-
-// Implemented by src/vr/vr_openxr.cpp. A forward declaration avoids
-// coupling the shared compass renderer to OpenXR headers.
-bool VR_IsInitialized();
+#include "vr/vr_openxr.h"
 
 #endif
 
@@ -666,99 +662,12 @@ void __cdecl CG_CompassCalcDimensions(
 #ifdef KISAK_SP
         if (VR_IsInitialized())
         {
-            // The standard partial compass is anchored against the
-            // extreme lower-right corner. Quest lens visibility cuts off
-            // that peripheral area, especially the objective arrow.
-            //
-            // These values are in CoD's virtual HUD coordinate system.
-            // Defaults are deliberately conservative for Quest lens
-            // visibility and can be changed before launch without rebuilding:
-            //
-            // KISAK_VR_COMPASS_INSET_X=0..320
-            // KISAK_VR_COMPASS_INSET_Y=0..180
-            static const float vrCompassInsetX = []()
-            {
-                constexpr float defaultInset = 192.0f;
-
-                const char* value =
-                    std::getenv(
-                        "KISAK_VR_COMPASS_INSET_X");
-
-                if (value == nullptr ||
-                    *value == '\0')
-                {
-                    return defaultInset;
-                }
-
-                char* parseEnd = nullptr;
-
-                float parsed =
-                    std::strtof(
-                        value,
-                        &parseEnd);
-
-                if (parseEnd == value ||
-                    *parseEnd != '\0')
-                {
-                    return defaultInset;
-                }
-
-                if (parsed < 0.0f)
-                {
-                    parsed = 0.0f;
-                }
-                else if (parsed > 320.0f)
-                {
-                    parsed = 320.0f;
-                }
-
-                return parsed;
-            }();
-
-            static const float vrCompassInsetY = []()
-            {
-                constexpr float defaultInset = 48.0f;
-
-                const char* value =
-                    std::getenv(
-                        "KISAK_VR_COMPASS_INSET_Y");
-
-                if (value == nullptr ||
-                    *value == '\0')
-                {
-                    return defaultInset;
-                }
-
-                char* parseEnd = nullptr;
-
-                float parsed =
-                    std::strtof(
-                        value,
-                        &parseEnd);
-
-                if (parseEnd == value ||
-                    *parseEnd != '\0')
-                {
-                    return defaultInset;
-                }
-
-                if (parsed < 0.0f)
-                {
-                    parsed = 0.0f;
-                }
-                else if (parsed > 180.0f)
-                {
-                    parsed = 180.0f;
-                }
-
-                return parsed;
-            }();
-
-            *x -=
-                vrCompassInsetX;
-
-            *y -=
-                vrCompassInsetY;
+            kisak::vr::hud::Layout layout;
+            VR_GetActiveHudLayout(&layout);
+            *w = rect->w * layout.compassScale;
+            *h = rect->h * layout.compassScale;
+            *x -= layout.compassInsetX;
+            *y -= layout.compassInsetY;
 
             static bool loggedVrCompassSafeArea = false;
 
@@ -767,9 +676,10 @@ void __cdecl CG_CompassCalcDimensions(
                 Com_Printf(
                     0,
                     "[VR] Inset the SP partial compass by "
-                    "%.1f left and %.1f up in virtual HUD pixels.\n",
-                    vrCompassInsetX,
-                    vrCompassInsetY);
+                    "%.1f left and %.1f up at %.2f scale.\n",
+                    layout.compassInsetX,
+                    layout.compassInsetY,
+                    layout.compassScale);
 
                 loggedVrCompassSafeArea = true;
             }

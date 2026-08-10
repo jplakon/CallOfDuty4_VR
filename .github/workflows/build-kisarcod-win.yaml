@@ -2,9 +2,9 @@ name: Windows CMake DirectX Build
 
 on:
   push:
-    branches: [ "master" ]
+    branches: [ "main" ]
   pull_request:
-    branches: [ "master" ]
+    branches: [ "main" ]
 
 jobs:
   build:
@@ -69,8 +69,9 @@ jobs:
           pushd
           cmake --build build-${{ matrix.config }} --config ${{ matrix.config }} --target "KisakCOD-sp"
           cmake --build build-${{ matrix.config }} --config ${{ matrix.config }} --target "KisakCOD-VR-Configurator"
+          cmake --build build-${{ matrix.config }} --config ${{ matrix.config }} --target "KisakCOD-VR-Input-Mapper"
           cmake --build build-${{ matrix.config }} --config ${{ matrix.config }} --target "KisakCOD-VR-Configurator-Tests"
-          .\bin\${{ matrix.config }}\KisakCOD-VR-Configurator-Tests.exe .\release\package\VR-Settings.bat
+          .\bin\${{ matrix.config }}\KisakCOD-VR-Configurator-Tests.exe .\release\package\VR-Settings.bat .\release\package\Launch-KisakCOD-VR.bat .\src\vr\vr_openxr.cpp .\tools\configurator\configurator.cpp
           cmake --build build-${{ matrix.config }} --config ${{ matrix.config }} --target "KisakCOD-mp"
           cmake --build build-${{ matrix.config }} --config ${{ matrix.config }} --target "KisakCOD-dedi"
           popd

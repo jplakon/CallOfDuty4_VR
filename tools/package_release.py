@@ -196,6 +196,16 @@ def main() -> int:
             f"{configurator_path}"
         )
 
+    input_mapper_path = (
+        root / "bin" / "Release" / "KisakCOD-VR-Input-Mapper.exe"
+    )
+    input_mapper = read_required(input_mapper_path)
+    if len(input_mapper) < 100_000:
+        fail(
+            "compiled input mapper looks unexpectedly small: "
+            f"{input_mapper_path}"
+        )
+
     package_root = root / "release" / "package"
     replacements = {
         "@VERSION@": args.version,
@@ -220,6 +230,7 @@ def main() -> int:
 
     payload["KisakCOD-sp.exe"] = binary
     payload["KisakCOD-VR-Configurator.exe"] = configurator
+    payload["KisakCOD-VR-Input-Mapper.exe"] = input_mapper
     runtime_files = {
         "steam_api.dll": root / "deps" / "steamsdk" / "steam_api.dll",
         "binkw32.dll": root / "deps" / "binklib" / "binkw32.dll",
@@ -277,6 +288,8 @@ Executable source: bin/Release/KisakCOD-sp.exe
 Executable SHA-256: {sha256(binary)}
 Configurator source: bin/Release/KisakCOD-VR-Configurator.exe
 Configurator SHA-256: {sha256(configurator)}
+Input mapper source: bin/Release/KisakCOD-VR-Input-Mapper.exe
+Input mapper SHA-256: {sha256(input_mapper)}
 """
     payload["BUILD-INFO.txt"] = build_info.replace("\n", "\r\n").encode("utf-8")
 

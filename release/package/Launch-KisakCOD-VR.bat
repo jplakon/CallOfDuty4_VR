@@ -36,29 +36,57 @@ if not exist "%~dp0VR-Settings.bat" (
   exit /b 1
 )
 
+if not exist "%~dp0KisakCOD-VR-Configurator.exe" (
+  echo ERROR: KisakCOD-VR-Configurator.exe is missing from the package.
+  echo Beta.8 requires it to validate the exact settings file before launch.
+  pause
+  exit /b 1
+)
+
 call "%~dp0VR-Settings.bat"
 if errorlevel 1 (
   echo ERROR: VR-Settings.bat could not be loaded.
   pause
   exit /b 1
 )
+set "KISAK_VR_SETTINGS_SOURCE=%~dp0VR-Settings.bat"
 
-rem KISAK_SP_VR_CONFIGURATOR_V56
+rem KISAK_SP_VR_SETTINGS_APPLICATION_V61
 rem Personal overrides live outside the game directory so Steam, extraction,
 rem and future mod updates cannot overwrite them. A portable override beside
 rem the launcher is also supported; LocalAppData wins when both exist.
 if exist "%~dp0VR-User-Settings.bat" (
+  "%~dp0KisakCOD-VR-Configurator.exe" --validate "%~dp0VR-User-Settings.bat"
+  if errorlevel 1 (
+    echo ERROR: Portable VR-User-Settings.bat failed validation and was not loaded.
+    pause
+    exit /b 1
+  )
+  set "KISAK_VR_SETTINGS_PROFILE="
+  set "KISAK_VR_SETTINGS_REVISION="
   call "%~dp0VR-User-Settings.bat"
   if errorlevel 1 (
     echo ERROR: Portable VR-User-Settings.bat could not be loaded.
     pause
     exit /b 1
   )
+  if not defined KISAK_VR_SETTINGS_PROFILE set "KISAK_VR_SETTINGS_PROFILE=Legacy portable overrides"
+  if not defined KISAK_VR_SETTINGS_REVISION set "KISAK_VR_SETTINGS_REVISION=legacy-unverified"
+  set "KISAK_VR_SETTINGS_SOURCE=%~dp0VR-User-Settings.bat"
 )
 
 set "KISAK_VR_USER_SETTINGS="
 if defined LOCALAPPDATA set "KISAK_VR_USER_SETTINGS=%LOCALAPPDATA%\KisakCOD-VR\VR-User-Settings.bat"
 if defined KISAK_VR_USER_SETTINGS if exist "%KISAK_VR_USER_SETTINGS%" (
+  "%~dp0KisakCOD-VR-Configurator.exe" --validate "%KISAK_VR_USER_SETTINGS%"
+  if errorlevel 1 (
+    echo ERROR: User settings failed validation and were not loaded:
+    echo   "%KISAK_VR_USER_SETTINGS%"
+    pause
+    exit /b 1
+  )
+  set "KISAK_VR_SETTINGS_PROFILE="
+  set "KISAK_VR_SETTINGS_REVISION="
   call "%KISAK_VR_USER_SETTINGS%"
   if errorlevel 1 (
     echo ERROR: User settings could not be loaded:
@@ -66,6 +94,47 @@ if defined KISAK_VR_USER_SETTINGS if exist "%KISAK_VR_USER_SETTINGS%" (
     pause
     exit /b 1
   )
+  if not defined KISAK_VR_SETTINGS_PROFILE set "KISAK_VR_SETTINGS_PROFILE=Legacy LocalAppData overrides"
+  if not defined KISAK_VR_SETTINGS_REVISION set "KISAK_VR_SETTINGS_REVISION=legacy-unverified"
+  set "KISAK_VR_SETTINGS_SOURCE=%KISAK_VR_USER_SETTINGS%"
+)
+
+if not defined KISAK_VR_SETTINGS_PROFILE set "KISAK_VR_SETTINGS_PROFILE=Unknown"
+if not defined KISAK_VR_SETTINGS_REVISION set "KISAK_VR_SETTINGS_REVISION=legacy-unverified"
+
+rem Record the exact effective environment before process creation. The game
+rem appends RUNTIME_ACCEPTED to this same receipt after parsing its settings,
+rem proving which profile and revision crossed both application boundaries.
+if defined LOCALAPPDATA (
+  set "KISAK_VR_SETTINGS_STATE_DIR=%LOCALAPPDATA%\KisakCOD-VR"
+) else (
+  set "KISAK_VR_SETTINGS_STATE_DIR=%~dp0UserSettings"
+)
+if not exist "%KISAK_VR_SETTINGS_STATE_DIR%\" mkdir "%KISAK_VR_SETTINGS_STATE_DIR%" >nul 2>&1
+if not exist "%KISAK_VR_SETTINGS_STATE_DIR%\" (
+  echo ERROR: Could not create the verified-settings state folder:
+  echo   "%KISAK_VR_SETTINGS_STATE_DIR%"
+  pause
+  exit /b 1
+)
+
+set "KISAK_VR_SETTINGS_RECEIPT_PATH=%KISAK_VR_SETTINGS_STATE_DIR%\Active-VR-Settings.txt"
+set "KISAK_VR_CALIBRATION_REQUEST_PATH=%KISAK_VR_SETTINGS_STATE_DIR%\Calibration-Request.txt"
+set "KISAK_VR_CALIBRATION_STATUS_PATH=%KISAK_VR_SETTINGS_STATE_DIR%\Calibration-Status.txt"
+set "KISAK_VR_HUD_EDITOR_REQUEST_PATH=%KISAK_VR_SETTINGS_STATE_DIR%\HUD-Editor-Request.txt"
+set "KISAK_VR_HUD_EDITOR_STATUS_PATH=%KISAK_VR_SETTINGS_STATE_DIR%\HUD-Editor-Status.txt"
+del /q "%KISAK_VR_CALIBRATION_REQUEST_PATH%" "%KISAK_VR_CALIBRATION_STATUS_PATH%" >nul 2>&1
+set "KISAK_VR_SETTINGS_STATUS=LAUNCHER_VERIFIED"
+>"%KISAK_VR_SETTINGS_RECEIPT_PATH%" echo KisakCOD VR v0.10.0-beta.8 effective settings receipt
+>>"%KISAK_VR_SETTINGS_RECEIPT_PATH%" echo STATUS=LAUNCHER_VERIFIED
+>>"%KISAK_VR_SETTINGS_RECEIPT_PATH%" echo DATE=%DATE% %TIME%
+>>"%KISAK_VR_SETTINGS_RECEIPT_PATH%" set KISAK_VR_
+>>"%KISAK_VR_SETTINGS_RECEIPT_PATH%" set VR_CUSTOM_MODE
+if errorlevel 1 (
+  echo ERROR: Effective settings could not be written and verified:
+  echo   "%KISAK_VR_SETTINGS_RECEIPT_PATH%"
+  pause
+  exit /b 1
 )
 
 rem The diagnostics wrapper is intentionally applied after defaults and user

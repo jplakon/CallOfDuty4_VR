@@ -5251,14 +5251,6 @@ void __cdecl CG_GetPlayerViewOrigin(int32_t localClientNum, const playerState_s 
 }
 #endif
 
-#if defined(KISAK_MP) || defined(KISAK_SP)
-// Returns the filtered OpenXR right grip origin in CoD world space.
-bool VR_GetRightControllerWeaponGripWorld(
-    const float cameraOrigin[3],
-    const float cameraAxis[3][3],
-    float gripWorld[3]);
-#endif
-
 #ifdef KISAK_SP
 // KISAK_VR_DEDICATED_SCOPE_CAMERA_V2
 static bool
@@ -5373,7 +5365,7 @@ void __cdecl CG_AddPlayerWeapon(
             if (bDrawGun)
 #endif
             {
-                float vrTrackedGripWorld[3] = {};
+                float vrCalibratedGripTargetWorld[3] = {};
                 float vrViewmodelGripTagWorld[3] = {};
 
                 const char* configuredTagName =
@@ -5414,7 +5406,7 @@ void __cdecl CG_AddPlayerWeapon(
                 if (VR_GetRightControllerWeaponGripWorld(
                         cgameGlob->refdef.vieworg,
                         cgameGlob->refdef.viewaxis,
-                        vrTrackedGripWorld))
+                        vrCalibratedGripTargetWorld))
                 {
                     for (const char* candidateTagName :
                          candidateTagNames)
@@ -5452,11 +5444,11 @@ void __cdecl CG_AddPlayerWeapon(
                 if (foundGripTag)
                 {
                     const float vrGripCorrection[3] = {
-                        vrTrackedGripWorld[0] -
+                        vrCalibratedGripTargetWorld[0] -
                             vrViewmodelGripTagWorld[0],
-                        vrTrackedGripWorld[1] -
+                        vrCalibratedGripTargetWorld[1] -
                             vrViewmodelGripTagWorld[1],
-                        vrTrackedGripWorld[2] -
+                        vrCalibratedGripTargetWorld[2] -
                             vrViewmodelGripTagWorld[2],
                     };
 
@@ -5472,6 +5464,23 @@ void __cdecl CG_AddPlayerWeapon(
                     CG_UpdateViewModelPose(
                         weapInfo->viewModelDObj,
                         localClientNum);
+
+                    const uint32_t alignedGripTag =
+                        SL_FindString(selectedTagName);
+
+                    float alignedGripTagWorld[3] = {};
+                    if (alignedGripTag != 0 &&
+                        CG_DObjGetWorldTagPos(
+                            &cgameGlob->viewModelPose,
+                            weapInfo->viewModelDObj,
+                            alignedGripTag,
+                            alignedGripTagWorld))
+                    {
+                        VR_ReportRightControllerWeaponGripAlignment(
+                            selectedTagName,
+                            vrCalibratedGripTargetWorld,
+                            alignedGripTagWorld);
+                    }
 
                     static bool loggedVrGripTagAlignment = false;
 

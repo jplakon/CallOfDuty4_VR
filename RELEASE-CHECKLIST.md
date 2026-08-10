@@ -1,6 +1,6 @@
 # Release checklist
 
-This checklist is for `v0.10.0-beta.4`.
+This checklist is for the `v0.10.0-beta.8` release candidate.
 
 ## Documentation blockers
 
@@ -37,7 +37,12 @@ This checklist is for `v0.10.0-beta.4`.
 
 - Confirm both OpenXR submodules show a leading blank status character, not
   `-`, `+`, or `U`.
-- Build `KisakCOD-sp` in Release configuration from the committed source.
+- Build `KisakCOD-sp`, `KisakCOD-VR-Configurator`,
+  `KisakCOD-VR-Input-Mapper`, and `KisakCOD-VR-Configurator-Tests` in Win32
+  Release configuration from the committed source.
+- Run the settings tests against `release/package/VR-Settings.bat` and require
+  all 125 catalog settings plus the launcher/runtime/configurator receipts to
+  pass.
 - Confirm `git status --porcelain --untracked-files=no` remains empty.
 - Copy nothing from `bin/Debug` into the player package.
 - Test `bin/Release/KisakCOD-sp.exe` in a clean COD4 installation.
@@ -47,10 +52,44 @@ This checklist is for `v0.10.0-beta.4`.
 - Start a new campaign.
 - Test save/resume and at least one checkpoint reload.
 - Test ordinary rifles, grenades, use, reload, sprint, crouch/prone, and melee.
-- Test both 45-degree snap and analog smooth turning, partial/full stick
-  deflection, configured speed, neutral behavior, and right-stick-click melee.
-- Test down stand -> crouch -> prone and up prone -> crouch -> stand -> jump,
-  returning the stick to neutral between every stance step.
+- Test both snap and analog smooth turning with the Turn action bound to the
+  right and left axes, including partial/full deflection and neutral behavior.
+- Test jump and tap/hold stance on several face, trigger, grip, click, and
+  directional inputs across both hands. Confirm right-axis up appears under
+  Jump, right-axis down appears under Lower stance, and left trigger is
+  the alternate Jump default.
+- Test primary and alternate bindings, deliberate duplicate warnings, clearing
+  an alternate, profile import/export, and beta.7 value migration.
+- Test the Chord editor with two through four simultaneous inputs, all eight
+  left/right primary-axis directions, and V2/V3-to-V4 profile migration.
+- Confirm the default right grip performs no action and every default mission
+  shortcut is displayed as its right-thumbrest + left-direction chord.
+- Test **Bind...** for boolean and vector actions through OpenXR, Escape cancel,
+  timeout/error reporting, and missing-helper handling.
+- On available native hardware, test Touch, Index, Vive/trackpad, PICO, and
+  Mixed Reality profile mappings; record the active interaction-profile log.
+- Force `KISAK_VR_BACKEND=openvr` and test movement, turning, fire, ADS,
+  reload, use, support grip, menu input, controller poses, and haptics.
+- Test first-gameplay recenter both enabled and disabled. In a running mission,
+  verify **Recenter now** captures position and forward/level after its
+  countdown without changing the OpenXR or SteamVR system origin.
+- Test standing height measurement with an OpenXR `STAGE` space and OpenVR's
+  standing universe, then verify the explicit manual-height fallback on a
+  runtime without a usable floor reference.
+- Test seated calibration plus all three fine-height buttons. Verify that each
+  action applies live, preserves crouch/prone steps, survives restart, and
+  records its request, height, backend, floor availability, and recenter result.
+- Open the desktop visual HUD editor. Drag and resize all five groups, exercise
+  snapping plus Shift/free movement, reset one group, restore defaults, apply,
+  save, restart, and verify the exact placement round-trip.
+- In a running mission, open **Edit live in headset**. Test ray selection,
+  trigger drag, right-stick resizing, left-grip snap bypass, A/pointed Save,
+  and B/pointed Cancel. Confirm gameplay input is suppressed while active.
+- Trigger ammo/equipment, compass objective icons, normal notifications, a bold
+  objective/status banner, and subtitles. Verify each group moves independently
+  and that the crosshair remains at optical center.
+- Confirm `Active-VR-Settings.txt` records all five accepted groups and a
+  `STATUS=RUNTIME_HUD_EDITOR_SAVED` or canceled receipt with the request ID.
 - Test ejecting, hip-drawing, rotating, inserting, and dropping a physical
   magazine on supported rifles, SMGs, and pistols.
 - Test the tracked left hand in free, rifle-grip, and magazine-grip states.
@@ -68,7 +107,8 @@ This checklist is for `v0.10.0-beta.4`.
 - Test the One Shot, One Kill helicopter sequence.
 - Test the Airlift helicopter sequence and other long looping sounds for
   scratchy, metallic, doubled, or corrupted playback.
-- Confirm the normal launcher hides developer errors and the red FPS marker.
+- Confirm the normal launcher shows no FPS/stat marker and that the overlays
+  appear only after their diagnostic dvars are explicitly enabled.
 - Confirm frontend and active-mission quit confirmations appear once, centered,
   and monoscopic in the headset.
 - Run the intentional crash-recorder self-test, collect its Desktop ZIP, and
@@ -78,8 +118,9 @@ This checklist is for `v0.10.0-beta.4`.
 
 ## Tag and package
 
-- Create annotated tag `v0.10.0-beta.4` only after the cumulative menu, turning, stance,
-  crash-diagnostic, frame, camera, audio, tracked-hand, and reload state is validated.
+- Create annotated tag `v0.10.0-beta.8` only after Controller Input V4 and the
+  cumulative menu, rendering, crash-diagnostic, tracked-hand, reload, grenade,
+  and campaign state are validated.
 - Run `tools/package_release.py`.
 - The packager must refuse to run if any documentation placeholder or
   controller-map `VERIFY` marker remains.

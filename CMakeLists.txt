@@ -82,4 +82,5 @@ add_subdirectory(${SCRIPTS_DIR}/dedi)
 # is packaged beside the launcher on Windows builds.
 if(WIN32)
     add_subdirectory(tools/configurator)
+    add_subdirectory(tools/openxr-input-mapper)
 endif()

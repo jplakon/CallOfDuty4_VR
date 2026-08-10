@@ -6,6 +6,19 @@ add_executable(
     configurator.cpp
     settings_core.cpp
     settings_core.h
+    ../../src/vr/vr_calibration.h
+    ../../src/vr/vr_hud_layout.cpp
+    ../../src/vr/vr_hud_layout.h
+    ../../src/vr/vr_input_bindings.cpp
+    ../../src/vr/vr_input_bindings.h
+    ../../src/vr/vr_openxr_profiles.cpp
+    ../../src/vr/vr_openxr_profiles.h
+)
+
+target_include_directories(
+    KisakCOD-VR-Configurator
+    PRIVATE
+        ../../src
 )
 
 target_compile_features(
@@ -59,6 +72,22 @@ add_executable(
     ../../tests/configurator_settings_tests.cpp
     settings_core.cpp
     settings_core.h
+    ../../src/vr/vr_calibration.h
+    ../../src/vr/vr_hud_layout.cpp
+    ../../src/vr/vr_hud_layout.h
+    ../../src/vr/vr_input_bindings.cpp
+    ../../src/vr/vr_input_bindings.h
+    ../../src/vr/vr_openvr_input.cpp
+    ../../src/vr/vr_openvr_input.h
+    ../../src/vr/vr_openxr_profiles.cpp
+    ../../src/vr/vr_openxr_profiles.h
+)
+
+target_include_directories(
+    KisakCOD-VR-Configurator-Tests
+    PRIVATE
+        ../../src
+        ../../deps/openvr/headers
 )
 
 target_compile_features(

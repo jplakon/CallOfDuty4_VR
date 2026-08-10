@@ -1,5 +1,113 @@
 # Changelog
 
+## v0.10.0-beta.8
+
+Visual HUD editing, guided calibration, verified settings application, and
+Controller Input V4 update over `v0.10.0-beta.7`.
+
+### Visual HUD editor
+
+- Replaces the HUD page's tiny non-interactive preview as the primary workflow
+  with a dedicated 640x480 visual canvas containing draggable group bounds,
+  resize handles, safe-area guides, snap anchors, keyboard refinement, and
+  per-group/default reset actions.
+- Adds independent visual placement for ammo/equipment, compass plus objective
+  icons, normal notifications, bold objective/status banners, and subtitles.
+  The crosshair remains locked to the optical center.
+- Adds a live in-headset editor driven by the right-controller ray: trigger
+  drags, right-stick up/down resizes, left grip bypasses snapping, A saves, and
+  B cancels. Gameplay inputs are suppressed until editing ends.
+- Applies live edits through the same runtime layout used by screen placement,
+  compass drawing, and all three message channels, then atomically imports the
+  saved layout back into the configurator.
+- Adds request/status receipts for all five groups plus strict protocol,
+  snapping, hit-test, settings round-trip, and render-path regression checks.
+
+### Guided view and height calibration
+
+- Adds a dedicated **Height & Recenter** page with live **Recenter now**,
+  **Measure standing height**, and **Apply seated calibration** actions plus
+  one-inch height adjustment buttons.
+- Replaces the hidden translation-only startup recenter with an optional
+  first-gameplay capture of position and forward/level orientation.
+- Measures standing eye height through an OpenXR `STAGE` reference space or
+  OpenVR `TrackingUniverseStanding` without changing the runtime's guardian,
+  boundary, or compositor origin.
+- Keeps separate standing and seated virtual eye heights. Both default to
+  COD4's native 60-inch standing camera so the existing scale is unchanged.
+- Applies height as a persistent correction relative to the native standing
+  camera, preserving COD4's crouch and prone transitions.
+- Makes live calibration requests transactional and records their backend,
+  floor availability, requested height, and recenter result.
+
+### Controller-neutral actions
+
+- Replaces Quest-specific fixed controls with primary and alternate bindings
+  for every gameplay, menu, mission, movement, turning, and scope-zoom action
+- Allows any type-compatible input on either controller and adds an optional
+  conventional Aim/ADS binding without removing physical two-hand shouldering
+- Separates locomotion, turning, menu navigation, mission selection, and
+  mounted-scope zoom axes so remapping one role does not silently move another
+- Restores right primary-axis up directly under Jump, keeps
+  left trigger as its alternate default, and keeps right primary-axis down as
+  the separate Lower stance action
+- Migrates beta.7 `x`, `y`, `a`, `b`, and `stick` values to portable semantic
+  source identifiers
+- Adds up/down/left/right primary-stick or trackpad inputs to either hand
+- Allows up to four simultaneous inputs in each primary or alternate slot;
+  inputs inside a slot form an AND-chord and the two slots remain alternatives
+- Restores the visible beta.7 mission defaults as ordinary right-thumbrest +
+  left-direction chords for slot 5, night vision, slot 6, and C4
+- Leaves the redundant native right-grip/off-hand action unbound by default;
+  physical grenade interaction remains on the left support grip
+- Migrates V3 profiles by folding the retired separate Raise stance action
+  into Jump without discarding customized bindings
+
+### Controller profiles and capture
+
+- Adds OpenXR interaction-profile mappings for Khronos Generic/Simple,
+  Oculus/Meta Touch, Touch Plus/Pro, PICO 4/Neo3, Valve Index, HTC Vive,
+  Cosmos/Focus 3, Microsoft/HP Mixed Reality, and Samsung Odyssey controllers
+- Adds **Bind...** capture to the configurator: press a button/trigger/grip or
+  move an axis/direction in a temporary VR session to assign it directly
+- Adds **Chord...** editing with click-to-toggle selection for simultaneous
+  cross-controller bindings
+- Warns about duplicate gameplay bindings while preserving intentional
+  overlaps and rejects boolean/axis type mismatches
+
+### SteamVR compatibility
+
+- Adds controller input to the 32-bit OpenVR fallback through legacy
+  controller-state and axis discovery using the same saved action profile
+- Publishes SteamVR controller poses for weapon aiming, support-hand
+  interactions, physical ADS, manual reload, and grenade throwing
+- Adds OpenVR capture fallback to the input mapper and legacy haptic recoil
+
+### Settings and weapon-placement fixes
+
+- Requires exact on-disk bytes, metadata, and 125-setting read-back before the
+  configurator reports a successful save.
+- Preserves and displays the active profile, destination file, revision, and
+  save time instead of resetting the UI identity to Custom on restart.
+- Validates portable and LocalAppData overrides before launch, records the
+  effective environment, and appends a runtime acceptance receipt from the
+  game process.
+- Routes physical magazine reload and physical grenade toggles through the same
+  validated runtime settings object as weapon positional calibration.
+- Preserves forward/left/up weapon calibration through final viewmodel grip-tag
+  alignment. The previous alignment translated the model back onto the raw
+  controller grip and canceled the requested positional change.
+- Records the applied offset, camera-local displacement, selected grip tag,
+  and residual alignment error after the corrected weapon pose is rendered.
+- Expands strict configurator and runtime coverage from 113 to 125 settings.
+
+### Display and release fixes
+
+- Defaults the normal FPS counter and red performance-warning overlay off and
+  requires their diagnostic dvars to be explicitly enabled before they draw.
+- Runs Windows CI on the repository's `main` branch and builds the game,
+  configurator, input mapper, and settings tests for release validation.
+
 ## v0.10.0-beta.7
 
 VR configurator and customization update over `v0.10.0-beta.6`.

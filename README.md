@@ -14,15 +14,48 @@ copy of the original game.
 
 ## Current status
 
-The current public beta is `v0.10.0-beta.7`.
+The current public beta is `v0.10.0-beta.8`.
 
-This beta adds a portable graphical VR configurator with tested presets and a
-full custom mode. Users can configure snap or smooth turning, rendering,
-HUD/text/compass placement, weapon and hand fit, belt/reload/grenade behavior,
-scope alignment, and supported controller roles without editing batch files.
-Personal settings are stored separately so later package updates preserve them.
-It retains beta.6's physical grenades and Mission Select unlock plus all earlier
-VR work.
+Beta.8 is a major configurator, controller-input, calibration, and HUD update
+over beta.7. It retains the complete campaign, performance, tracked-hand,
+physical reload, manual grenade, scope, and Mission Select work from earlier
+betas.
+
+### Beta.8 improvements
+
+- Adds a genuinely visual HUD editor: drag, resize, and snap five real HUD
+  groups on a desktop canvas or edit them live inside the headset.
+- Adds guided forward/level recentering, automatic standing-height measurement,
+  seated calibration, and safe one-inch height adjustments.
+- Replaces Quest-specific control assumptions with controller-neutral primary
+  and alternate bindings, directional stick/trackpad inputs, multi-input
+  chords, and live press-to-bind capture.
+- Adds OpenXR mappings for Meta Touch, PICO, Valve Index, HTC Vive/Cosmos/Focus,
+  Windows Mixed Reality, HP, Samsung, and generic controller profiles.
+- Adds tracked-controller input and haptics to the experimental 32-bit
+  SteamVR/OpenVR compatibility backend.
+- Expands the portable configurator to 125 validated settings covering comfort,
+  rendering, HUD/text/compass placement, weapon and hand fit, belt/reload/grenade
+  behavior, scope alignment, calibration, and controls.
+
+### Beta.8 bug fixes
+
+- Verifies the exact saved bytes and all 125 parsed values before reporting a
+  successful save, then records launcher and runtime application receipts.
+- Fixes weapon forward/left/up offsets being canceled by final grip-tag
+  alignment, so positional calibration now changes the rendered weapon pose.
+- Restores the intended defaults: right-stick/trackpad up jumps or raises
+  stance, right-stick/trackpad down lowers stance, and left trigger remains an
+  alternate Jump binding.
+- Preserves the four right-thumbrest mission shortcut chords and leaves the
+  redundant right-grip action unbound by default.
+- Keeps the normal FPS counter and red performance-warning overlay off unless
+  their diagnostic controls are explicitly enabled.
+- Runs Windows CI on the repository's actual `main` branch and includes the
+  configurator, input mapper, and 125-setting regression suite in release
+  validation.
+
+Personal settings remain under LocalAppData so package updates preserve them.
 
 - The single-player campaign is playable from beginning to end when
   **Death From Above** is skipped.
@@ -38,7 +71,7 @@ See [KNOWN-ISSUES.md](KNOWN-ISSUES.md) before downloading.
 
 - Windows 10 or Windows 11
 - The original 2007 Call of Duty 4: Modern Warfare for Windows
-- A working OpenXR runtime
+- A working OpenXR runtime, or SteamVR for the compatibility backend
 - A PC VR headset and motion controllers
 - A VR-capable GPU
 
@@ -78,7 +111,8 @@ git clone --recurse-submodules \
 cd CallOfDuty4_VR
 cmake -S . -B build -G "Visual Studio 17 2022" -A Win32
 cmake --build build --config Release \
-  --target KisakCOD-sp KisakCOD-VR-Configurator --parallel 8
+  --target KisakCOD-sp KisakCOD-VR-Configurator \
+  KisakCOD-VR-Input-Mapper --parallel 8
 ```
 
 The compiled executables are written to:
@@ -86,6 +120,7 @@ The compiled executables are written to:
 ```text
 bin/Release/KisakCOD-sp.exe
 bin/Release/KisakCOD-VR-Configurator.exe
+bin/Release/KisakCOD-VR-Input-Mapper.exe
 ```
 
 It must be run from a directory containing the files supplied by the user's

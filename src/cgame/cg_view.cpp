@@ -1714,23 +1714,27 @@ void __cdecl CG_CalcViewValues(int localClientNum)
     VR_StabilizeArtificialCameraTilt(cgameGlob);
     CG_CalcFov(localClientNum);
 
-    static bool vrSpGameplayTranslationRecentered = false;
+    static bool vrSpGameplayRecenterEvaluated = false;
 
-    if (!vrSpGameplayTranslationRecentered &&
-        VR_RecenterHeadPosition())
+    if (!vrSpGameplayRecenterEvaluated &&
+        (!VR_RecenterOnStartEnabled() ||
+         VR_RecenterHeadPose()))
     {
-        vrSpGameplayTranslationRecentered = true;
+        vrSpGameplayRecenterEvaluated = true;
 
         Com_Printf(
             0,
-            "[VR] Recentered SP head translation "
-            "at the first gameplay camera.\n");
+            VR_RecenterOnStartEnabled()
+                ? "[VR][CALIBRATION] Recentered SP position and "
+                  "forward/level orientation at the first gameplay camera.\n"
+                : "[VR][CALIBRATION] First-gameplay recenter is disabled.\n");
     }
 
     const bool vrHeadPositionApplied =
         VR_ApplyHeadPosition(
             cgameGlob->refdef.vieworg,
-            cgameGlob->refdef.viewaxis);
+            cgameGlob->refdef.viewaxis,
+            cgameGlob->predictedPlayerState.viewHeightCurrent);
 
     const bool vrHeadOrientationApplied =
         VR_ApplyHeadOrientation(

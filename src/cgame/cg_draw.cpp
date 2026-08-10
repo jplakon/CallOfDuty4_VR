@@ -14,6 +14,8 @@
 #include <gfx_d3d/r_reflection_probe.h>
 #include <gfx_d3d/r_rendercmds.h>
 #include <chrono>
+#include <cstddef>
+#include <initializer_list>
 
 // KISAK_VR_DEDICATED_SCOPE_CAMERA_V2
 #ifdef KISAK_SP
@@ -1104,6 +1106,241 @@ static const char *WeaponStateNames_8[27] =
   "WEAPON_NIGHTVISION_REMOVE"
 };
 
+void VR_DrawHudEditorOutline(
+    const ScreenPlacement* const placement,
+    const float left,
+    const float top,
+    const float width,
+    const float height,
+    const float thickness,
+    const float color[4])
+{
+    UI_FillRect(placement, left, top, width, thickness, 0, 0, color);
+    UI_FillRect(
+        placement,
+        left,
+        top + height - thickness,
+        width,
+        thickness,
+        0,
+        0,
+        color);
+    UI_FillRect(placement, left, top, thickness, height, 0, 0, color);
+    UI_FillRect(
+        placement,
+        left + width - thickness,
+        top,
+        thickness,
+        height,
+        0,
+        0,
+        color);
+}
+
+void VR_DrawHudEditorOverlay(const int localClientNum)
+{
+    kisak::vr::hud::EditorSnapshot editor;
+    if (!VR_GetHudEditorSnapshot(&editor))
+    {
+        return;
+    }
+
+    const ScreenPlacement* const placement =
+        &scrPlaceView[localClientNum];
+    Font_s* const font =
+        UI_GetFontHandle(placement, 6, 0.30f);
+    const float backdrop[4] = {0.01f, 0.02f, 0.04f, 0.38f};
+    const float grid[4] = {0.35f, 0.55f, 0.72f, 0.30f};
+    const float safeColor[4] = {0.20f, 0.82f, 1.00f, 0.90f};
+    const float selectedColor[4] = {1.00f, 0.84f, 0.20f, 1.00f};
+    const float white[4] = {1.00f, 1.00f, 1.00f, 1.00f};
+    const float muted[4] = {0.76f, 0.82f, 0.90f, 0.95f};
+    const float saveColor[4] = {0.10f, 0.62f, 0.35f, 0.92f};
+    const float cancelColor[4] = {0.58f, 0.18f, 0.20f, 0.92f};
+    const float elementColors[kisak::vr::hud::kElementCount][4] = {
+        {0.18f, 0.72f, 0.42f, 0.62f},
+        {0.90f, 0.58f, 0.15f, 0.62f},
+        {0.25f, 0.55f, 0.94f, 0.62f},
+        {0.72f, 0.36f, 0.92f, 0.62f},
+        {0.88f, 0.88f, 0.90f, 0.55f},
+    };
+
+    UI_FillRect(
+        placement,
+        0.0f,
+        0.0f,
+        kisak::vr::hud::kCanvasWidth,
+        kisak::vr::hud::kCanvasHeight,
+        0,
+        0,
+        backdrop);
+
+    for (const float x : {64.0f, 320.0f, 576.0f})
+    {
+        UI_FillRect(placement, x, 0.0f, 1.0f, 480.0f, 0, 0, grid);
+    }
+    for (const float y : {48.0f, 240.0f, 432.0f})
+    {
+        UI_FillRect(placement, 0.0f, y, 640.0f, 1.0f, 0, 0, grid);
+    }
+
+    const kisak::vr::hud::Point safeMinimum =
+        kisak::vr::hud::SafeAreaMinimum(editor.layout);
+    const kisak::vr::hud::Point safeMaximum =
+        kisak::vr::hud::SafeAreaMaximum(editor.layout);
+    VR_DrawHudEditorOutline(
+        placement,
+        safeMinimum.x,
+        safeMinimum.y,
+        safeMaximum.x - safeMinimum.x,
+        safeMaximum.y - safeMinimum.y,
+        1.5f,
+        safeColor);
+
+    for (std::size_t index = 0u;
+         index < kisak::vr::hud::kElementCount;
+         ++index)
+    {
+        const auto element =
+            static_cast<kisak::vr::hud::Element>(index);
+        const kisak::vr::hud::Point center =
+            kisak::vr::hud::ElementCenter(editor.layout, element);
+        const kisak::vr::hud::Size size =
+            kisak::vr::hud::ElementSize(editor.layout, element);
+        const float left = center.x - size.width * 0.5f;
+        const float top = center.y - size.height * 0.5f;
+        float fill[4] = {
+            elementColors[index][0],
+            elementColors[index][1],
+            elementColors[index][2],
+            elementColors[index][3],
+        };
+        if (element == kisak::vr::hud::Element::Compass &&
+            !editor.layout.compassEnabled)
+        {
+            fill[3] = 0.22f;
+        }
+        UI_FillRect(
+            placement,
+            left,
+            top,
+            size.width,
+            size.height,
+            0,
+            0,
+            fill);
+
+        const bool selected = element == editor.selected;
+        VR_DrawHudEditorOutline(
+            placement,
+            left,
+            top,
+            size.width,
+            size.height,
+            selected ? 3.0f : 1.0f,
+            selected ? selectedColor : white);
+
+        UI_DrawText(
+            placement,
+            kisak::vr::hud::ElementLabel(element),
+            0x7FFFFFFF,
+            font,
+            left + 7.0f,
+            center.y + 5.0f,
+            0,
+            0,
+            0.23f,
+            white,
+            3);
+    }
+
+    UI_FillRect(placement, 366.0f, 18.0f, 124.0f, 40.0f, 0, 0, cancelColor);
+    UI_FillRect(placement, 500.0f, 18.0f, 124.0f, 40.0f, 0, 0, saveColor);
+    UI_DrawText(
+        placement,
+        "CANCEL (B)",
+        0x7FFFFFFF,
+        font,
+        384.0f,
+        46.0f,
+        0,
+        0,
+        0.25f,
+        white,
+        3);
+    UI_DrawText(
+        placement,
+        "SAVE (A)",
+        0x7FFFFFFF,
+        font,
+        527.0f,
+        46.0f,
+        0,
+        0,
+        0.25f,
+        white,
+        3);
+
+    const float crosshair[4] = {0.95f, 0.25f, 0.25f, 0.90f};
+    UI_FillRect(placement, 312.0f, 239.0f, 16.0f, 2.0f, 0, 0, crosshair);
+    UI_FillRect(placement, 319.0f, 232.0f, 2.0f, 16.0f, 0, 0, crosshair);
+    UI_DrawText(
+        placement,
+        "Crosshair locked to optical center",
+        0x7FFFFFFF,
+        font,
+        330.0f,
+        246.0f,
+        0,
+        0,
+        0.18f,
+        muted,
+        3);
+
+    UI_DrawText(
+        placement,
+        editor.snapEnabled
+            ? "Point + hold trigger: drag   Right stick up/down: resize   Hold left grip: free move"
+            : "FREE MOVE (left grip held)   Release grip to restore snap anchors",
+        0x7FFFFFFF,
+        font,
+        22.0f,
+        470.0f,
+        0,
+        0,
+        0.20f,
+        muted,
+        3);
+
+    if (editor.pointerValid)
+    {
+        const float pointerColor[4] = {
+            1.00f,
+            editor.dragging ? 0.35f : 0.95f,
+            0.18f,
+            1.00f,
+        };
+        UI_FillRect(
+            placement,
+            editor.pointer.x - 8.0f,
+            editor.pointer.y - 1.0f,
+            16.0f,
+            2.0f,
+            0,
+            0,
+            pointerColor);
+        UI_FillRect(
+            placement,
+            editor.pointer.x - 1.0f,
+            editor.pointer.y - 8.0f,
+            2.0f,
+            16.0f,
+            0,
+            0,
+            pointerColor);
+    }
+}
+
 
 void DrawViewmodelInfo(int localClientNum)
 {
@@ -1296,6 +1533,8 @@ void __cdecl CG_Draw2D(int localClientNum)
                 CG_Draw2dHudElems(localClientNum, 0);
             CG_DrawFlashFade(localClientNum);
         }
+
+        VR_DrawHudEditorOverlay(localClientNum);
     }
 }
 

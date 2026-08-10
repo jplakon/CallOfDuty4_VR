@@ -1,5 +1,9 @@
 #pragma once
 
+#include "vr/vr_hud_layout.h"
+
+#include <cstdint>
+
 // Initializes OpenXR first and automatically falls back to SteamVR's 32-bit
 // OpenVR client when no compatible 32-bit OpenXR runtime is available.
 //
@@ -96,11 +100,30 @@ bool VR_GetPhysicalSniperScopeRenderView(
 // existing CoD camera axis. Returns false until a valid pose exists.
 bool VR_ApplyHeadPosition(
     float viewOrigin[3],
-    const float viewAxis[3][3]);
+    const float viewAxis[3][3],
+    float nativeViewHeightCurrent);
 
 // Makes the latest physical headset center the zero-translation pose.
 // Orientation is not changed. Returns false until a valid head pose exists.
 bool VR_RecenterHeadPosition();
+
+// Captures the latest tracked headset position and orientation as the new
+// forward/level origin. This is used by first-gameplay and live guided
+// calibration; controller poses remain rigidly head-relative.
+bool VR_RecenterHeadPose();
+bool VR_RecenterOnStartEnabled();
+
+// V61 visual HUD editor. The runtime layout overrides environment defaults
+// only while an in-headset edit is active (or after that edit is saved for
+// the current process). Other render modules read this same snapshot so the
+// boxes manipulated in the editor are the actual HUD groups being moved.
+bool VR_GetActiveHudLayout(
+    kisak::vr::hud::Layout* layout);
+std::uint64_t VR_GetHudLayoutRevision();
+bool VR_GetHudEditorSnapshot(
+    kisak::vr::hud::EditorSnapshot* snapshot);
+bool VR_HudEditorConsumesGameplayInput();
+
 bool VR_ApplyHeadOrientation(float viewAxis[3][3]);
 bool VR_ApplyStereoEyeOffsetForEye(
     float viewOrigin[3],
@@ -130,12 +153,28 @@ bool VR_GetCurrentRenderEyeProjection(
 // Applies the tracked right-controller pose to the already-built
 // first-person weapon placement. The viewmodel attachment is calibrated
 // against a canonical controller basis, so startup controller orientation
-// cannot become a permanent neutral-pose offset.
+// cannot become a permanent neutral-pose offset. Positional calibration is
+// also published for the final viewmodel grip-tag alignment, preventing that
+// later correction from cancelling forward/left/up offsets.
 bool VR_ApplyRightControllerToWeaponPlacement(
     const float cameraOrigin[3],
     const float cameraAxis[3][3],
     float weaponOrigin[3],
     float weaponAxis[3][3]);
+
+// Returns the filtered right-controller grip target in world space, including
+// the positional calibration published by the final weapon transform.
+bool VR_GetRightControllerWeaponGripWorld(
+    const float cameraOrigin[3],
+    const float cameraAxis[3][3],
+    float gripWorld[3]);
+
+// Records proof that the final viewmodel grip-tag alignment reached the
+// calibrated target. This is called only after the corrected pose is rebuilt.
+void VR_ReportRightControllerWeaponGripAlignment(
+    const char* gripTagName,
+    const float calibratedTargetWorld[3],
+    const float alignedTagWorld[3]);
 
 // KISAK_SP_VR_TRACKED_HANDS_V1
 // Returns the latest OpenXR grip pose in CoD world space.  The left hand
@@ -251,10 +290,9 @@ bool VR_GetTurnYawDelta(
     float elapsedSeconds,
     float* yawDeltaDegrees);
 
-// Returns the first Touch gameplay-control set:
-// a left-squeeze two-hand weapon pose near the HMD sight line = ADS,
-// left index trigger = jump, left X = pickup/activate, and right A = magazine
-// eject for supported weapons (native reload fallback otherwise).
+// Returns the first configured gameplay-control set. Physical two-hand
+// shouldering remains available for ADS; the tested defaults are left trigger
+// jump, left primary use, and right primary magazine eject/native reload.
 bool VR_GetBasicGameplayButtons(
     bool* adsHeld,
     bool* jumpHeld,
@@ -340,27 +378,25 @@ bool VR_ConsumeManualGrenadeThrow(
     unsigned int* velocitySampleAgeMilliseconds,
     unsigned int* releaseAgeMilliseconds);
 
-// Returns the next Touch gameplay-control set:
-// left-stick click = sprint, right-stick click = melee,
-// right B = tap crouch/stand or hold prone/stand.
+// Returns the configured locomotion/combat controls. Tested defaults are left
+// stick click for sprint, right stick click for melee, and right secondary for
+// tap-crouch/stand or hold-prone/stand.
 bool VR_GetLocomotionCombatButtons(
     bool* sprintHeld,
     bool* meleeHeld,
     bool* stanceHeld);
 
-// Consumes one latched vertical right-stick gesture.  The client maps up to
-// one higher stance (or jump while already standing) and down to one lower
-// stance.  Neutral re-arms the gesture; horizontal stick dominance remains
-// reserved for configured turning.
-bool VR_ConsumeRightStickVerticalActions(
-    bool* upPressed,
-    bool* downPressed);
+// Returns the remappable one-step lower-stance control. The tested default is
+// right primary-axis down. Right primary-axis up belongs to Jump.
+bool VR_GetLowerStanceButton(
+    bool* lowerHeld);
 
-// Returns legacy weapon-utility controls.  Manual-grenade mode consumes the
-// left grip separately; when that mode is disabled, right grip remains the
-// tactical-grenade input and left Y retains its hold-frag/tap-cycle behavior.
+// Returns optional weapon-utility controls. Manual-grenade mode consumes the
+// support grip separately. When that mode is disabled, the configured native
+// off-hand action (unbound by default) drives tactical grenades and the
+// configured next-weapon action retains the legacy hold-frag/tap behavior.
 bool VR_GetWeaponUtilityButtons(
-    bool* rightGripHeld,
+    bool* offhandHeld,
     bool* leftYHeld);
 
 

@@ -1,15 +1,21 @@
 #include "settings_core.h"
+#include "vr/vr_calibration.h"
+#include "vr/vr_input_bindings.h"
 
 #include <windows.h>
+#include <windowsx.h>
 #include <commctrl.h>
 #include <commdlg.h>
 #include <shellapi.h>
+#include <tlhelp32.h>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <iomanip>
 #include <map>
 #include <memory>
 #include <sstream>
@@ -24,13 +30,21 @@
 #endif
 
 namespace kc = kisak::configurator;
+namespace vi = kisak::vr::input;
+namespace vc = kisak::vr::calibration;
+namespace vh = kisak::vr::hud;
 
 namespace
 {
 
-constexpr wchar_t kWindowClass[] = L"KisakCODVrConfiguratorV56";
-constexpr wchar_t kPreviewClass[] = L"KisakCODVrPreviewV56";
-constexpr wchar_t kWindowTitle[] = L"KisakCOD VR Configurator - V56";
+constexpr wchar_t kWindowClass[] = L"KisakCODVrConfiguratorV61";
+constexpr wchar_t kPreviewClass[] = L"KisakCODVrPreviewV61";
+constexpr wchar_t kChordEditorClass[] =
+    L"KisakCODVrBindingChordEditorV61";
+constexpr wchar_t kHudEditorClass[] =
+    L"KisakCODVrVisualHudEditorV61";
+constexpr wchar_t kWindowTitle[] =
+    L"KisakCOD VR Configurator - v0.10.0-beta.8";
 
 constexpr int kWindowWidth = 1160;
 constexpr int kWindowHeight = 790;
@@ -53,10 +67,28 @@ constexpr int kIdExport = 106;
 constexpr int kIdSave = 107;
 constexpr int kIdSaveLaunch = 108;
 constexpr int kIdDiagnostics = 109;
+constexpr int kIdBindingActionList = 110;
+constexpr int kIdBindingPrimary = 111;
+constexpr int kIdBindingAlternate = 112;
+constexpr int kIdCapturePrimary = 113;
+constexpr int kIdCaptureAlternate = 114;
+constexpr int kIdClearBinding = 115;
+constexpr int kIdChordPrimary = 116;
+constexpr int kIdChordAlternate = 117;
+constexpr int kIdCalibrationRecenter = 118;
+constexpr int kIdCalibrationMeasureStanding = 119;
+constexpr int kIdCalibrationApplySeated = 120;
+constexpr int kIdCalibrationShorter = 121;
+constexpr int kIdCalibrationResetHeight = 122;
+constexpr int kIdCalibrationTaller = 123;
+constexpr int kIdHudVisualEditor = 124;
+constexpr int kIdHudHeadsetEditor = 125;
+constexpr int kIdHudPollTimer = 126;
 constexpr int kIdSettingBase = 2000;
 
-const std::array<kc::SettingPage, 8> kPageOrder = {
+const std::array<kc::SettingPage, 9> kPageOrder = {
     kc::SettingPage::Quick,
+    kc::SettingPage::Calibration,
     kc::SettingPage::Hud,
     kc::SettingPage::Weapons,
     kc::SettingPage::Interactions,
@@ -66,8 +98,9 @@ const std::array<kc::SettingPage, 8> kPageOrder = {
     kc::SettingPage::Advanced,
 };
 
-const std::array<const wchar_t*, 8> kPageNames = {
+const std::array<const wchar_t*, 9> kPageNames = {
     L"Quick Setup",
+    L"Height & Recenter",
     L"HUD & Text",
     L"Weapons & Hands",
     L"Interactions",
@@ -235,6 +268,19 @@ struct AppState
     HWND hint = nullptr;
     HWND settingsPath = nullptr;
     HWND tooltip = nullptr;
+    HWND bindingActionList = nullptr;
+    HWND bindingPrimary = nullptr;
+    HWND bindingAlternate = nullptr;
+    HWND capturePrimary = nullptr;
+    HWND captureAlternate = nullptr;
+    HWND chordPrimary = nullptr;
+    HWND chordAlternate = nullptr;
+    HWND clearBinding = nullptr;
+    std::vector<HWND> bindingEditorControls;
+    HWND calibrationStatus = nullptr;
+    std::vector<HWND> calibrationControls;
+    HWND hudStatus = nullptr;
+    std::vector<HWND> hudControls;
     HFONT font = nullptr;
     HFONT titleFont = nullptr;
     HBRUSH backgroundBrush = nullptr;
@@ -243,6 +289,7 @@ struct AppState
     std::filesystem::path gameDirectory;
     std::filesystem::path defaultsPath;
     std::filesystem::path userPath;
+    std::filesystem::path activePath;
     kc::SettingsMap values;
     std::vector<ControlBinding> bindings;
     std::vector<kc::ValidationMessage> validation;
@@ -251,7 +298,54 @@ struct AppState
     bool dirty = false;
     bool suppressEvents = false;
     std::string profileName = "Custom";
+    std::string revision;
+    std::string lastSavedAt;
+    std::size_t verifiedSettingCount = 0u;
+    bool readBackVerified = false;
+    std::string pendingHudEditorRequestId;
+    bool pendingHudEditorLaunched = false;
+    ULONGLONG pendingHudEditorStartedAt = 0u;
 };
+
+struct ChordEditorState
+{
+    AppState* app = nullptr;
+    vi::Action action = vi::Action::Attack;
+    HWND window = nullptr;
+    HWND sourceList = nullptr;
+    bool accepted = false;
+    std::string result = "unbound";
+};
+
+struct HudEditorState
+{
+    AppState* app = nullptr;
+    HWND window = nullptr;
+    vh::Layout layout;
+    vh::Element selected = vh::Element::AmmoEquipment;
+    bool accepted = false;
+    bool dragging = false;
+    bool resizing = false;
+    bool snapEnabled = true;
+    POINT dragOffset = {};
+    POINT dragStart = {};
+    float resizeStartScale = 1.0f;
+};
+
+void UpdateControllerBindingEditor(AppState& state);
+void ShowControllerBindingEditor(AppState& state, bool show);
+void ShowCalibrationPanel(AppState& state, bool show);
+void ShowHudPanel(AppState& state, bool show);
+LRESULT CALLBACK ChordEditorWindowProc(
+    HWND window,
+    UINT message,
+    WPARAM wParam,
+    LPARAM lParam);
+LRESULT CALLBACK HudEditorWindowProc(
+    HWND window,
+    UINT message,
+    WPARAM wParam,
+    LPARAM lParam);
 
 void SetFont(HWND control, HFONT font)
 {
@@ -316,7 +410,8 @@ void SetControlFromValue(
 {
     const kc::SettingDefinition& definition = *binding.definition;
     if (definition.type == kc::SettingType::Choice ||
-        definition.type == kc::SettingType::Toggle)
+        definition.type == kc::SettingType::Toggle ||
+        definition.type == kc::SettingType::Binding)
     {
         int selected = 0;
         for (std::size_t index = 0; index < definition.choices.size(); ++index)
@@ -339,7 +434,8 @@ std::string ValueFromControl(const ControlBinding& binding)
 {
     const kc::SettingDefinition& definition = *binding.definition;
     if (definition.type == kc::SettingType::Choice ||
-        definition.type == kc::SettingType::Toggle)
+        definition.type == kc::SettingType::Toggle ||
+        definition.type == kc::SettingType::Binding)
     {
         const LRESULT selected =
             SendMessageW(binding.control, CB_GETCURSEL, 0, 0);
@@ -367,6 +463,7 @@ void UpdateAllControls(AppState& state)
                 : found->second);
     }
     state.suppressEvents = false;
+    UpdateControllerBindingEditor(state);
     InvalidateRect(state.preview, nullptr, TRUE);
 }
 
@@ -376,6 +473,37 @@ void ReadAllControls(AppState& state)
     {
         state.values[binding.definition->key] = ValueFromControl(binding);
     }
+}
+
+void UpdateSettingsIdentity(AppState& state)
+{
+    if (state.settingsPath == nullptr)
+    {
+        return;
+    }
+
+    const std::filesystem::path& activePath =
+        state.activePath.empty() ? state.defaultsPath : state.activePath;
+    std::wstring identity =
+        L"Active profile: " + ToWide(state.profileName) +
+        L"  |  File: " + activePath.wstring();
+    if (!state.revision.empty())
+    {
+        identity += L"  |  Revision: " + ToWide(state.revision);
+    }
+    SetWindowTextW(state.settingsPath, identity.c_str());
+}
+
+void MarkSettingsDirty(
+    AppState& state,
+    const std::string& profileName)
+{
+    state.dirty = true;
+    state.profileName = profileName;
+    state.revision.clear();
+    state.lastSavedAt.clear();
+    state.verifiedSettingCount = 0u;
+    state.readBackVerified = false;
 }
 
 void UpdateValidation(AppState& state)
@@ -400,8 +528,25 @@ void UpdateValidation(AppState& state)
     std::wostringstream status;
     if (errors == 0 && warnings == 0)
     {
-        status << (state.dirty ? L"Unsaved changes - " : L"")
-               << L"All settings are valid.";
+        if (state.dirty)
+        {
+            status << L"Unsaved changes - all settings are valid.";
+        }
+        else if (state.readBackVerified)
+        {
+            status << L"Saved and read-back verified: "
+                   << state.verifiedSettingCount << L"/"
+                   << kc::SettingsCatalog().size() << L" settings";
+            if (!state.lastSavedAt.empty())
+            {
+                status << L" at " << ToWide(state.lastSavedAt);
+            }
+            status << L".";
+        }
+        else
+        {
+            status << L"Settings loaded and valid. Save once to create a verified revision.";
+        }
     }
     else
     {
@@ -415,11 +560,19 @@ void UpdateValidation(AppState& state)
     }
 
     SetWindowTextW(state.status, status.str().c_str());
+    UpdateSettingsIdentity(state);
     InvalidateRect(state.preview, nullptr, TRUE);
 }
 
 void LayoutSettings(AppState& state)
 {
+    const bool controllerPage =
+        state.selectedPage == PageIndex(kc::SettingPage::Controls);
+    const bool calibrationPage =
+        state.selectedPage == PageIndex(kc::SettingPage::Calibration);
+    const bool hudPage =
+        state.selectedPage == PageIndex(kc::SettingPage::Hud);
+
     std::vector<ControlBinding*> visible;
     for (ControlBinding& binding : state.bindings)
     {
@@ -427,7 +580,8 @@ void LayoutSettings(AppState& state)
             PageIndex(binding.definition->page) == state.selectedPage;
         const bool permitted =
             state.advancedMode || !binding.definition->advanced;
-        const bool show = onPage && permitted;
+        const bool show =
+            !controllerPage && onPage && permitted;
         ShowWindow(binding.label, show ? SW_SHOW : SW_HIDE);
         ShowWindow(binding.control, show ? SW_SHOW : SW_HIDE);
         if (show)
@@ -436,13 +590,21 @@ void LayoutSettings(AppState& state)
         }
     }
 
+    ShowControllerBindingEditor(state, controllerPage);
+    ShowCalibrationPanel(state, calibrationPage);
+    ShowHudPanel(state, hudPage);
+
     const int pageX = kTabLeft + 18;
-    const int pageY = kTabTop + 54;
+    const int pageY = hudPage
+        ? kTabTop + 140
+        : kTabTop + 54;
     const int count = static_cast<int>(visible.size());
     const int columns = count > 8 ? 2 : 1;
     const int rows = columns == 1 ? count : (count + 1) / 2;
     const int columnWidth = columns == 1 ? 520 : 344;
-    const int rowHeight = rows > 7 ? 54 : 62;
+    const int rowHeight = hudPage && rows > 7
+        ? 43
+        : (rows > 7 ? 54 : 62);
 
     for (int index = 0; index < count; ++index)
     {
@@ -459,7 +621,8 @@ void LayoutSettings(AppState& state)
             y + 20,
             controlWidth,
             visible[index]->definition->type == kc::SettingType::Choice ||
-                    visible[index]->definition->type == kc::SettingType::Toggle
+                    visible[index]->definition->type == kc::SettingType::Toggle ||
+                    visible[index]->definition->type == kc::SettingType::Binding
                 ? 220
                 : 26,
             TRUE);
@@ -470,7 +633,10 @@ void LayoutSettings(AppState& state)
 
 void SelectPage(AppState& state, const int page)
 {
-    state.selectedPage = std::clamp(page, 0, 7);
+    state.selectedPage = std::clamp(
+        page,
+        0,
+        static_cast<int>(kPageOrder.size()) - 1);
     LayoutSettings(state);
 }
 
@@ -542,10 +708,1733 @@ void OnSettingChanged(AppState& state, const int identifier)
 
     ControlBinding& binding = state.bindings[static_cast<std::size_t>(index)];
     state.values[binding.definition->key] = ValueFromControl(binding);
-    state.dirty = true;
-    state.profileName = "Custom";
+    MarkSettingsDirty(state, "Custom");
     SynchronizePackedMode(state, binding.definition->key);
     UpdateValidation(state);
+}
+
+const vi::ActionDefinition* SelectedControllerAction(
+    const AppState& state)
+{
+    if (state.bindingActionList == nullptr)
+    {
+        return nullptr;
+    }
+
+    const LRESULT selected =
+        SendMessageW(
+            state.bindingActionList,
+            LB_GETCURSEL,
+            0,
+            0);
+
+    if (selected < 0 ||
+        static_cast<std::size_t>(selected) >= vi::kActionCount)
+    {
+        return nullptr;
+    }
+
+    return &vi::ActionDefinitions()[
+        static_cast<std::size_t>(selected)];
+}
+
+std::wstring ControllerSourceLabel(const std::string& value)
+{
+    vi::Source source = vi::Source::Unbound;
+    if (!vi::ParseSource(value, &source))
+    {
+        return ToWide(value);
+    }
+
+    return ToWide(
+        vi::GetSourceDefinition(source).label);
+}
+
+std::wstring ControllerBindingLabel(
+    const std::string& value,
+    const vi::Action action)
+{
+    vi::Binding binding;
+    if (!vi::ParseBinding(action, value, &binding))
+    {
+        return ToWide(value);
+    }
+
+    return ToWide(vi::BindingLabel(binding));
+}
+
+void SizeBindingDropDownToContents(HWND combo)
+{
+    if (combo == nullptr)
+    {
+        return;
+    }
+
+    HDC const deviceContext = GetDC(combo);
+    if (deviceContext == nullptr)
+    {
+        SendMessageW(combo, CB_SETDROPPEDWIDTH, 380, 0);
+        return;
+    }
+
+    const HFONT font = reinterpret_cast<HFONT>(
+        SendMessageW(combo, WM_GETFONT, 0, 0));
+    const HGDIOBJ previousFont = font != nullptr
+        ? SelectObject(deviceContext, font)
+        : nullptr;
+
+    int widest = 0;
+    const LRESULT count = SendMessageW(combo, CB_GETCOUNT, 0, 0);
+    for (LRESULT index = 0; index < count; ++index)
+    {
+        const LRESULT length = SendMessageW(
+            combo,
+            CB_GETLBTEXTLEN,
+            static_cast<WPARAM>(index),
+            0);
+        if (length <= 0)
+        {
+            continue;
+        }
+
+        std::wstring label(
+            static_cast<std::size_t>(length) + 1u,
+            L'\0');
+        SendMessageW(
+            combo,
+            CB_GETLBTEXT,
+            static_cast<WPARAM>(index),
+            reinterpret_cast<LPARAM>(label.data()));
+
+        SIZE textSize = {};
+        if (GetTextExtentPoint32W(
+                deviceContext,
+                label.c_str(),
+                static_cast<int>(length),
+                &textSize))
+        {
+            widest = std::max(
+                widest,
+                static_cast<int>(textSize.cx));
+        }
+    }
+
+    if (previousFont != nullptr)
+    {
+        SelectObject(deviceContext, previousFont);
+    }
+    ReleaseDC(combo, deviceContext);
+
+    const int requestedWidth = std::clamp(
+        widest + GetSystemMetrics(SM_CXVSCROLL) + 28,
+        320,
+        520);
+    SendMessageW(
+        combo,
+        CB_SETDROPPEDWIDTH,
+        static_cast<WPARAM>(requestedWidth),
+        0);
+}
+
+void PopulateBindingCombo(
+    AppState& state,
+    HWND combo,
+    const char* key)
+{
+    SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+
+    const kc::SettingDefinition* const setting =
+        kc::FindSetting(key);
+
+    if (setting == nullptr)
+    {
+        return;
+    }
+
+    const std::string current =
+        StringValue(
+            state.values,
+            key,
+            setting->defaultValue.c_str());
+
+    int selected = 0;
+
+    const vi::ActionDefinition* const action =
+        vi::FindActionDefinition(key);
+    vi::Binding currentBinding;
+    const bool chord =
+        action != nullptr &&
+        vi::ParseBinding(
+            action->action,
+            current,
+            &currentBinding) &&
+        currentBinding.sourceCount > 1u;
+
+    if (chord)
+    {
+        const std::wstring label =
+            L"Chord: " +
+            ToWide(vi::BindingLabel(currentBinding));
+        const LRESULT item = SendMessageW(
+            combo,
+            CB_ADDSTRING,
+            0,
+            reinterpret_cast<LPARAM>(label.c_str()));
+        SendMessageW(combo, CB_SETITEMDATA, item, -1);
+    }
+
+    for (std::size_t index = 0u;
+         index < setting->choices.size();
+         ++index)
+    {
+        const kc::SettingChoice& choice =
+            setting->choices[index];
+
+        const std::wstring label =
+            ToWide(choice.label);
+
+        const LRESULT item = SendMessageW(
+            combo,
+            CB_ADDSTRING,
+            0,
+            reinterpret_cast<LPARAM>(label.c_str()));
+
+        vi::Source source = vi::Source::Unbound;
+        vi::ParseSource(choice.value, &source);
+        SendMessageW(
+            combo,
+            CB_SETITEMDATA,
+            item,
+            static_cast<LPARAM>(
+                static_cast<std::size_t>(source)));
+
+        if (choice.value == current)
+        {
+            selected = static_cast<int>(item);
+        }
+    }
+
+    SendMessageW(
+        combo,
+        CB_SETCURSEL,
+        selected,
+        0);
+
+    // Keep the compact editor layout, but widen its open list so the final
+    // up/down/left/right word is always visible. Without this, four distinct
+    // directional sources look like four identical truncated choices.
+    SizeBindingDropDownToContents(combo);
+}
+
+void UpdateControllerBindingEditor(AppState& state)
+{
+    if (state.bindingActionList == nullptr ||
+        state.bindingPrimary == nullptr ||
+        state.bindingAlternate == nullptr)
+    {
+        return;
+    }
+
+    const LRESULT oldSelection =
+        SendMessageW(
+            state.bindingActionList,
+            LB_GETCURSEL,
+            0,
+            0);
+
+    const int selected =
+        oldSelection >= 0 &&
+        static_cast<std::size_t>(oldSelection) < vi::kActionCount
+            ? static_cast<int>(oldSelection)
+            : 0;
+
+    const bool oldSuppression = state.suppressEvents;
+    state.suppressEvents = true;
+
+    SendMessageW(
+        state.bindingActionList,
+        LB_RESETCONTENT,
+        0,
+        0);
+
+    for (const vi::ActionDefinition& action :
+         vi::ActionDefinitions())
+    {
+        const std::string primary =
+            StringValue(
+                state.values,
+                action.settingKey,
+                action.defaultBinding);
+
+        const std::string alternate =
+            StringValue(
+                state.values,
+                action.alternateSettingKey,
+                action.defaultAlternateBinding);
+
+        std::wstring row =
+            ToWide(action.label) + L"  —  " +
+            ControllerBindingLabel(primary, action.action);
+
+        if (alternate != "unbound")
+        {
+            row += L"  /  " +
+                ControllerBindingLabel(alternate, action.action);
+        }
+
+        SendMessageW(
+            state.bindingActionList,
+            LB_ADDSTRING,
+            0,
+            reinterpret_cast<LPARAM>(row.c_str()));
+    }
+
+    SendMessageW(
+        state.bindingActionList,
+        LB_SETCURSEL,
+        selected,
+        0);
+
+    const vi::ActionDefinition& action =
+        vi::ActionDefinitions()[
+            static_cast<std::size_t>(selected)];
+
+    PopulateBindingCombo(
+        state,
+        state.bindingPrimary,
+        action.settingKey);
+
+    PopulateBindingCombo(
+        state,
+        state.bindingAlternate,
+        action.alternateSettingKey);
+
+    SetWindowTextW(
+        state.hint,
+        (ToWide(action.label) + L"\r\n" +
+         ToWide(action.description)).c_str());
+
+    state.suppressEvents = oldSuppression;
+}
+
+void ShowControllerBindingEditor(
+    AppState& state,
+    const bool show)
+{
+    for (HWND control : state.bindingEditorControls)
+    {
+        ShowWindow(control, show ? SW_SHOW : SW_HIDE);
+    }
+}
+
+void OnControllerBindingChoice(
+    AppState& state,
+    const bool alternate)
+{
+    if (state.suppressEvents)
+    {
+        return;
+    }
+
+    const vi::ActionDefinition* const action =
+        SelectedControllerAction(state);
+
+    if (action == nullptr)
+    {
+        return;
+    }
+
+    const char* const key = alternate
+        ? action->alternateSettingKey
+        : action->settingKey;
+
+    const kc::SettingDefinition* const setting =
+        kc::FindSetting(key);
+
+    HWND combo = alternate
+        ? state.bindingAlternate
+        : state.bindingPrimary;
+
+    const LRESULT selected =
+        SendMessageW(combo, CB_GETCURSEL, 0, 0);
+
+    if (setting == nullptr || selected < 0)
+    {
+        return;
+    }
+
+    const LRESULT itemData =
+        SendMessageW(combo, CB_GETITEMDATA, selected, 0);
+    if (itemData == CB_ERR || itemData < 0 ||
+        static_cast<std::size_t>(itemData) >= vi::kSourceCount)
+    {
+        return;
+    }
+
+    state.values[key] = std::string(
+        vi::SourceId(static_cast<vi::Source>(itemData)));
+
+    MarkSettingsDirty(state, "Custom");
+    UpdateControllerBindingEditor(state);
+    UpdateValidation(state);
+}
+
+void ClearControllerAlternateBinding(AppState& state)
+{
+    const vi::ActionDefinition* const action =
+        SelectedControllerAction(state);
+
+    if (action == nullptr)
+    {
+        return;
+    }
+
+    state.values[action->alternateSettingKey] = "unbound";
+    MarkSettingsDirty(state, "Custom");
+    UpdateControllerBindingEditor(state);
+    UpdateValidation(state);
+}
+
+HWND CreateChordControl(
+    ChordEditorState& state,
+    const wchar_t* const className,
+    const wchar_t* const text,
+    const DWORD style,
+    const int x,
+    const int y,
+    const int width,
+    const int height,
+    const int identifier,
+    const DWORD extendedStyle = 0u)
+{
+    HWND control = CreateWindowExW(
+        extendedStyle,
+        className,
+        text,
+        WS_CHILD | WS_VISIBLE | style,
+        x,
+        y,
+        width,
+        height,
+        state.window,
+        reinterpret_cast<HMENU>(
+            static_cast<INT_PTR>(identifier)),
+        state.app->instance,
+        nullptr);
+
+    if (control != nullptr)
+    {
+        SetFont(control, state.app->font);
+    }
+    return control;
+}
+
+void AcceptChordEditor(ChordEditorState& state)
+{
+    if (state.sourceList == nullptr)
+    {
+        return;
+    }
+
+    const LRESULT selectedCount = SendMessageW(
+        state.sourceList,
+        LB_GETSELCOUNT,
+        0,
+        0);
+    if (selectedCount >
+        static_cast<LRESULT>(vi::kMaxBindingSources))
+    {
+        MessageBoxW(
+            state.window,
+            L"A binding may combine at most four inputs. Clear one or more selections and try again.",
+            L"Too many chord inputs",
+            MB_OK | MB_ICONWARNING);
+        return;
+    }
+
+    vi::Binding binding;
+    const LRESULT itemCount = SendMessageW(
+        state.sourceList,
+        LB_GETCOUNT,
+        0,
+        0);
+    for (LRESULT item = 0;
+         item < itemCount;
+         ++item)
+    {
+        if (SendMessageW(
+                state.sourceList,
+                LB_GETSEL,
+                item,
+                0) <= 0)
+        {
+            continue;
+        }
+
+        const LRESULT itemData = SendMessageW(
+            state.sourceList,
+            LB_GETITEMDATA,
+            item,
+            0);
+        if (itemData < 0 ||
+            static_cast<std::size_t>(itemData) >= vi::kSourceCount)
+        {
+            continue;
+        }
+
+        binding.sources[binding.sourceCount++] =
+            static_cast<vi::Source>(itemData);
+    }
+
+    state.result = vi::BindingId(binding);
+    state.accepted = true;
+    DestroyWindow(state.window);
+}
+
+LRESULT CALLBACK ChordEditorWindowProc(
+    HWND window,
+    const UINT message,
+    const WPARAM wParam,
+    const LPARAM lParam)
+{
+    ChordEditorState* state =
+        reinterpret_cast<ChordEditorState*>(
+            GetWindowLongPtrW(window, GWLP_USERDATA));
+
+    if (message == WM_NCCREATE)
+    {
+        const auto* create =
+            reinterpret_cast<CREATESTRUCTW*>(lParam);
+        state = static_cast<ChordEditorState*>(
+            create->lpCreateParams);
+        SetWindowLongPtrW(
+            window,
+            GWLP_USERDATA,
+            reinterpret_cast<LONG_PTR>(state));
+    }
+
+    if (state == nullptr)
+    {
+        return DefWindowProcW(window, message, wParam, lParam);
+    }
+
+    if (message == WM_COMMAND)
+    {
+        switch (LOWORD(wParam))
+        {
+        case IDOK:
+            AcceptChordEditor(*state);
+            return 0;
+        case IDCANCEL:
+            DestroyWindow(window);
+            return 0;
+        default:
+            break;
+        }
+    }
+    else if (message == WM_CLOSE)
+    {
+        DestroyWindow(window);
+        return 0;
+    }
+
+    return DefWindowProcW(window, message, wParam, lParam);
+}
+
+void EditControllerChord(
+    AppState& state,
+    const bool alternate)
+{
+    const vi::ActionDefinition* const action =
+        SelectedControllerAction(state);
+    if (action == nullptr)
+    {
+        return;
+    }
+
+    if (action->valueType != vi::ValueType::Boolean)
+    {
+        MessageBoxW(
+            state.window,
+            L"Analog actions use one axis per primary or alternate slot. Select the desired stick or trackpad from the dropdown.",
+            L"Analog binding",
+            MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    const char* const key = alternate
+        ? action->alternateSettingKey
+        : action->settingKey;
+    const char* const fallback = alternate
+        ? action->defaultAlternateBinding
+        : action->defaultBinding;
+    const std::string current = StringValue(
+        state.values,
+        key,
+        fallback);
+
+    ChordEditorState editor;
+    editor.app = &state;
+    editor.action = action->action;
+
+    editor.window = CreateWindowExW(
+        WS_EX_DLGMODALFRAME,
+        kChordEditorClass,
+        (ToWide(action->label) + L" chord").c_str(),
+        WS_POPUP | WS_CAPTION | WS_SYSMENU,
+        CW_USEDEFAULT,
+        CW_USEDEFAULT,
+        620,
+        610,
+        state.window,
+        nullptr,
+        state.instance,
+        &editor);
+    if (editor.window == nullptr)
+    {
+        MessageBoxW(
+            state.window,
+            L"Windows could not open the chord editor.",
+            L"Chord editor failed",
+            MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    RECT parentRect = {};
+    GetWindowRect(state.window, &parentRect);
+    SetWindowPos(
+        editor.window,
+        HWND_TOP,
+        parentRect.left +
+            ((parentRect.right - parentRect.left) - 620) / 2,
+        parentRect.top +
+            ((parentRect.bottom - parentRect.top) - 610) / 2,
+        0,
+        0,
+        SWP_NOSIZE);
+
+    CreateChordControl(
+        editor,
+        L"STATIC",
+        L"Click to select every input that must be held at the same time. Click a selected input again to remove it. Directional stick/trackpad choices are included.",
+        SS_LEFT,
+        18,
+        16,
+        568,
+        54,
+        0);
+
+    editor.sourceList = CreateChordControl(
+        editor,
+        L"LISTBOX",
+        L"",
+        LBS_MULTIPLESEL | LBS_NOINTEGRALHEIGHT |
+            WS_TABSTOP | WS_VSCROLL,
+        18,
+        76,
+        568,
+        430,
+        1,
+        WS_EX_CLIENTEDGE);
+
+    vi::Binding currentBinding;
+    vi::ParseBinding(
+        action->action,
+        current,
+        &currentBinding);
+
+    for (const vi::SourceDefinition& source :
+         vi::SourceDefinitions())
+    {
+        if (source.source == vi::Source::Unbound ||
+            !vi::IsSourceCompatible(action->action, source.source))
+        {
+            continue;
+        }
+
+        const std::wstring label = ToWide(source.label);
+        const LRESULT item = SendMessageW(
+            editor.sourceList,
+            LB_ADDSTRING,
+            0,
+            reinterpret_cast<LPARAM>(label.c_str()));
+        SendMessageW(
+            editor.sourceList,
+            LB_SETITEMDATA,
+            item,
+            static_cast<LPARAM>(
+                static_cast<std::size_t>(source.source)));
+
+        if (std::find(
+                currentBinding.sources.begin(),
+                currentBinding.sources.begin() +
+                    currentBinding.sourceCount,
+                source.source) !=
+            currentBinding.sources.begin() +
+                currentBinding.sourceCount)
+        {
+            SendMessageW(editor.sourceList, LB_SETSEL, TRUE, item);
+        }
+    }
+
+    CreateChordControl(
+        editor,
+        L"BUTTON",
+        L"Save chord",
+        BS_DEFPUSHBUTTON | WS_TABSTOP,
+        372,
+        520,
+        102,
+        30,
+        IDOK);
+    CreateChordControl(
+        editor,
+        L"BUTTON",
+        L"Cancel",
+        BS_PUSHBUTTON | WS_TABSTOP,
+        484,
+        520,
+        102,
+        30,
+        IDCANCEL);
+
+    EnableWindow(state.window, FALSE);
+    ShowWindow(editor.window, SW_SHOW);
+    UpdateWindow(editor.window);
+
+    MSG message = {};
+    bool sawQuit = false;
+    WPARAM quitCode = 0;
+    while (IsWindow(editor.window))
+    {
+        const BOOL result = GetMessageW(&message, nullptr, 0, 0);
+        if (result <= 0)
+        {
+            sawQuit = result == 0;
+            quitCode = message.wParam;
+            break;
+        }
+
+        if (!IsDialogMessageW(editor.window, &message))
+        {
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+    }
+
+    EnableWindow(state.window, TRUE);
+    SetForegroundWindow(state.window);
+
+    if (sawQuit)
+    {
+        PostQuitMessage(static_cast<int>(quitCode));
+        return;
+    }
+
+    if (!editor.accepted)
+    {
+        return;
+    }
+
+    state.values[key] = editor.result;
+    MarkSettingsDirty(state, "Custom");
+    UpdateControllerBindingEditor(state);
+    UpdateValidation(state);
+}
+
+constexpr RECT kHudEditorCanvas = {32, 76, 832, 676};
+constexpr RECT kHudEditorSnapButton = {858, 386, 1082, 426};
+constexpr RECT kHudEditorResetButton = {858, 438, 1082, 478};
+constexpr RECT kHudEditorDefaultsButton = {858, 490, 1082, 530};
+constexpr RECT kHudEditorCancelButton = {858, 650, 964, 694};
+constexpr RECT kHudEditorApplyButton = {976, 650, 1082, 694};
+
+bool PointInRect(const RECT& rect, const POINT point)
+{
+    return point.x >= rect.left && point.x <= rect.right &&
+        point.y >= rect.top && point.y <= rect.bottom;
+}
+
+POINT HudVirtualToClient(const vh::Point point)
+{
+    const float width = static_cast<float>(
+        kHudEditorCanvas.right - kHudEditorCanvas.left);
+    const float height = static_cast<float>(
+        kHudEditorCanvas.bottom - kHudEditorCanvas.top);
+    return {
+        kHudEditorCanvas.left + static_cast<LONG>(
+            std::lround(point.x / vh::kCanvasWidth * width)),
+        kHudEditorCanvas.top + static_cast<LONG>(
+            std::lround(point.y / vh::kCanvasHeight * height)),
+    };
+}
+
+vh::Point HudClientToVirtual(const POINT point)
+{
+    const float width = static_cast<float>(
+        kHudEditorCanvas.right - kHudEditorCanvas.left);
+    const float height = static_cast<float>(
+        kHudEditorCanvas.bottom - kHudEditorCanvas.top);
+    return {
+        (point.x - kHudEditorCanvas.left) / width * vh::kCanvasWidth,
+        (point.y - kHudEditorCanvas.top) / height * vh::kCanvasHeight,
+    };
+}
+
+RECT HudElementClientRect(
+    const vh::Layout& layout,
+    const vh::Element element)
+{
+    const POINT center = HudVirtualToClient(
+        vh::ElementCenter(layout, element));
+    const vh::Size size = vh::ElementSize(layout, element);
+    const float scaleX =
+        static_cast<float>(kHudEditorCanvas.right - kHudEditorCanvas.left) /
+        vh::kCanvasWidth;
+    const float scaleY =
+        static_cast<float>(kHudEditorCanvas.bottom - kHudEditorCanvas.top) /
+        vh::kCanvasHeight;
+    const LONG halfWidth = static_cast<LONG>(
+        std::lround(size.width * scaleX * 0.5f));
+    const LONG halfHeight = static_cast<LONG>(
+        std::lround(size.height * scaleY * 0.5f));
+    return {
+        center.x - halfWidth,
+        center.y - halfHeight,
+        center.x + halfWidth,
+        center.y + halfHeight,
+    };
+}
+
+RECT HudResizeHandleRect(
+    const vh::Layout& layout,
+    const vh::Element element)
+{
+    const RECT elementRect = HudElementClientRect(layout, element);
+    return {
+        elementRect.right - 9,
+        elementRect.bottom - 9,
+        elementRect.right + 9,
+        elementRect.bottom + 9,
+    };
+}
+
+void DrawHudEditorButton(
+    HDC dc,
+    const RECT& rect,
+    const std::wstring& text,
+    const COLORREF fill,
+    const COLORREF foreground)
+{
+    HBRUSH brush = CreateSolidBrush(fill);
+    FillRect(dc, &rect, brush);
+    DeleteObject(brush);
+    HPEN pen = CreatePen(PS_SOLID, 1, RGB(85, 99, 121));
+    HGDIOBJ oldPen = SelectObject(dc, pen);
+    HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
+    Rectangle(dc, rect.left, rect.top, rect.right, rect.bottom);
+    SelectObject(dc, oldBrush);
+    SelectObject(dc, oldPen);
+    DeleteObject(pen);
+    SetTextColor(dc, foreground);
+    SetBkMode(dc, TRANSPARENT);
+    RECT label = rect;
+    DrawTextW(
+        dc,
+        text.c_str(),
+        -1,
+        &label,
+        DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+}
+
+void DrawHudEditorElement(
+    HDC dc,
+    const HudEditorState& editor,
+    const vh::Element element)
+{
+    const std::size_t index = static_cast<std::size_t>(element);
+    constexpr std::array<COLORREF, vh::kElementCount> fills = {{
+        RGB(49, 139, 89),
+        RGB(191, 126, 44),
+        RGB(49, 105, 181),
+        RGB(130, 70, 173),
+        RGB(94, 105, 123),
+    }};
+
+    RECT rect = HudElementClientRect(editor.layout, element);
+    HBRUSH brush = CreateSolidBrush(fills[index]);
+    FillRect(dc, &rect, brush);
+    DeleteObject(brush);
+
+    HPEN pen = CreatePen(
+        PS_SOLID,
+        element == editor.selected ? 4 : 2,
+        element == editor.selected
+            ? RGB(255, 213, 58)
+            : RGB(226, 234, 245));
+    HGDIOBJ oldPen = SelectObject(dc, pen);
+    HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
+    Rectangle(dc, rect.left, rect.top, rect.right, rect.bottom);
+    SelectObject(dc, oldBrush);
+    SelectObject(dc, oldPen);
+    DeleteObject(pen);
+
+    SetTextColor(dc, RGB(255, 255, 255));
+    SetBkMode(dc, TRANSPARENT);
+    RECT label = rect;
+    label.left += 9;
+    label.right -= 9;
+    const std::wstring elementLabel =
+        ToWide(vh::ElementLabel(element));
+    DrawTextW(
+        dc,
+        elementLabel.c_str(),
+        -1,
+        &label,
+        DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+    if (element == vh::Element::AmmoEquipment)
+    {
+        RECT icon = {rect.left + 12, rect.top + 12, rect.left + 42, rect.bottom - 12};
+        HBRUSH iconBrush = CreateSolidBrush(RGB(223, 236, 226));
+        FillRect(dc, &icon, iconBrush);
+        DeleteObject(iconBrush);
+    }
+    else if (element == vh::Element::Compass)
+    {
+        HPEN compassPen = CreatePen(PS_SOLID, 2, RGB(255, 238, 176));
+        HGDIOBJ previousPen = SelectObject(dc, compassPen);
+        HGDIOBJ previousBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
+        Ellipse(dc, rect.left + 10, rect.top + 10, rect.right - 10, rect.bottom - 10);
+        MoveToEx(dc, (rect.left + rect.right) / 2, rect.top + 13, nullptr);
+        LineTo(dc, (rect.left + rect.right) / 2, rect.bottom - 13);
+        SelectObject(dc, previousBrush);
+        SelectObject(dc, previousPen);
+        DeleteObject(compassPen);
+    }
+
+    if (element == editor.selected)
+    {
+        const RECT handle = HudResizeHandleRect(editor.layout, element);
+        HBRUSH handleBrush = CreateSolidBrush(RGB(255, 213, 58));
+        FillRect(dc, &handle, handleBrush);
+        DeleteObject(handleBrush);
+    }
+}
+
+void DrawHudEditorSurface(
+    HDC dc,
+    const RECT& client,
+    const HudEditorState& editor)
+{
+    HBRUSH background = CreateSolidBrush(RGB(238, 242, 248));
+    FillRect(dc, &client, background);
+    DeleteObject(background);
+
+    SelectObject(dc, editor.app->titleFont);
+    SetTextColor(dc, RGB(27, 37, 53));
+    SetBkMode(dc, TRANSPARENT);
+    RECT title = {32, 18, 1084, 52};
+    DrawTextW(
+        dc,
+        L"Visual HUD editor — drag the real runtime groups",
+        -1,
+        &title,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    HBRUSH sky = CreateSolidBrush(RGB(42, 65, 91));
+    FillRect(dc, &kHudEditorCanvas, sky);
+    DeleteObject(sky);
+    RECT ground = kHudEditorCanvas;
+    ground.top = kHudEditorCanvas.top + 330;
+    HBRUSH groundBrush = CreateSolidBrush(RGB(42, 48, 44));
+    FillRect(dc, &ground, groundBrush);
+    DeleteObject(groundBrush);
+
+    HPEN gridPen = CreatePen(PS_DOT, 1, RGB(112, 151, 183));
+    HGDIOBJ oldPen = SelectObject(dc, gridPen);
+    for (const float x : {64.0f, 320.0f, 576.0f})
+    {
+        const POINT point = HudVirtualToClient({x, 0.0f});
+        MoveToEx(dc, point.x, kHudEditorCanvas.top, nullptr);
+        LineTo(dc, point.x, kHudEditorCanvas.bottom);
+    }
+    for (const float y : {48.0f, 240.0f, 432.0f})
+    {
+        const POINT point = HudVirtualToClient({0.0f, y});
+        MoveToEx(dc, kHudEditorCanvas.left, point.y, nullptr);
+        LineTo(dc, kHudEditorCanvas.right, point.y);
+    }
+    SelectObject(dc, oldPen);
+    DeleteObject(gridPen);
+
+    for (const float x : {64.0f, 320.0f, 576.0f})
+    {
+        for (const float y : {48.0f, 240.0f, 432.0f})
+        {
+            const POINT anchor = HudVirtualToClient({x, y});
+            HBRUSH anchorBrush = CreateSolidBrush(RGB(117, 184, 230));
+            HGDIOBJ previousBrush = SelectObject(dc, anchorBrush);
+            Ellipse(dc, anchor.x - 5, anchor.y - 5, anchor.x + 6, anchor.y + 6);
+            SelectObject(dc, previousBrush);
+            DeleteObject(anchorBrush);
+        }
+    }
+
+    const POINT safeMinimum = HudVirtualToClient(
+        vh::SafeAreaMinimum(editor.layout));
+    const POINT safeMaximum = HudVirtualToClient(
+        vh::SafeAreaMaximum(editor.layout));
+    HPEN safePen = CreatePen(PS_SOLID, 2, RGB(53, 211, 255));
+    oldPen = SelectObject(dc, safePen);
+    HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
+    Rectangle(
+        dc,
+        safeMinimum.x,
+        safeMinimum.y,
+        safeMaximum.x,
+        safeMaximum.y);
+    SelectObject(dc, oldBrush);
+    SelectObject(dc, oldPen);
+    DeleteObject(safePen);
+
+    // A muted weapon silhouette keeps the desktop surface spatially legible
+    // without pretending to be a captured gameplay frame.
+    HPEN weaponPen = CreatePen(PS_SOLID, 14, RGB(27, 31, 33));
+    oldPen = SelectObject(dc, weaponPen);
+    MoveToEx(dc, 550, 655, nullptr);
+    LineTo(dc, 710, 525);
+    SelectObject(dc, oldPen);
+    DeleteObject(weaponPen);
+
+    for (std::size_t index = 0u; index < vh::kElementCount; ++index)
+    {
+        DrawHudEditorElement(
+            dc,
+            editor,
+            static_cast<vh::Element>(index));
+    }
+
+    const POINT opticalCenter = HudVirtualToClient({320.0f, 240.0f});
+    HPEN crosshairPen = CreatePen(PS_SOLID, 2, RGB(255, 86, 86));
+    oldPen = SelectObject(dc, crosshairPen);
+    MoveToEx(dc, opticalCenter.x - 12, opticalCenter.y, nullptr);
+    LineTo(dc, opticalCenter.x + 13, opticalCenter.y);
+    MoveToEx(dc, opticalCenter.x, opticalCenter.y - 12, nullptr);
+    LineTo(dc, opticalCenter.x, opticalCenter.y + 13);
+    SelectObject(dc, oldPen);
+    DeleteObject(crosshairPen);
+
+    SelectObject(dc, editor.app->font);
+    SetTextColor(dc, RGB(45, 57, 75));
+    RECT sideTitle = {858, 76, 1082, 116};
+    const std::wstring selected =
+        L"Selected: " + ToWide(vh::ElementLabel(editor.selected));
+    DrawTextW(dc, selected.c_str(), -1, &sideTitle, DT_LEFT | DT_WORDBREAK);
+
+    const vh::Point center =
+        vh::ElementCenter(editor.layout, editor.selected);
+    std::wostringstream details;
+    details.setf(std::ios::fixed, std::ios::floatfield);
+    details.precision(1);
+    details << L"Snap point: " << center.x << L", " << center.y
+            << L"\r\nScale: ";
+    details.precision(2);
+    details << vh::ElementScale(editor.layout, editor.selected)
+            << L"x\r\n\r\n"
+            << L"Drag the box to move it. Drag the yellow corner or use the mouse wheel to resize. Blue dots are snap anchors.";
+    RECT detailRect = {858, 126, 1082, 300};
+    DrawTextW(
+        dc,
+        details.str().c_str(),
+        -1,
+        &detailRect,
+        DT_LEFT | DT_WORDBREAK);
+
+    RECT centerNote = {858, 310, 1082, 372};
+    DrawTextW(
+        dc,
+        L"Crosshair remains locked to the optical center. Hold Shift while dragging for free movement.",
+        -1,
+        &centerNote,
+        DT_LEFT | DT_WORDBREAK);
+
+    DrawHudEditorButton(
+        dc,
+        kHudEditorSnapButton,
+        editor.snapEnabled
+            ? L"Snap anchors: ON"
+            : L"Snap anchors: OFF",
+        editor.snapEnabled
+            ? RGB(211, 237, 249)
+            : RGB(225, 228, 233),
+        RGB(33, 54, 72));
+    DrawHudEditorButton(
+        dc,
+        kHudEditorResetButton,
+        L"Reset selected element",
+        RGB(231, 235, 242),
+        RGB(42, 52, 68));
+    DrawHudEditorButton(
+        dc,
+        kHudEditorDefaultsButton,
+        L"Restore tested HUD defaults",
+        RGB(231, 235, 242),
+        RGB(42, 52, 68));
+
+    RECT liveNote = {858, 548, 1082, 630};
+    DrawTextW(
+        dc,
+        L"Apply updates the configurator values. Use “Edit live in headset” afterward to verify placement against the real mission HUD.",
+        -1,
+        &liveNote,
+        DT_LEFT | DT_WORDBREAK);
+
+    DrawHudEditorButton(
+        dc,
+        kHudEditorCancelButton,
+        L"Cancel",
+        RGB(235, 220, 222),
+        RGB(90, 34, 39));
+    DrawHudEditorButton(
+        dc,
+        kHudEditorApplyButton,
+        L"Apply layout",
+        RGB(200, 231, 211),
+        RGB(25, 80, 46));
+}
+
+void ResetSelectedHudElement(HudEditorState& editor)
+{
+    const vh::Layout defaults = vh::DefaultLayout();
+    const vh::Point defaultCenter =
+        vh::ElementCenter(defaults, editor.selected);
+    vh::SetElementScale(
+        &editor.layout,
+        editor.selected,
+        vh::ElementScale(defaults, editor.selected));
+    vh::MoveElement(
+        &editor.layout,
+        editor.selected,
+        defaultCenter,
+        false);
+    if (editor.selected == vh::Element::Compass)
+    {
+        editor.layout.compassEnabled = defaults.compassEnabled;
+    }
+}
+
+void AcceptHudEditor(HudEditorState& editor)
+{
+    editor.accepted = true;
+    DestroyWindow(editor.window);
+}
+
+LRESULT CALLBACK HudEditorWindowProc(
+    HWND window,
+    const UINT message,
+    const WPARAM wParam,
+    const LPARAM lParam)
+{
+    HudEditorState* editor = reinterpret_cast<HudEditorState*>(
+        GetWindowLongPtrW(window, GWLP_USERDATA));
+    if (message == WM_NCCREATE)
+    {
+        const auto* create = reinterpret_cast<CREATESTRUCTW*>(lParam);
+        editor = static_cast<HudEditorState*>(create->lpCreateParams);
+        SetWindowLongPtrW(
+            window,
+            GWLP_USERDATA,
+            reinterpret_cast<LONG_PTR>(editor));
+    }
+    if (editor == nullptr)
+    {
+        return DefWindowProcW(window, message, wParam, lParam);
+    }
+
+    switch (message)
+    {
+    case WM_PAINT:
+    {
+        PAINTSTRUCT paint = {};
+        HDC destination = BeginPaint(window, &paint);
+        RECT client = {};
+        GetClientRect(window, &client);
+        HDC memory = CreateCompatibleDC(destination);
+        HBITMAP bitmap = CreateCompatibleBitmap(
+            destination,
+            client.right,
+            client.bottom);
+        HGDIOBJ oldBitmap = SelectObject(memory, bitmap);
+        DrawHudEditorSurface(memory, client, *editor);
+        BitBlt(
+            destination,
+            0,
+            0,
+            client.right,
+            client.bottom,
+            memory,
+            0,
+            0,
+            SRCCOPY);
+        SelectObject(memory, oldBitmap);
+        DeleteObject(bitmap);
+        DeleteDC(memory);
+        EndPaint(window, &paint);
+        return 0;
+    }
+    case WM_LBUTTONDOWN:
+    {
+        const POINT point = {
+            GET_X_LPARAM(lParam),
+            GET_Y_LPARAM(lParam),
+        };
+        if (PointInRect(kHudEditorApplyButton, point))
+        {
+            AcceptHudEditor(*editor);
+            return 0;
+        }
+        if (PointInRect(kHudEditorCancelButton, point))
+        {
+            DestroyWindow(window);
+            return 0;
+        }
+        if (PointInRect(kHudEditorSnapButton, point))
+        {
+            editor->snapEnabled = !editor->snapEnabled;
+            InvalidateRect(window, nullptr, FALSE);
+            return 0;
+        }
+        if (PointInRect(kHudEditorResetButton, point))
+        {
+            ResetSelectedHudElement(*editor);
+            InvalidateRect(window, nullptr, FALSE);
+            return 0;
+        }
+        if (PointInRect(kHudEditorDefaultsButton, point))
+        {
+            editor->layout = vh::DefaultLayout();
+            InvalidateRect(window, nullptr, FALSE);
+            return 0;
+        }
+        if (!PointInRect(kHudEditorCanvas, point))
+        {
+            return 0;
+        }
+
+        if (PointInRect(
+                HudResizeHandleRect(editor->layout, editor->selected),
+                point))
+        {
+            editor->resizing = true;
+            editor->dragStart = point;
+            editor->resizeStartScale =
+                vh::ElementScale(editor->layout, editor->selected);
+            SetCapture(window);
+            return 0;
+        }
+
+        vh::Element hit = editor->selected;
+        const vh::Point virtualPoint = HudClientToVirtual(point);
+        if (vh::HitTestElement(editor->layout, virtualPoint, &hit))
+        {
+            editor->selected = hit;
+            editor->dragging = true;
+            const POINT center = HudVirtualToClient(
+                vh::ElementCenter(editor->layout, hit));
+            editor->dragOffset = {
+                point.x - center.x,
+                point.y - center.y,
+            };
+            SetCapture(window);
+            InvalidateRect(window, nullptr, FALSE);
+        }
+        return 0;
+    }
+    case WM_MOUSEMOVE:
+        if (editor->dragging || editor->resizing)
+        {
+            const POINT point = {
+                GET_X_LPARAM(lParam),
+                GET_Y_LPARAM(lParam),
+            };
+            if (editor->dragging)
+            {
+                const POINT adjusted = {
+                    point.x - editor->dragOffset.x,
+                    point.y - editor->dragOffset.y,
+                };
+                const bool shiftHeld =
+                    (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+                vh::MoveElement(
+                    &editor->layout,
+                    editor->selected,
+                    HudClientToVirtual(adjusted),
+                    editor->snapEnabled && !shiftHeld);
+            }
+            else
+            {
+                const float delta =
+                    static_cast<float>(
+                        point.x - editor->dragStart.x +
+                        point.y - editor->dragStart.y);
+                vh::SetElementScale(
+                    &editor->layout,
+                    editor->selected,
+                    editor->resizeStartScale + delta / 240.0f);
+            }
+            InvalidateRect(window, nullptr, FALSE);
+            return 0;
+        }
+        break;
+    case WM_LBUTTONUP:
+        if (editor->dragging || editor->resizing)
+        {
+            editor->dragging = false;
+            editor->resizing = false;
+            ReleaseCapture();
+            InvalidateRect(window, nullptr, FALSE);
+            return 0;
+        }
+        break;
+    case WM_MOUSEWHEEL:
+    {
+        const int delta = GET_WHEEL_DELTA_WPARAM(wParam);
+        const float scale = vh::ElementScale(
+            editor->layout,
+            editor->selected);
+        vh::SetElementScale(
+            &editor->layout,
+            editor->selected,
+            scale + (delta > 0 ? 0.05f : -0.05f));
+        InvalidateRect(window, nullptr, FALSE);
+        return 0;
+    }
+    case WM_KEYDOWN:
+        if (wParam == VK_RETURN)
+        {
+            AcceptHudEditor(*editor);
+            return 0;
+        }
+        if (wParam == VK_ESCAPE)
+        {
+            DestroyWindow(window);
+            return 0;
+        }
+        if (wParam == 'S')
+        {
+            editor->snapEnabled = !editor->snapEnabled;
+            InvalidateRect(window, nullptr, FALSE);
+            return 0;
+        }
+        if (wParam == 'R')
+        {
+            ResetSelectedHudElement(*editor);
+            InvalidateRect(window, nullptr, FALSE);
+            return 0;
+        }
+        if (wParam == VK_LEFT || wParam == VK_RIGHT ||
+            wParam == VK_UP || wParam == VK_DOWN)
+        {
+            vh::Point center = vh::ElementCenter(
+                editor->layout,
+                editor->selected);
+            const float step =
+                (GetKeyState(VK_SHIFT) & 0x8000) != 0
+                    ? 10.0f
+                    : 1.0f;
+            if (wParam == VK_LEFT) center.x -= step;
+            if (wParam == VK_RIGHT) center.x += step;
+            if (wParam == VK_UP) center.y -= step;
+            if (wParam == VK_DOWN) center.y += step;
+            vh::MoveElement(
+                &editor->layout,
+                editor->selected,
+                center,
+                false);
+            InvalidateRect(window, nullptr, FALSE);
+            return 0;
+        }
+        break;
+    case WM_CLOSE:
+        DestroyWindow(window);
+        return 0;
+    default:
+        break;
+    }
+    return DefWindowProcW(window, message, wParam, lParam);
+}
+
+void OpenVisualHudEditor(AppState& state)
+{
+    ReadAllControls(state);
+    HudEditorState editor;
+    editor.app = &state;
+    editor.layout = kc::HudLayoutFromSettings(state.values);
+    editor.window = CreateWindowExW(
+        WS_EX_DLGMODALFRAME,
+        kHudEditorClass,
+        L"KisakCOD VR - Visual HUD Editor",
+        WS_POPUP | WS_CAPTION | WS_SYSMENU,
+        CW_USEDEFAULT,
+        CW_USEDEFAULT,
+        1120,
+        760,
+        state.window,
+        nullptr,
+        state.instance,
+        &editor);
+    if (editor.window == nullptr)
+    {
+        MessageBoxW(
+            state.window,
+            L"Windows could not open the visual HUD editor.",
+            L"HUD editor failed",
+            MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    RECT parent = {};
+    GetWindowRect(state.window, &parent);
+    SetWindowPos(
+        editor.window,
+        HWND_TOP,
+        parent.left + ((parent.right - parent.left) - 1120) / 2,
+        parent.top + ((parent.bottom - parent.top) - 760) / 2,
+        0,
+        0,
+        SWP_NOSIZE);
+    EnableWindow(state.window, FALSE);
+    ShowWindow(editor.window, SW_SHOW);
+    UpdateWindow(editor.window);
+
+    MSG message = {};
+    bool sawQuit = false;
+    WPARAM quitCode = 0;
+    while (IsWindow(editor.window))
+    {
+        const BOOL result = GetMessageW(&message, nullptr, 0, 0);
+        if (result <= 0)
+        {
+            sawQuit = result == 0;
+            quitCode = message.wParam;
+            break;
+        }
+        TranslateMessage(&message);
+        DispatchMessageW(&message);
+    }
+
+    EnableWindow(state.window, TRUE);
+    SetForegroundWindow(state.window);
+    if (sawQuit)
+    {
+        PostQuitMessage(static_cast<int>(quitCode));
+        return;
+    }
+    if (!editor.accepted)
+    {
+        return;
+    }
+
+    kc::ApplyHudLayoutToSettings(editor.layout, &state.values);
+    MarkSettingsDirty(state, "Custom");
+    UpdateAllControls(state);
+    UpdateValidation(state);
+}
+
+bool WaitForMapperProcess(
+    const HANDLE process,
+    const DWORD timeoutMilliseconds)
+{
+    const ULONGLONG started = GetTickCount64();
+
+    while (true)
+    {
+        const ULONGLONG elapsed =
+            GetTickCount64() - started;
+
+        if (elapsed >= timeoutMilliseconds)
+        {
+            return false;
+        }
+
+        const DWORD remaining =
+            static_cast<DWORD>(
+                timeoutMilliseconds - elapsed);
+
+        const DWORD waitResult =
+            MsgWaitForMultipleObjects(
+                1u,
+                &process,
+                FALSE,
+                remaining,
+                QS_ALLINPUT);
+
+        if (waitResult == WAIT_OBJECT_0)
+        {
+            return true;
+        }
+
+        if (waitResult == WAIT_OBJECT_0 + 1u)
+        {
+            MSG message = {};
+            while (PeekMessageW(
+                       &message,
+                       nullptr,
+                       0,
+                       0,
+                       PM_REMOVE))
+            {
+                if (message.message == WM_QUIT)
+                {
+                    PostQuitMessage(
+                        static_cast<int>(message.wParam));
+                    return false;
+                }
+
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+            continue;
+        }
+
+        return false;
+    }
+}
+
+std::map<std::string, std::string> ReadMapperResult(
+    const std::filesystem::path& path)
+{
+    std::map<std::string, std::string> values;
+    std::ifstream input(path, std::ios::binary);
+    std::string line;
+
+    while (std::getline(input, line))
+    {
+        if (!line.empty() && line.back() == '\r')
+        {
+            line.pop_back();
+        }
+
+        const std::size_t separator = line.find('=');
+        if (separator == std::string::npos)
+        {
+            continue;
+        }
+
+        values[line.substr(0u, separator)] =
+            line.substr(separator + 1u);
+    }
+
+    return values;
+}
+
+void CaptureControllerBinding(
+    AppState& state,
+    const bool alternate)
+{
+    const vi::ActionDefinition* const action =
+        SelectedControllerAction(state);
+
+    if (action == nullptr)
+    {
+        return;
+    }
+
+    const std::filesystem::path mapperPath =
+        ExecutableDirectory() /
+        L"KisakCOD-VR-Input-Mapper.exe";
+
+    if (!std::filesystem::is_regular_file(mapperPath))
+    {
+        MessageBoxW(
+            state.window,
+            L"KisakCOD-VR-Input-Mapper.exe is missing. Re-extract the complete beta.8 package, or select an input manually from the dropdown.",
+            L"Input mapper missing",
+            MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    const bool captureAxis =
+        action->valueType == vi::ValueType::Vector2;
+
+    const std::wstring instructions =
+        L"The headset will briefly switch to a black controller capture session using the configured VR backend.\r\n\r\n"
+        L"Release the controls first, put on the headset, then " +
+        std::wstring(
+            captureAxis
+                ? L"move the desired stick or trackpad fully in any direction."
+                : L"press the desired button/trigger/grip, or move the desired stick/trackpad in the direction you want to bind.") +
+        L"\r\n\r\nPress Escape to cancel. Capture times out after 45 seconds.";
+
+    if (MessageBoxW(
+            state.window,
+            instructions.c_str(),
+            ToWide(action->label).c_str(),
+            MB_OKCANCEL | MB_ICONINFORMATION) != IDOK)
+    {
+        return;
+    }
+
+    std::array<wchar_t, 32768> temporaryDirectory = {};
+    const DWORD temporaryLength =
+        GetTempPathW(
+            static_cast<DWORD>(temporaryDirectory.size()),
+            temporaryDirectory.data());
+
+    if (temporaryLength == 0u ||
+        temporaryLength >= temporaryDirectory.size())
+    {
+        MessageBoxW(
+            state.window,
+            L"Windows did not provide a temporary directory for binding capture.",
+            L"Binding capture failed",
+            MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    const std::filesystem::path outputPath =
+        std::filesystem::path(temporaryDirectory.data()) /
+        (L"KisakCOD-VR-binding-" +
+         std::to_wstring(GetCurrentProcessId()) + L"-" +
+         std::to_wstring(GetTickCount64()) + L".txt");
+
+    const auto backendValue =
+        state.values.find("KISAK_VR_BACKEND");
+    const std::wstring backend =
+        backendValue != state.values.end()
+            ? ToWide(backendValue->second)
+            : L"auto";
+
+    std::wstring command =
+        L"\"" + mapperPath.wstring() + L"\" --capture " +
+        (captureAxis ? L"vector2" : L"boolean") +
+        L" --backend " + backend +
+        L" --output \"" + outputPath.wstring() +
+        L"\" --timeout-ms 45000";
+
+    std::vector<wchar_t> mutableCommand(
+        command.begin(),
+        command.end());
+    mutableCommand.push_back(L'\0');
+
+    STARTUPINFOW startup = {};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process = {};
+    const std::wstring workingDirectory =
+        ExecutableDirectory().wstring();
+
+    const BOOL created =
+        CreateProcessW(
+            mapperPath.c_str(),
+            mutableCommand.data(),
+            nullptr,
+            nullptr,
+            FALSE,
+            0u,
+            nullptr,
+            workingDirectory.c_str(),
+            &startup,
+            &process);
+
+    if (!created)
+    {
+        MessageBoxW(
+            state.window,
+            L"Windows could not start the VR input mapper.",
+            L"Binding capture failed",
+            MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    EnableWindow(state.window, FALSE);
+    const bool completed =
+        WaitForMapperProcess(process.hProcess, 55000u);
+    EnableWindow(state.window, TRUE);
+    SetForegroundWindow(state.window);
+
+    if (!completed)
+    {
+        TerminateProcess(process.hProcess, 3u);
+        WaitForSingleObject(process.hProcess, 5000u);
+    }
+
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+
+    const std::map<std::string, std::string> captured =
+        ReadMapperResult(outputPath);
+
+    std::error_code removeError;
+    std::filesystem::remove(outputPath, removeError);
+
+    const auto status = captured.find("status");
+    const auto sourceValue = captured.find("source");
+
+    if (!completed ||
+        status == captured.end() ||
+        status->second != "success" ||
+        sourceValue == captured.end())
+    {
+        const auto message = captured.find("message");
+        const std::wstring detail =
+            message == captured.end()
+                ? L"The VR input mapper did not return a binding. Make sure the configured runtime and controllers are active, then try again."
+                : ToWide(message->second);
+
+        MessageBoxW(
+            state.window,
+            detail.c_str(),
+            L"Binding capture failed",
+            MB_OK | MB_ICONWARNING);
+        return;
+    }
+
+    vi::Source source = vi::Source::Unbound;
+    if (!vi::ParseSource(sourceValue->second, &source) ||
+        !vi::IsSourceCompatible(action->action, source))
+    {
+        MessageBoxW(
+            state.window,
+            L"The mapper returned an input that is incompatible with this action.",
+            L"Binding capture failed",
+            MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    const char* const settingKey = alternate
+        ? action->alternateSettingKey
+        : action->settingKey;
+
+    state.values[settingKey] =
+        std::string(vi::SourceId(source));
+    MarkSettingsDirty(state, "Custom");
+    UpdateControllerBindingEditor(state);
+    UpdateValidation(state);
+
+    std::wstring success =
+        L"Bound " + ToWide(action->label) + L" to " +
+        ControllerSourceLabel(sourceValue->second) + L".";
+
+    const auto localized = captured.find("localized");
+    if (localized != captured.end() && !localized->second.empty())
+    {
+        success += L"\r\n\r\nRuntime name: " +
+            ToWide(localized->second);
+    }
+
+    const auto profile = captured.find("profile");
+    if (profile != captured.end() && !profile->second.empty())
+    {
+        success += L"\r\nProfile: " +
+            ToWide(profile->second);
+    }
+
+    MessageBoxW(
+        state.window,
+        success.c_str(),
+        L"Binding captured",
+        MB_OK | MB_ICONINFORMATION);
 }
 
 bool HasValidationErrors(const AppState& state)
@@ -620,12 +2509,24 @@ bool SaveActiveSettings(AppState& state, const bool quiet)
     }
 
     state.dirty = false;
+    state.readBackVerified = result.readBackVerified;
+    state.verifiedSettingCount = result.verifiedSettingCount;
+    state.revision = result.revision;
+    state.lastSavedAt = result.savedAt;
+    state.activePath = result.settingsPath;
+    state.profileName = result.profileName;
     UpdateValidation(state);
 
     if (!quiet)
     {
         std::wstring message =
-            L"Settings saved successfully.\r\n\r\n" +
+            L"Settings saved and read-back verified.\r\n\r\n" +
+            std::to_wstring(result.verifiedSettingCount) + L"/" +
+            std::to_wstring(kc::SettingsCatalog().size()) +
+            L" settings match the file on disk.\r\n\r\nProfile: " +
+            ToWide(result.profileName) + L"\r\nRevision: " +
+            ToWide(result.revision) + L"\r\nSaved: " +
+            ToWide(result.savedAt) + L"\r\n\r\nActive file:\r\n" +
             result.settingsPath.wstring();
         if (!result.backupPath.empty())
         {
@@ -677,6 +2578,728 @@ bool LaunchBatch(AppState& state, const wchar_t* fileName)
     }
 
     return true;
+}
+
+std::filesystem::path CalibrationRequestPath(
+    const AppState& state)
+{
+    return state.userPath.parent_path() /
+        L"Calibration-Request.txt";
+}
+
+std::filesystem::path CalibrationStatusPath(
+    const AppState& state)
+{
+    return state.userPath.parent_path() /
+        L"Calibration-Status.txt";
+}
+
+std::filesystem::path HudEditorRequestPath(
+    const AppState& state)
+{
+    return state.userPath.parent_path() /
+        L"HUD-Editor-Request.txt";
+}
+
+std::filesystem::path HudEditorStatusPath(
+    const AppState& state)
+{
+    return state.userPath.parent_path() /
+        L"HUD-Editor-Status.txt";
+}
+
+std::string NewHudEditorRequestId();
+bool WriteHudEditorRequestAtomic(
+    const std::filesystem::path& path,
+    const vh::Request& request);
+std::string ReadTextFileLimited(
+    const std::filesystem::path& path,
+    std::size_t maximumBytes);
+
+bool IsProcessRunning(const wchar_t* const imageName)
+{
+    const HANDLE snapshot = CreateToolhelp32Snapshot(
+        TH32CS_SNAPPROCESS,
+        0u);
+
+    if (snapshot == INVALID_HANDLE_VALUE)
+    {
+        return false;
+    }
+
+    PROCESSENTRY32W entry = {};
+    entry.dwSize = sizeof(entry);
+    bool found = false;
+
+    if (Process32FirstW(snapshot, &entry))
+    {
+        do
+        {
+            if (_wcsicmp(entry.szExeFile, imageName) == 0)
+            {
+                found = true;
+                break;
+            }
+        }
+        while (Process32NextW(snapshot, &entry));
+    }
+
+    CloseHandle(snapshot);
+    return found;
+}
+
+void SetHudStatus(
+    AppState& state,
+    const std::wstring& text)
+{
+    if (state.hudStatus != nullptr)
+    {
+        SetWindowTextW(
+            state.hudStatus,
+            (L"Status: " + text).c_str());
+        UpdateWindow(state.hudStatus);
+    }
+}
+
+void FinishHudEditorPolling(AppState& state)
+{
+    KillTimer(state.window, kIdHudPollTimer);
+    state.pendingHudEditorRequestId.clear();
+    state.pendingHudEditorLaunched = false;
+    state.pendingHudEditorStartedAt = 0u;
+}
+
+void PollHudEditorStatus(AppState& state)
+{
+    if (state.pendingHudEditorRequestId.empty())
+    {
+        FinishHudEditorPolling(state);
+        return;
+    }
+
+    const std::string text = ReadTextFileLimited(
+        HudEditorStatusPath(state),
+        8192u);
+    vh::Response response;
+    std::string parseError;
+    if (!text.empty() &&
+        vh::ParseResponse(text, &response, &parseError) &&
+        response.requestId == state.pendingHudEditorRequestId)
+    {
+        if (response.status == vh::ResponseStatus::Active)
+        {
+            SetHudStatus(
+                state,
+                L"Live in headset. Point and hold the right trigger to drag; right-stick up/down resizes; A saves; B cancels.");
+            return;
+        }
+
+        if (response.status == vh::ResponseStatus::Saved)
+        {
+            kc::ApplyHudLayoutToSettings(response.layout, &state.values);
+            MarkSettingsDirty(state, "Custom");
+            UpdateAllControls(state);
+            UpdateValidation(state);
+            const bool saved = SaveActiveSettings(state, true);
+            FinishHudEditorPolling(state);
+            SetHudStatus(
+                state,
+                saved
+                    ? L"Headset layout imported and 125/125 settings read-back verified."
+                    : L"Headset layout imported, but the settings file could not be saved.");
+            MessageBoxW(
+                state.window,
+                saved
+                    ? L"The in-headset HUD layout was imported and saved. The current game already uses it live; future launches will now use it too."
+                    : L"The in-headset layout was imported into the configurator, but saving failed. Press Save before closing.",
+                saved
+                    ? L"HUD layout saved"
+                    : L"HUD layout needs saving",
+                MB_OK | (saved ? MB_ICONINFORMATION : MB_ICONWARNING));
+            return;
+        }
+
+        FinishHudEditorPolling(state);
+        if (response.status == vh::ResponseStatus::Canceled)
+        {
+            SetHudStatus(
+                state,
+                L"Headset edit canceled; the original layout remains unchanged.");
+        }
+        else
+        {
+            SetHudStatus(
+                state,
+                L"The runtime rejected the headset editor request.");
+        }
+        return;
+    }
+
+    const bool gameRunning =
+        IsProcessRunning(L"KisakCOD-sp.exe");
+    if (gameRunning)
+    {
+        SetHudStatus(
+            state,
+            L"Waiting for the VR runtime; enter a mission if the editor is not visible yet.");
+        return;
+    }
+
+    if (GetTickCount64() - state.pendingHudEditorStartedAt > 20000u)
+    {
+        FinishHudEditorPolling(state);
+        SetHudStatus(
+            state,
+            L"COD4 did not reach the VR runtime; no HUD values were changed.");
+    }
+}
+
+void StartHeadsetHudEditor(AppState& state)
+{
+    UpdateValidation(state);
+    if (HasValidationErrors(state))
+    {
+        ShowValidationError(state);
+        return;
+    }
+    if (!SaveActiveSettings(state, true))
+    {
+        return;
+    }
+
+    vh::Request request;
+    request.requestId = NewHudEditorRequestId();
+    request.layout = kc::HudLayoutFromSettings(state.values);
+    std::error_code removeError;
+    std::filesystem::remove(HudEditorStatusPath(state), removeError);
+    if (!WriteHudEditorRequestAtomic(
+            HudEditorRequestPath(state),
+            request))
+    {
+        SetHudStatus(state, L"Could not write HUD-Editor-Request.txt.");
+        MessageBoxW(
+            state.window,
+            L"Beta.8 could not write HUD-Editor-Request.txt under your KisakCOD-VR settings folder.",
+            L"Headset HUD editor failed",
+            MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    state.pendingHudEditorRequestId = request.requestId;
+    state.pendingHudEditorStartedAt = GetTickCount64();
+    const bool gameRunning = IsProcessRunning(L"KisakCOD-sp.exe");
+    state.pendingHudEditorLaunched = !gameRunning;
+    if (!gameRunning && !LaunchBatch(state, L"Launch-KisakCOD-VR.bat"))
+    {
+        FinishHudEditorPolling(state);
+        SetHudStatus(state, L"The game launcher could not start.");
+        return;
+    }
+
+    SetTimer(state.window, kIdHudPollTimer, 200u, nullptr);
+    SetHudStatus(
+        state,
+        gameRunning
+            ? L"Request sent. Put on the headset; the editor will appear over the current mission."
+            : L"Launching COD4. Enter a mission; the editor will open automatically.");
+    MessageBoxW(
+        state.window,
+        L"In the headset:\r\n\r\n"
+        L"• Point at a HUD group and hold the right trigger to drag it.\r\n"
+        L"• Right-stick up/down resizes the selected group.\r\n"
+        L"• Hold the left grip to temporarily disable snapping.\r\n"
+        L"• Point at SAVE or press A to keep the layout.\r\n"
+        L"• Point at CANCEL or press B to restore the original layout.\r\n\r\n"
+        L"Gameplay input is suppressed while the editor is active.",
+        L"Live headset HUD editor",
+        MB_OK | MB_ICONINFORMATION);
+}
+
+std::string NewCalibrationRequestId()
+{
+    std::ostringstream id;
+    id << "cfg-" << GetCurrentProcessId() << '-'
+       << static_cast<unsigned long long>(GetTickCount64());
+    return id.str();
+}
+
+std::string NewHudEditorRequestId()
+{
+    std::ostringstream id;
+    id << "hud-" << GetCurrentProcessId() << '-'
+       << static_cast<unsigned long long>(GetTickCount64());
+    return id.str();
+}
+
+bool WriteHudEditorRequestAtomic(
+    const std::filesystem::path& path,
+    const vh::Request& request)
+{
+    std::error_code error;
+    std::filesystem::create_directories(path.parent_path(), error);
+    if (error)
+    {
+        return false;
+    }
+
+    std::filesystem::path temporary = path;
+    temporary += L".tmp";
+    {
+        std::ofstream output(
+            temporary,
+            std::ios::binary | std::ios::trunc);
+        if (!output)
+        {
+            return false;
+        }
+        output << vh::SerializeRequest(request);
+        output.flush();
+        if (!output)
+        {
+            return false;
+        }
+    }
+    if (!MoveFileExW(
+            temporary.c_str(),
+            path.c_str(),
+            MOVEFILE_REPLACE_EXISTING |
+                MOVEFILE_WRITE_THROUGH))
+    {
+        std::filesystem::remove(temporary, error);
+        return false;
+    }
+    return true;
+}
+
+std::string ReadTextFileLimited(
+    const std::filesystem::path& path,
+    const std::size_t maximumBytes)
+{
+    std::ifstream input(path, std::ios::binary);
+    if (!input)
+    {
+        return {};
+    }
+    std::ostringstream contents;
+    contents << input.rdbuf();
+    std::string text = contents.str();
+    return text.size() <= maximumBytes ? text : std::string{};
+}
+
+std::map<std::string, std::string> ReadKeyValueFile(
+    const std::filesystem::path& path)
+{
+    std::map<std::string, std::string> values;
+    std::ifstream input(path, std::ios::binary);
+    if (!input)
+    {
+        return values;
+    }
+
+    std::string line;
+    std::size_t totalBytes = 0u;
+    while (std::getline(input, line))
+    {
+        totalBytes += line.size();
+        if (totalBytes > 16384u)
+        {
+            return {};
+        }
+
+        if (!line.empty() && line.back() == '\r')
+        {
+            line.pop_back();
+        }
+
+        const std::size_t separator = line.find('=');
+        if (separator != std::string::npos)
+        {
+            values[line.substr(0u, separator)] =
+                line.substr(separator + 1u);
+        }
+    }
+
+    return values;
+}
+
+bool WriteCalibrationRequestAtomic(
+    const std::filesystem::path& path,
+    const vc::Request& request)
+{
+    std::error_code error;
+    std::filesystem::create_directories(
+        path.parent_path(),
+        error);
+
+    if (error)
+    {
+        return false;
+    }
+
+    std::filesystem::path temporary = path;
+    temporary += L".tmp";
+
+    {
+        std::ofstream output(
+            temporary,
+            std::ios::binary | std::ios::trunc);
+        if (!output)
+        {
+            return false;
+        }
+
+        output << vc::SerializeRequest(request);
+        output.flush();
+        if (!output)
+        {
+            return false;
+        }
+    }
+
+    if (!MoveFileExW(
+            temporary.c_str(),
+            path.c_str(),
+            MOVEFILE_REPLACE_EXISTING |
+                MOVEFILE_WRITE_THROUGH))
+    {
+        std::filesystem::remove(temporary, error);
+        return false;
+    }
+
+    return true;
+}
+
+std::map<std::string, std::string> WaitForCalibrationStatus(
+    const std::filesystem::path& path,
+    const std::string& requestId)
+{
+    const ULONGLONG deadline =
+        GetTickCount64() + 5000u;
+
+    while (GetTickCount64() < deadline)
+    {
+        const auto status = ReadKeyValueFile(path);
+        const auto found = status.find("REQUEST_ID");
+        if (found != status.end() &&
+            found->second == requestId)
+        {
+            return status;
+        }
+
+        Sleep(75u);
+    }
+
+    return {};
+}
+
+std::string ActiveCalibrationHeightKey(
+    const AppState& state)
+{
+    return StringValue(
+               state.values,
+               "KISAK_VR_PLAY_MODE",
+               "standing") == "seated"
+        ? "KISAK_VR_SEATED_EYE_HEIGHT"
+        : "KISAK_VR_STANDING_EYE_HEIGHT";
+}
+
+std::string OneDecimal(const double value)
+{
+    std::ostringstream formatted;
+    formatted.setf(std::ios::fixed, std::ios::floatfield);
+    formatted.precision(1);
+    formatted << value;
+    return formatted.str();
+}
+
+void SetCalibrationStatus(
+    AppState& state,
+    const std::wstring& text)
+{
+    if (state.calibrationStatus != nullptr)
+    {
+        SetWindowTextW(
+            state.calibrationStatus,
+            (L"Status: " + text).c_str());
+        UpdateWindow(state.calibrationStatus);
+    }
+}
+
+void SetCalibrationValue(
+    AppState& state,
+    const std::string& key,
+    const std::string& value)
+{
+    ReadAllControls(state);
+    state.values[key] = value;
+    MarkSettingsDirty(state, "Custom");
+    UpdateAllControls(state);
+    UpdateValidation(state);
+}
+
+bool SendCalibrationCommand(
+    AppState& state,
+    const vc::Command command,
+    const bool guidedCountdown)
+{
+    UpdateValidation(state);
+    if (HasValidationErrors(state))
+    {
+        ShowValidationError(state);
+        return false;
+    }
+
+    if (!SaveActiveSettings(state, true))
+    {
+        return false;
+    }
+
+    if (!IsProcessRunning(L"KisakCOD-sp.exe"))
+    {
+        SetCalibrationStatus(
+            state,
+            L"Settings saved. Launch COD4, enter a mission, and press the calibration button again for live capture.");
+        MessageBoxW(
+            state.window,
+            L"Your height/posture settings were saved, but KisakCOD-sp.exe is not running.\r\n\r\nLaunch the game, enter a mission, then press this calibration button again.",
+            L"Live calibration needs COD4",
+            MB_OK | MB_ICONINFORMATION);
+        return false;
+    }
+
+    if (guidedCountdown)
+    {
+        const int accepted = MessageBoxW(
+            state.window,
+            command == vc::Command::MeasureStanding
+                ? L"Stand naturally with the headset on, face the desired forward direction, and look level.\r\n\r\nAfter you press OK, beta.8 waits three seconds, measures your eye height from the runtime floor, and recenters the view."
+                : L"Put on the headset, assume your normal playing posture, face the desired forward direction, and look level.\r\n\r\nAfter you press OK, beta.8 waits three seconds and captures that pose as forward and level.",
+            L"Guided VR calibration",
+            MB_OKCANCEL | MB_ICONINFORMATION);
+
+        if (accepted != IDOK)
+        {
+            return false;
+        }
+
+        for (int remaining = 3; remaining >= 1; --remaining)
+        {
+            SetCalibrationStatus(
+                state,
+                L"Capturing in " +
+                    std::to_wstring(remaining) + L"...");
+            Sleep(1000u);
+        }
+    }
+
+    ReadAllControls(state);
+
+    vc::Request request;
+    request.requestId = NewCalibrationRequestId();
+    request.command = command;
+    request.playMode =
+        StringValue(
+            state.values,
+            "KISAK_VR_PLAY_MODE",
+            "standing") == "seated"
+            ? vc::PlayMode::Seated
+            : vc::PlayMode::Standing;
+
+    const std::string heightKey =
+        ActiveCalibrationHeightKey(state);
+    request.targetEyeHeightInches =
+        static_cast<float>(NumberValue(
+            state.values,
+            heightKey.c_str(),
+            vc::kNativeStandingEyeHeightInches));
+
+    const std::filesystem::path requestPath =
+        CalibrationRequestPath(state);
+    const std::filesystem::path statusPath =
+        CalibrationStatusPath(state);
+
+    std::error_code error;
+    std::filesystem::remove(statusPath, error);
+
+    if (!WriteCalibrationRequestAtomic(
+            requestPath,
+            request))
+    {
+        SetCalibrationStatus(
+            state,
+            L"Could not write the live calibration request.");
+        MessageBoxW(
+            state.window,
+            L"Beta.8 could not write Calibration-Request.txt under your KisakCOD-VR settings folder.",
+            L"Calibration request failed",
+            MB_OK | MB_ICONERROR);
+        return false;
+    }
+
+    SetCalibrationStatus(
+        state,
+        L"Waiting for the running game to acknowledge the request...");
+
+    const auto response = WaitForCalibrationStatus(
+        statusPath,
+        request.requestId);
+
+    if (response.empty())
+    {
+        SetCalibrationStatus(
+            state,
+            L"No runtime response. Make sure a mission is actively rendering, then retry.");
+        MessageBoxW(
+            state.window,
+            L"COD4 was detected, but it did not acknowledge the calibration request within five seconds.\r\n\r\nMake sure you are inside an actively rendering mission and retry.",
+            L"Calibration timed out",
+            MB_OK | MB_ICONWARNING);
+        return false;
+    }
+
+    const std::string status = response.count("STATUS") != 0u
+        ? response.at("STATUS")
+        : "UNKNOWN";
+
+    if (status == "NO_TRACKED_POSE")
+    {
+        SetCalibrationStatus(
+            state,
+            L"The runtime has no valid tracked headset pose yet.");
+        MessageBoxW(
+            state.window,
+            L"The game received the request, but the headset did not have a valid tracked pose. Wake the headset and retry.",
+            L"No tracked headset pose",
+            MB_OK | MB_ICONWARNING);
+        return false;
+    }
+
+    const bool floorAvailable =
+        response.count("FLOOR_AVAILABLE") != 0u &&
+        response.at("FLOOR_AVAILABLE") == "1";
+
+    if (command == vc::Command::MeasureStanding &&
+        floorAvailable &&
+        response.count("MEASURED_EYE_HEIGHT_INCHES") != 0u)
+    {
+        char* end = nullptr;
+        const double measured = std::strtod(
+            response.at("MEASURED_EYE_HEIGHT_INCHES").c_str(),
+            &end);
+
+        if (end != nullptr && end[0] == '\0' &&
+            std::isfinite(measured) &&
+            measured >= vc::kMinimumEyeHeightInches &&
+            measured <= vc::kMaximumEyeHeightInches)
+        {
+            SetCalibrationValue(
+                state,
+                "KISAK_VR_STANDING_EYE_HEIGHT",
+                OneDecimal(measured));
+            if (!SaveActiveSettings(state, true))
+            {
+                SetCalibrationStatus(
+                    state,
+                    L"The measured height applied live, but could not be saved for the next launch.");
+                return false;
+            }
+        }
+    }
+
+    const std::wstring backend = response.count("BACKEND") != 0u
+        ? ToWide(response.at("BACKEND"))
+        : L"runtime";
+    const std::wstring applied =
+        response.count("APPLIED_EYE_HEIGHT_INCHES") != 0u
+            ? ToWide(response.at("APPLIED_EYE_HEIGHT_INCHES"))
+            : ToWide(OneDecimal(request.targetEyeHeightInches));
+
+    std::wstring success =
+        L"Applied by " + backend + L": " + applied +
+        L" in virtual eye height";
+
+    if (command != vc::Command::ApplyHeight)
+    {
+        success += L"; position and forward/level pose recentered";
+    }
+
+    if (command == vc::Command::MeasureStanding &&
+        !floorAvailable)
+    {
+        success +=
+            L". This runtime did not expose a usable floor reference, so the saved manual height was used";
+    }
+
+    success += L".";
+    SetCalibrationStatus(state, success);
+
+    MessageBoxW(
+        state.window,
+        success.c_str(),
+        L"VR calibration applied",
+        MB_OK | MB_ICONINFORMATION);
+    return true;
+}
+
+void RecenterCalibration(AppState& state)
+{
+    SendCalibrationCommand(
+        state,
+        vc::Command::Recenter,
+        true);
+}
+
+void MeasureStandingCalibration(AppState& state)
+{
+    SetCalibrationValue(
+        state,
+        "KISAK_VR_PLAY_MODE",
+        "standing");
+    SendCalibrationCommand(
+        state,
+        vc::Command::MeasureStanding,
+        true);
+}
+
+void ApplySeatedCalibration(AppState& state)
+{
+    SetCalibrationValue(
+        state,
+        "KISAK_VR_PLAY_MODE",
+        "seated");
+    SendCalibrationCommand(
+        state,
+        vc::Command::Recenter,
+        true);
+}
+
+void AdjustCalibrationHeight(
+    AppState& state,
+    const double delta,
+    const bool reset)
+{
+    ReadAllControls(state);
+    const std::string key =
+        ActiveCalibrationHeightKey(state);
+    const double current = NumberValue(
+        state.values,
+        key.c_str(),
+        vc::kNativeStandingEyeHeightInches);
+    const double requested = reset
+        ? vc::kNativeStandingEyeHeightInches
+        : std::clamp(
+              current + delta,
+              static_cast<double>(vc::kMinimumEyeHeightInches),
+              static_cast<double>(vc::kMaximumEyeHeightInches));
+
+    SetCalibrationValue(
+        state,
+        key,
+        OneDecimal(requested));
+    SendCalibrationCommand(
+        state,
+        vc::Command::ApplyHeight,
+        false);
 }
 
 std::filesystem::path ChooseBatchFile(
@@ -736,8 +3359,7 @@ void ImportSettings(AppState& state)
     }
 
     state.values = loaded.values;
-    state.profileName = "Imported";
-    state.dirty = true;
+    MarkSettingsDirty(state, "Imported");
     UpdateAllControls(state);
     UpdateValidation(state);
 }
@@ -793,8 +3415,7 @@ void ApplySelectedPreset(AppState& state)
     const std::string& name = presets[static_cast<std::size_t>(selected)];
     if (kc::ApplyPreset(name, &state.values))
     {
-        state.profileName = name;
-        state.dirty = true;
+        MarkSettingsDirty(state, name);
         UpdateAllControls(state);
         UpdateValidation(state);
     }
@@ -812,8 +3433,7 @@ void RestoreDefaults(AppState& state)
     }
 
     state.values = kc::BuiltInDefaults();
-    state.profileName = "Tested Quest 3";
-    state.dirty = true;
+    MarkSettingsDirty(state, "Tested Quest 3");
     UpdateAllControls(state);
     UpdateValidation(state);
 }
@@ -853,21 +3473,24 @@ void DrawControllerPreview(HDC dc, const RECT& client, const AppState& state)
     SelectObject(dc, oldPen);
     DeleteObject(outline);
 
-    const auto leftLabel = [&](const char* key, const wchar_t* role)
+    const auto bindingLabel = [&](const char* key, const wchar_t* role)
     {
-        return std::wstring(role) + L": " + ToWide(StringValue(state.values, key, ""));
-    };
-    const auto rightLabel = [&](const char* key, const wchar_t* role)
-    {
-        return std::wstring(role) + L": " + ToWide(StringValue(state.values, key, ""));
+        const vi::ActionDefinition* const action =
+            vi::FindActionDefinition(key);
+        const std::string value =
+            StringValue(state.values, key, "unbound");
+        return std::wstring(role) + L": " +
+            (action != nullptr
+                ? ControllerBindingLabel(value, action->action)
+                : ControllerSourceLabel(value));
     };
 
     RECT left = {24, 270, 170, 360};
     DrawTextSimple(
         dc,
-        leftLabel("KISAK_VR_BIND_USE", L"Use") + L"\r\n" +
-            leftLabel("KISAK_VR_BIND_SPRINT", L"Sprint") + L"\r\n" +
-            leftLabel("KISAK_VR_BIND_NEXT_WEAPON", L"Weapon"),
+        bindingLabel("KISAK_VR_BIND_ATTACK", L"Fire") + L"\r\n" +
+            bindingLabel("KISAK_VR_BIND_JUMP", L"Jump") + L"\r\n" +
+            bindingLabel("KISAK_VR_BIND_USE", L"Use"),
         left,
         DT_LEFT | DT_WORDBREAK,
         RGB(57, 68, 84));
@@ -875,9 +3498,9 @@ void DrawControllerPreview(HDC dc, const RECT& client, const AppState& state)
     RECT right = {187, 270, 338, 360};
     DrawTextSimple(
         dc,
-        rightLabel("KISAK_VR_BIND_RELOAD", L"Reload") + L"\r\n" +
-            rightLabel("KISAK_VR_BIND_MELEE", L"Melee") + L"\r\n" +
-            rightLabel("KISAK_VR_BIND_STANCE", L"Stance"),
+        bindingLabel("KISAK_VR_BIND_RELOAD", L"Reload") + L"\r\n" +
+            bindingLabel("KISAK_VR_BIND_MELEE", L"Melee") + L"\r\n" +
+            bindingLabel("KISAK_VR_BIND_STANCE", L"Stance"),
         right,
         DT_LEFT | DT_WORDBREAK,
         RGB(57, 68, 84));
@@ -885,7 +3508,7 @@ void DrawControllerPreview(HDC dc, const RECT& client, const AppState& state)
     RECT fixed = {24, 370, 334, 425};
     DrawTextSimple(
         dc,
-        L"Fixed: triggers, grips, movement/turn sticks, menu and right-thumbrest modifier.",
+        L"Every action supports primary/alternate slots. Button slots may combine up to four inputs as an AND-chord.",
         fixed,
         DT_LEFT | DT_WORDBREAK,
         RGB(104, 63, 20));
@@ -1104,6 +3727,103 @@ void DrawGeneralPreview(HDC dc, const RECT& client, const AppState& state)
         state.validation.empty() ? RGB(47, 121, 75) : RGB(178, 78, 42));
 }
 
+void DrawCalibrationPreview(
+    HDC dc,
+    const RECT& client,
+    const AppState& state)
+{
+    const bool seated =
+        StringValue(
+            state.values,
+            "KISAK_VR_PLAY_MODE",
+            "standing") == "seated";
+    const char* const heightKey = seated
+        ? "KISAK_VR_SEATED_EYE_HEIGHT"
+        : "KISAK_VR_STANDING_EYE_HEIGHT";
+    const double targetHeight = NumberValue(
+        state.values,
+        heightKey,
+        vc::kNativeStandingEyeHeightInches);
+    const double correction = targetHeight -
+        vc::kNativeStandingEyeHeightInches;
+
+    RECT title = {18, 14, client.right - 18, 42};
+    DrawTextSimple(
+        dc,
+        L"View calibration",
+        title,
+        DT_LEFT | DT_SINGLELINE,
+        RGB(30, 39, 55));
+
+    RECT summary = {18, 48, client.right - 18, 104};
+    std::wostringstream summaryText;
+    summaryText << (seated ? L"Seated" : L"Standing")
+                << L" mode\r\nTarget eye height: "
+                << std::fixed << std::setprecision(1)
+                << targetHeight << L" in  |  Correction: "
+                << std::showpos << correction << std::noshowpos
+                << L" in";
+    DrawTextSimple(
+        dc,
+        summaryText.str(),
+        summary,
+        DT_LEFT | DT_WORDBREAK,
+        RGB(57, 68, 84));
+
+    const int floorY = 368;
+    const int centerX = client.right / 2;
+    const int eyeY = floorY - static_cast<int>(
+        std::clamp(targetHeight, 42.0, 84.0) * 3.5);
+
+    HPEN floorPen = CreatePen(PS_SOLID, 2, RGB(76, 91, 112));
+    HGDIOBJ oldPen = SelectObject(dc, floorPen);
+    MoveToEx(dc, 34, floorY, nullptr);
+    LineTo(dc, client.right - 34, floorY);
+
+    HPEN bodyPen = CreatePen(PS_SOLID, 5, RGB(61, 132, 104));
+    SelectObject(dc, bodyPen);
+    MoveToEx(dc, centerX, floorY, nullptr);
+    LineTo(dc, centerX, eyeY + 18);
+    MoveToEx(dc, centerX, eyeY + 92, nullptr);
+    LineTo(dc, centerX - 38, eyeY + 142);
+    MoveToEx(dc, centerX, eyeY + 92, nullptr);
+    LineTo(dc, centerX + 38, eyeY + 142);
+
+    HBRUSH headBrush = CreateSolidBrush(RGB(83, 181, 255));
+    HGDIOBJ oldBrush = SelectObject(dc, headBrush);
+    Ellipse(dc, centerX - 19, eyeY - 12, centerX + 19, eyeY + 26);
+    SelectObject(dc, oldBrush);
+    SelectObject(dc, floorPen);
+    DeleteObject(headBrush);
+    DeleteObject(bodyPen);
+
+    HPEN nativePen = CreatePen(PS_DOT, 1, RGB(196, 119, 47));
+    SelectObject(dc, nativePen);
+    const int nativeY = floorY - static_cast<int>(
+        vc::kNativeStandingEyeHeightInches * 3.5f);
+    MoveToEx(dc, 44, nativeY, nullptr);
+    LineTo(dc, client.right - 44, nativeY);
+    SelectObject(dc, oldPen);
+    DeleteObject(nativePen);
+    DeleteObject(floorPen);
+
+    RECT label = {30, floorY + 8, client.right - 30, floorY + 34};
+    DrawTextSimple(
+        dc,
+        L"Runtime floor / seated origin",
+        label,
+        DT_CENTER | DT_SINGLELINE,
+        RGB(76, 91, 112));
+
+    RECT footer = {22, 404, client.right - 22, 438};
+    DrawTextSimple(
+        dc,
+        L"Recenter captures position plus forward/level. Height changes preserve COD4's native crouch and prone steps.",
+        footer,
+        DT_CENTER | DT_WORDBREAK,
+        RGB(104, 63, 20));
+}
+
 LRESULT CALLBACK PreviewWindowProc(
     HWND window,
     UINT message,
@@ -1137,6 +3857,11 @@ LRESULT CALLBACK PreviewWindowProc(
         {
             DrawControllerPreview(dc, client, *state);
         }
+        else if (state->selectedPage ==
+                 PageIndex(kc::SettingPage::Calibration))
+        {
+            DrawCalibrationPreview(dc, client, *state);
+        }
         else
         {
             DrawGeneralPreview(dc, client, *state);
@@ -1157,6 +3882,13 @@ void BuildSettingControls(AppState& state)
     for (std::size_t index = 0; index < catalog.size(); ++index)
     {
         const kc::SettingDefinition& definition = catalog[index];
+
+        if (definition.type == kc::SettingType::Binding ||
+            definition.key == "KISAK_VR_INPUT_BINDINGS_VERSION")
+        {
+            continue;
+        }
+
         ControlBinding binding;
         binding.definition = &definition;
         binding.description = ToWide(definition.description);
@@ -1170,9 +3902,12 @@ void BuildSettingControls(AppState& state)
             100,
             18);
 
-        const int identifier = kIdSettingBase + static_cast<int>(index);
+        const int identifier =
+            kIdSettingBase +
+            static_cast<int>(state.bindings.size());
         if (definition.type == kc::SettingType::Choice ||
-            definition.type == kc::SettingType::Toggle)
+            definition.type == kc::SettingType::Toggle ||
+            definition.type == kc::SettingType::Binding)
         {
             binding.control = CreateControl(
                 state,
@@ -1220,6 +3955,322 @@ void BuildSettingControls(AppState& state)
         AddTooltip(state, binding.label, &binding.description);
         AddTooltip(state, binding.control, &binding.description);
     }
+}
+
+void BuildControllerBindingEditor(AppState& state)
+{
+    const auto add = [&](HWND control)
+    {
+        state.bindingEditorControls.push_back(control);
+        return control;
+    };
+
+    add(CreateControl(
+        state,
+        L"STATIC",
+        L"Select an action. Stick directions mean movement, not stick click (for example, Right stick up). A slot may be one input or a chord of up to four inputs held together.",
+        SS_LEFT,
+        kTabLeft + 20,
+        kTabTop + 50,
+        kTabWidth - 40,
+        36));
+
+    state.bindingActionList = add(CreateControl(
+        state,
+        L"LISTBOX",
+        L"",
+        LBS_NOTIFY | LBS_NOINTEGRALHEIGHT | WS_TABSTOP | WS_VSCROLL,
+        kTabLeft + 20,
+        kTabTop + 88,
+        kTabWidth - 40,
+        326,
+        kIdBindingActionList,
+        WS_EX_CLIENTEDGE));
+
+    add(CreateControl(
+        state,
+        L"STATIC",
+        L"Primary binding",
+        SS_LEFT,
+        kTabLeft + 20,
+        kTabTop + 424,
+        315,
+        20));
+
+    add(CreateControl(
+        state,
+        L"STATIC",
+        L"Alternate binding (optional)",
+        SS_LEFT,
+        kTabLeft + 382,
+        kTabTop + 424,
+        315,
+        20));
+
+    state.bindingPrimary = add(CreateControl(
+        state,
+        WC_COMBOBOXW,
+        L"",
+        CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL,
+        kTabLeft + 20,
+        kTabTop + 446,
+        180,
+        300,
+        kIdBindingPrimary,
+        WS_EX_CLIENTEDGE));
+
+    state.capturePrimary = add(CreateControl(
+        state,
+        L"BUTTON",
+        L"Bind...",
+        BS_PUSHBUTTON | WS_TABSTOP,
+        kTabLeft + 206,
+        kTabTop + 446,
+        72,
+        28,
+        kIdCapturePrimary));
+
+    state.chordPrimary = add(CreateControl(
+        state,
+        L"BUTTON",
+        L"Chord...",
+        BS_PUSHBUTTON | WS_TABSTOP,
+        kTabLeft + 284,
+        kTabTop + 446,
+        74,
+        28,
+        kIdChordPrimary));
+
+    state.bindingAlternate = add(CreateControl(
+        state,
+        WC_COMBOBOXW,
+        L"",
+        CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL,
+        kTabLeft + 382,
+        kTabTop + 446,
+        154,
+        300,
+        kIdBindingAlternate,
+        WS_EX_CLIENTEDGE));
+
+    state.captureAlternate = add(CreateControl(
+        state,
+        L"BUTTON",
+        L"Bind...",
+        BS_PUSHBUTTON | WS_TABSTOP,
+        kTabLeft + 542,
+        kTabTop + 446,
+        72,
+        28,
+        kIdCaptureAlternate));
+
+    state.chordAlternate = add(CreateControl(
+        state,
+        L"BUTTON",
+        L"Chord...",
+        BS_PUSHBUTTON | WS_TABSTOP,
+        kTabLeft + 620,
+        kTabTop + 446,
+        74,
+        28,
+        kIdChordAlternate));
+
+    state.clearBinding = add(CreateControl(
+        state,
+        L"BUTTON",
+        L"Clear alternate",
+        BS_PUSHBUTTON | WS_TABSTOP,
+        kTabLeft + 542,
+        kTabTop + 486,
+        152,
+        28,
+        kIdClearBinding));
+}
+
+void ShowCalibrationPanel(
+    AppState& state,
+    const bool show)
+{
+    for (HWND control : state.calibrationControls)
+    {
+        ShowWindow(control, show ? SW_SHOW : SW_HIDE);
+    }
+}
+
+void BuildCalibrationPanel(AppState& state)
+{
+    const auto add = [&](HWND control)
+    {
+        state.calibrationControls.push_back(control);
+        return control;
+    };
+
+    add(CreateControl(
+        state,
+        L"STATIC",
+        L"Guided live calibration (keep COD4 running in a mission)",
+        SS_LEFT,
+        kTabLeft + 20,
+        kTabTop + 312,
+        kTabWidth - 40,
+        22));
+
+    add(CreateControl(
+        state,
+        L"STATIC",
+        L"For recentering, put on the headset, assume your normal posture, face the desired forward direction, and look level. After you confirm, beta.8 waits three seconds before capturing the pose.",
+        SS_LEFT,
+        kTabLeft + 20,
+        kTabTop + 338,
+        kTabWidth - 40,
+        45));
+
+    add(CreateControl(
+        state,
+        L"BUTTON",
+        L"Recenter now",
+        BS_DEFPUSHBUTTON | WS_TABSTOP,
+        kTabLeft + 20,
+        kTabTop + 392,
+        205,
+        34,
+        kIdCalibrationRecenter));
+
+    add(CreateControl(
+        state,
+        L"BUTTON",
+        L"Measure standing height",
+        BS_PUSHBUTTON | WS_TABSTOP,
+        kTabLeft + 238,
+        kTabTop + 392,
+        224,
+        34,
+        kIdCalibrationMeasureStanding));
+
+    add(CreateControl(
+        state,
+        L"BUTTON",
+        L"Apply seated calibration",
+        BS_PUSHBUTTON | WS_TABSTOP,
+        kTabLeft + 475,
+        kTabTop + 392,
+        225,
+        34,
+        kIdCalibrationApplySeated));
+
+    add(CreateControl(
+        state,
+        L"STATIC",
+        L"Fine height adjustment (applies live without changing your forward direction)",
+        SS_LEFT,
+        kTabLeft + 20,
+        kTabTop + 440,
+        kTabWidth - 40,
+        22));
+
+    add(CreateControl(
+        state,
+        L"BUTTON",
+        L"1 in shorter",
+        BS_PUSHBUTTON | WS_TABSTOP,
+        kTabLeft + 20,
+        kTabTop + 466,
+        150,
+        32,
+        kIdCalibrationShorter));
+
+    add(CreateControl(
+        state,
+        L"BUTTON",
+        L"Reset current mode to 60 in",
+        BS_PUSHBUTTON | WS_TABSTOP,
+        kTabLeft + 182,
+        kTabTop + 466,
+        260,
+        32,
+        kIdCalibrationResetHeight));
+
+    add(CreateControl(
+        state,
+        L"BUTTON",
+        L"1 in taller",
+        BS_PUSHBUTTON | WS_TABSTOP,
+        kTabLeft + 454,
+        kTabTop + 466,
+        150,
+        32,
+        kIdCalibrationTaller));
+
+    state.calibrationStatus = add(CreateControl(
+        state,
+        L"STATIC",
+        L"Status: Save and launch COD4, enter a mission, then use a calibration button.",
+        SS_LEFT,
+        kTabLeft + 20,
+        kTabTop + 510,
+        kTabWidth - 40,
+        58));
+}
+
+void ShowHudPanel(
+    AppState& state,
+    const bool show)
+{
+    for (HWND control : state.hudControls)
+    {
+        ShowWindow(control, show ? SW_SHOW : SW_HIDE);
+    }
+}
+
+void BuildHudPanel(AppState& state)
+{
+    const auto add = [&](HWND control)
+    {
+        state.hudControls.push_back(control);
+        return control;
+    };
+
+    add(CreateControl(
+        state,
+        L"STATIC",
+        L"Visual placement — drag snap points instead of guessing numeric offsets",
+        SS_LEFT,
+        kTabLeft + 20,
+        kTabTop + 48,
+        kTabWidth - 40,
+        22));
+
+    add(CreateControl(
+        state,
+        L"BUTTON",
+        L"Open desktop visual editor",
+        BS_DEFPUSHBUTTON | WS_TABSTOP,
+        kTabLeft + 20,
+        kTabTop + 74,
+        326,
+        34,
+        kIdHudVisualEditor));
+
+    add(CreateControl(
+        state,
+        L"BUTTON",
+        L"Edit live in headset",
+        BS_PUSHBUTTON | WS_TABSTOP,
+        kTabLeft + 358,
+        kTabTop + 74,
+        342,
+        34,
+        kIdHudHeadsetEditor));
+
+    state.hudStatus = add(CreateControl(
+        state,
+        L"STATIC",
+        L"Status: Desktop edits are offline; headset edits manipulate the actual mission HUD and save back automatically.",
+        SS_LEFT | SS_PATHELLIPSIS,
+        kTabLeft + 20,
+        kTabTop + 113,
+        kTabWidth - 40,
+        22));
 }
 
 bool BuildMainWindow(AppState& state)
@@ -1289,7 +4340,7 @@ bool BuildMainWindow(AppState& state)
     CreateControl(
         state,
         L"STATIC",
-        L"Portable V56 settings - changes take effect the next time COD4 starts",
+        L"Beta.8 visual HUD editing, guided calibration, and verified settings",
         SS_LEFT,
         22,
         52,
@@ -1386,6 +4437,9 @@ bool BuildMainWindow(AppState& state)
     SendMessageW(state.tooltip, TTM_SETDELAYTIME, TTDT_AUTOPOP, 15000);
 
     BuildSettingControls(state);
+    BuildControllerBindingEditor(state);
+    BuildCalibrationPanel(state);
+    BuildHudPanel(state);
 
     state.preview = CreateWindowExW(
         0,
@@ -1414,7 +4468,7 @@ bool BuildMainWindow(AppState& state)
     state.settingsPath = CreateControl(
         state,
         L"STATIC",
-        (L"User settings: " + state.userPath.wstring()).c_str(),
+        L"Active settings: loading...",
         SS_LEFT | SS_PATHELLIPSIS,
         20,
         78,
@@ -1491,6 +4545,27 @@ LRESULT CALLBACK MainWindowProc(
         const int identifier = LOWORD(wParam);
         const int notification = HIWORD(wParam);
 
+        if (identifier == kIdBindingActionList &&
+            notification == LBN_SELCHANGE)
+        {
+            UpdateControllerBindingEditor(*state);
+            return 0;
+        }
+
+        if (identifier == kIdBindingPrimary &&
+            notification == CBN_SELCHANGE)
+        {
+            OnControllerBindingChoice(*state, false);
+            return 0;
+        }
+
+        if (identifier == kIdBindingAlternate &&
+            notification == CBN_SELCHANGE)
+        {
+            OnControllerBindingChoice(*state, true);
+            return 0;
+        }
+
         if (identifier >= kIdSettingBase &&
             identifier < kIdSettingBase + static_cast<int>(state->bindings.size()))
         {
@@ -1539,11 +4614,57 @@ LRESULT CALLBACK MainWindowProc(
                 LaunchBatch(*state, L"Launch-KisakCOD-VR-Diagnostics.bat");
             }
             return 0;
+        case kIdClearBinding:
+            ClearControllerAlternateBinding(*state);
+            return 0;
+        case kIdCapturePrimary:
+            CaptureControllerBinding(*state, false);
+            return 0;
+        case kIdCaptureAlternate:
+            CaptureControllerBinding(*state, true);
+            return 0;
+        case kIdChordPrimary:
+            EditControllerChord(*state, false);
+            return 0;
+        case kIdChordAlternate:
+            EditControllerChord(*state, true);
+            return 0;
+        case kIdCalibrationRecenter:
+            RecenterCalibration(*state);
+            return 0;
+        case kIdCalibrationMeasureStanding:
+            MeasureStandingCalibration(*state);
+            return 0;
+        case kIdCalibrationApplySeated:
+            ApplySeatedCalibration(*state);
+            return 0;
+        case kIdCalibrationShorter:
+            AdjustCalibrationHeight(*state, -1.0, false);
+            return 0;
+        case kIdCalibrationResetHeight:
+            AdjustCalibrationHeight(*state, 0.0, true);
+            return 0;
+        case kIdCalibrationTaller:
+            AdjustCalibrationHeight(*state, 1.0, false);
+            return 0;
+        case kIdHudVisualEditor:
+            OpenVisualHudEditor(*state);
+            return 0;
+        case kIdHudHeadsetEditor:
+            StartHeadsetHudEditor(*state);
+            return 0;
         default:
             break;
         }
         break;
     }
+    case WM_TIMER:
+        if (wParam == static_cast<WPARAM>(kIdHudPollTimer))
+        {
+            PollHudEditorStatus(*state);
+            return 0;
+        }
+        break;
     case WM_NOTIFY:
     {
         const auto* header = reinterpret_cast<NMHDR*>(lParam);
@@ -1578,6 +4699,7 @@ LRESULT CALLBACK MainWindowProc(
         DestroyWindow(window);
         return 0;
     case WM_DESTROY:
+        KillTimer(window, kIdHudPollTimer);
         PostQuitMessage(0);
         return 0;
     default:
@@ -1646,6 +4768,33 @@ int WINAPI wWinMain(
         return 1;
     }
 
+    WNDCLASSEXW chordClass = {};
+    chordClass.cbSize = sizeof(chordClass);
+    chordClass.style = CS_HREDRAW | CS_VREDRAW;
+    chordClass.lpfnWndProc = ChordEditorWindowProc;
+    chordClass.hInstance = instance;
+    chordClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    chordClass.hbrBackground =
+        reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    chordClass.lpszClassName = kChordEditorClass;
+    if (RegisterClassExW(&chordClass) == 0)
+    {
+        return 1;
+    }
+
+    WNDCLASSEXW hudEditorClass = {};
+    hudEditorClass.cbSize = sizeof(hudEditorClass);
+    hudEditorClass.style = CS_HREDRAW | CS_VREDRAW;
+    hudEditorClass.lpfnWndProc = HudEditorWindowProc;
+    hudEditorClass.hInstance = instance;
+    hudEditorClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    hudEditorClass.hbrBackground = nullptr;
+    hudEditorClass.lpszClassName = kHudEditorClass;
+    if (RegisterClassExW(&hudEditorClass) == 0)
+    {
+        return 1;
+    }
+
     WNDCLASSEXW windowClass = {};
     windowClass.cbSize = sizeof(windowClass);
     windowClass.style = CS_HREDRAW | CS_VREDRAW;
@@ -1672,6 +4821,21 @@ int WINAPI wWinMain(
         state.userPath);
     state.values = loaded.values;
     state.validation = loaded.messages;
+    state.profileName = loaded.profileName;
+    state.revision = loaded.revision;
+    state.activePath = loaded.activePath;
+
+    if (loaded.userFileFound && !loaded.revision.empty())
+    {
+        const kc::VerificationResult verification =
+            kc::VerifyUserSettingsFile(
+                state.userPath,
+                state.values,
+                state.profileName,
+                state.revision);
+        state.readBackVerified = verification.success;
+        state.verifiedSettingCount = verification.verifiedSettingCount;
+    }
 
     if (!BuildMainWindow(state))
     {

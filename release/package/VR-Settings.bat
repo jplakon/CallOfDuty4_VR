@@ -1,7 +1,12 @@
 @echo off
-rem KisakCOD VR release defaults (V56 configurator schema).
+rem KisakCOD VR beta.8 release defaults (visual HUD editor, Controller Input V4 schema).
 rem Do not put personal changes here: KisakCOD-VR-Configurator.exe writes a
 rem separate VR-User-Settings.bat under LocalAppData so upgrades preserve them.
+rem Profile: Tested Quest 3
+rem Revision: v61-release-defaults
+
+set "KISAK_VR_SETTINGS_PROFILE=Tested Quest 3"
+set "KISAK_VR_SETTINGS_REVISION=v61-release-defaults"
 
 rem Runtime backend: auto, openxr, or the experimental openvr fallback.
 set "KISAK_VR_BACKEND=auto"
@@ -24,9 +29,18 @@ set "KISAK_VR_TURN_DEADZONE=0.25"
 set "KISAK_VR_MOVEMENT_DIRECTION=head"
 set "KISAK_VR_MOVEMENT_DEADZONE=0.18"
 
+rem Guided recenter and player-height calibration. COD4's native standing
+rem camera is 60 game inches; both defaults therefore preserve beta.7 scale.
+set "KISAK_VR_PLAY_MODE=standing"
+set "KISAK_VR_STANDING_EYE_HEIGHT=60.0"
+set "KISAK_VR_SEATED_EYE_HEIGHT=60.0"
+set "KISAK_VR_RECENTER_ON_START=1"
+
 rem HUD, compass, and mission text placement.
 set "KISAK_VR_HUD_SAFE_X=0.50"
 set "KISAK_VR_HUD_SAFE_Y=1.00"
+set "KISAK_VR_HUD_BOTTOM_LEFT_X_OFFSET=0"
+set "KISAK_VR_HUD_BOTTOM_LEFT_Y_OFFSET=0"
 set "KISAK_VR_HUD_BOTTOM_LEFT_SCALE=0.50"
 set "KISAK_VR_COMPASS_ENABLED=1"
 set "KISAK_VR_COMPASS_SIZE=1.00"
@@ -36,8 +50,14 @@ set "KISAK_VR_COMPASS_INSET_Y=48"
 set "KISAK_VR_GAME_MESSAGE_X_OFFSET=0"
 set "KISAK_VR_GAME_MESSAGE_Y_OFFSET=72"
 set "KISAK_VR_GAME_MESSAGE_SCALE=1.00"
+set "KISAK_VR_OBJECTIVE_MESSAGE_X_OFFSET=0"
+set "KISAK_VR_OBJECTIVE_MESSAGE_Y_OFFSET=0"
+set "KISAK_VR_OBJECTIVE_MESSAGE_SCALE=1.00"
 set "KISAK_VR_CROSSHAIR=1"
 set "KISAK_VR_SUBTITLES=1"
+set "KISAK_VR_SUBTITLE_X_OFFSET=0"
+set "KISAK_VR_SUBTITLE_Y_OFFSET=0"
+set "KISAK_VR_SUBTITLE_SCALE=1.00"
 
 rem Right-hand weapon calibration and tracking response.
 set "KISAK_VR_WEAPON_OFFSET_FORWARD=0.00"
@@ -83,14 +103,56 @@ set "KISAK_VR_SCOPE_UP_METERS=0.000"
 set "KISAK_VR_SCOPE_RADIUS_METERS=0.024"
 set "KISAK_VR_SCOPE_CAPTURE_SIZE=1024"
 
-rem Remappable face-button roles. Trigger, grip, sticks, and the menu button
-rem remain fixed because they own pose-sensitive or system interactions.
-set "KISAK_VR_BIND_USE=x"
-set "KISAK_VR_BIND_SPRINT=stick"
-set "KISAK_VR_BIND_NEXT_WEAPON=y"
-set "KISAK_VR_BIND_RELOAD=a"
-set "KISAK_VR_BIND_MELEE=stick"
-set "KISAK_VR_BIND_STANCE=b"
+rem Controller Input V4. Any gameplay action may use either controller.
+rem Use + between inputs that must be held together; primary and alternate
+rem slots remain alternatives. Unbound disables that slot.
+set "KISAK_VR_INPUT_BINDINGS_VERSION=4"
+set "KISAK_VR_BIND_ATTACK=right.trigger"
+set "KISAK_VR_BIND_ATTACK_ALT=unbound"
+set "KISAK_VR_BIND_AIM=unbound"
+set "KISAK_VR_BIND_AIM_ALT=unbound"
+set "KISAK_VR_BIND_JUMP=right.primary_axis.up"
+set "KISAK_VR_BIND_JUMP_ALT=left.trigger"
+set "KISAK_VR_BIND_USE=left.primary"
+set "KISAK_VR_BIND_USE_ALT=unbound"
+set "KISAK_VR_BIND_RELOAD=right.primary"
+set "KISAK_VR_BIND_RELOAD_ALT=unbound"
+set "KISAK_VR_BIND_SPRINT=left.thumbstick_click"
+set "KISAK_VR_BIND_SPRINT_ALT=unbound"
+set "KISAK_VR_BIND_MELEE=right.thumbstick_click"
+set "KISAK_VR_BIND_MELEE_ALT=unbound"
+set "KISAK_VR_BIND_STANCE=right.secondary"
+set "KISAK_VR_BIND_STANCE_ALT=unbound"
+set "KISAK_VR_BIND_LOWER_STANCE=right.primary_axis.down"
+set "KISAK_VR_BIND_LOWER_STANCE_ALT=unbound"
+set "KISAK_VR_BIND_NEXT_WEAPON=left.secondary"
+set "KISAK_VR_BIND_NEXT_WEAPON_ALT=unbound"
+set "KISAK_VR_BIND_OFFHAND=unbound"
+set "KISAK_VR_BIND_OFFHAND_ALT=unbound"
+set "KISAK_VR_BIND_SUPPORT_GRIP=left.squeeze"
+set "KISAK_VR_BIND_SUPPORT_GRIP_ALT=unbound"
+set "KISAK_VR_BIND_MENU=left.menu"
+set "KISAK_VR_BIND_MENU_ALT=unbound"
+set "KISAK_VR_BIND_MENU_CONFIRM=right.primary"
+set "KISAK_VR_BIND_MENU_CONFIRM_ALT=unbound"
+set "KISAK_VR_BIND_MENU_BACK=right.secondary"
+set "KISAK_VR_BIND_MENU_BACK_ALT=unbound"
+set "KISAK_VR_BIND_MENU_AXIS=left.primary_axis"
+set "KISAK_VR_BIND_MENU_AXIS_ALT=unbound"
+set "KISAK_VR_BIND_GRENADE_LAUNCHER=right.thumbrest_touch+left.primary_axis.up"
+set "KISAK_VR_BIND_GRENADE_LAUNCHER_ALT=unbound"
+set "KISAK_VR_BIND_NIGHT_VISION=right.thumbrest_touch+left.primary_axis.down"
+set "KISAK_VR_BIND_NIGHT_VISION_ALT=unbound"
+set "KISAK_VR_BIND_AIRSTRIKE=right.thumbrest_touch+left.primary_axis.left"
+set "KISAK_VR_BIND_AIRSTRIKE_ALT=unbound"
+set "KISAK_VR_BIND_C4=right.thumbrest_touch+left.primary_axis.right"
+set "KISAK_VR_BIND_C4_ALT=unbound"
+set "KISAK_VR_BIND_SCOPE_ZOOM_AXIS=left.primary_axis"
+set "KISAK_VR_BIND_SCOPE_ZOOM_AXIS_ALT=unbound"
+set "KISAK_VR_BIND_MOVE_AXIS=left.primary_axis"
+set "KISAK_VR_BIND_MOVE_AXIS_ALT=unbound"
+set "KISAK_VR_BIND_TURN_AXIS=right.primary_axis"
+set "KISAK_VR_BIND_TURN_AXIS_ALT=unbound"
 
 rem Advanced gameplay and diagnostics.
 set "KISAK_VR_UNLOCK_MISSIONS=1"

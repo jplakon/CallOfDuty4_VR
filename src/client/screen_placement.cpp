@@ -3,7 +3,7 @@
 #ifdef KISAK_MP
 #include <client_mp/client_mp.h>
 #elif defined(KISAK_SP)
-#include <cstdlib>
+#include "vr/vr_openxr.h"
 #endif
 
 ScreenPlacement scrPlaceView[1];
@@ -15,49 +15,15 @@ ScreenPlacement scrPlaceFullUnsafe;
 #ifdef KISAK_SP
 namespace
 {
-float VR_ReadHudSafeAreaFraction(const char *name)
-{
-    const char *value = std::getenv(name);
-
-    if (value == nullptr || *value == '\0')
-    {
-        return 1.0f;
-    }
-
-    char *parseEnd = nullptr;
-    float fraction = std::strtof(value, &parseEnd);
-
-    if (parseEnd == value || *parseEnd != '\0')
-    {
-        Com_PrintWarning(
-            0,
-            "[VR][HUD] Ignoring invalid %s value '%s'.\n",
-            name,
-            value);
-        return 1.0f;
-    }
-
-    if (fraction < 0.5f)
-    {
-        fraction = 0.5f;
-    }
-    else if (fraction > 1.0f)
-    {
-        fraction = 1.0f;
-    }
-
-    return fraction;
-}
-
 void VR_ApplyHudSafeArea(
     ScreenPlacement *scrPlace,
     float viewportWidth,
     float viewportHeight)
 {
-    const float horizontalFraction =
-        VR_ReadHudSafeAreaFraction("KISAK_VR_HUD_SAFE_X");
-    const float verticalFraction =
-        VR_ReadHudSafeAreaFraction("KISAK_VR_HUD_SAFE_Y");
+    kisak::vr::hud::Layout layout;
+    VR_GetActiveHudLayout(&layout);
+    const float horizontalFraction = layout.safeX;
+    const float verticalFraction = layout.safeY;
 
     if (horizontalFraction >= 1.0f &&
         verticalFraction >= 1.0f)
@@ -486,14 +452,17 @@ void __cdecl ScrPlace_ApplyRect(
         horzAlign == 1 &&
         vertAlign == 3)
     {
-        static const float vrBottomLeftHudScale =
-            VR_ReadHudSafeAreaFraction(
-                "KISAK_VR_HUD_BOTTOM_LEFT_SCALE");
+        kisak::vr::hud::Layout layout;
+        VR_GetActiveHudLayout(&layout);
+        const float vrBottomLeftHudScale =
+            layout.ammoScale;
 
         *x *= vrBottomLeftHudScale;
         *y *= vrBottomLeftHudScale;
         *w *= vrBottomLeftHudScale;
         *h *= vrBottomLeftHudScale;
+        *x += layout.ammoOffsetX;
+        *y -= layout.ammoOffsetY;
 
         static bool loggedBottomLeftHudScale = false;
 
@@ -501,7 +470,10 @@ void __cdecl ScrPlace_ApplyRect(
         {
             Com_Printf(
                 0,
-                "[VR][HUD] Scaled the bottom-left HUD cluster to %.2f.\n",
+                "[VR][HUD] Bottom-left HUD cluster offset %.0f/%.0f "
+                "at %.2f scale.\n",
+                layout.ammoOffsetX,
+                layout.ammoOffsetY,
                 vrBottomLeftHudScale);
             loggedBottomLeftHudScale = true;
         }
@@ -585,4 +557,3 @@ void __cdecl ScrPlace_ApplyRect(
         break;
     }
 }
-

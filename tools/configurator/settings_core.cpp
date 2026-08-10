@@ -1,10 +1,13 @@
 #include "settings_core.h"
+#include "vr/vr_input_bindings.h"
+#include "vr/vr_hud_layout.h"
 
 #include <algorithm>
 #include <cctype>
 #include <charconv>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <ctime>
 #include <fstream>
@@ -116,6 +119,53 @@ SettingDefinition Choice(
     };
 }
 
+SettingDefinition Binding(
+    const kisak::vr::input::Action action,
+    const bool alternate)
+{
+    namespace input = kisak::vr::input;
+
+    const input::ActionDefinition& actionDefinition =
+        input::GetActionDefinition(action);
+
+    SettingDefinition definition;
+    definition.key = alternate
+        ? actionDefinition.alternateSettingKey
+        : actionDefinition.settingKey;
+    definition.label = actionDefinition.label;
+    if (alternate)
+    {
+        definition.label += " (alternate)";
+    }
+    definition.description = actionDefinition.description;
+    if (alternate)
+    {
+        definition.description +=
+            " This optional second binding may be left unbound.";
+    }
+    definition.type = SettingType::Binding;
+    definition.page = SettingPage::Controls;
+    definition.defaultValue = alternate
+        ? actionDefinition.defaultAlternateBinding
+        : actionDefinition.defaultBinding;
+    definition.advanced = alternate;
+
+    for (const input::SourceDefinition& sourceDefinition :
+         input::SourceDefinitions())
+    {
+        if (sourceDefinition.source == input::Source::Unbound ||
+            sourceDefinition.valueType == actionDefinition.valueType)
+        {
+            definition.choices.push_back({
+                sourceDefinition.id,
+                sourceDefinition.label,
+            });
+        }
+    }
+
+    return definition;
+}
+
 const std::vector<SettingDefinition> kCatalog = {
     Choice(
         "KISAK_VR_BACKEND",
@@ -175,33 +225,86 @@ const std::vector<SettingDefinition> kCatalog = {
         0.40,
         2),
 
+    Choice(
+        "KISAK_VR_PLAY_MODE",
+        "Play posture",
+        "Standing can measure your physical eye height from a floor-aware runtime. Seated keeps a full-height virtual player while recentering around your chair.",
+        SettingPage::Calibration,
+        "standing",
+        {{"standing", "Standing"}, {"seated", "Seated"}}),
+    Decimal(
+        "KISAK_VR_STANDING_EYE_HEIGHT",
+        "Standing virtual eye height (inches)",
+        "Virtual eye height used in standing mode. The guided measurement button can fill this from the headset's floor reference.",
+        SettingPage::Calibration,
+        "60.0",
+        42.0,
+        84.0,
+        1),
+    Decimal(
+        "KISAK_VR_SEATED_EYE_HEIGHT",
+        "Seated virtual eye height (inches)",
+        "Virtual player eye height while you remain physically seated. Keep 60 for COD4's native full standing stature.",
+        SettingPage::Calibration,
+        "60.0",
+        42.0,
+        84.0,
+        1),
+    Toggle(
+        "KISAK_VR_RECENTER_ON_START",
+        "Recenter at first gameplay camera",
+        "Capture position and forward/level orientation when a mission first reaches the player camera. You can still recenter live afterward.",
+        SettingPage::Calibration,
+        true),
+
     Decimal(
         "KISAK_VR_HUD_SAFE_X",
         "HUD horizontal safe area",
-        "Smaller values pull edge-aligned HUD elements toward the center.",
+        "Smaller values pull edge-aligned HUD elements toward the center. The visual editor is the recommended way to change this.",
         SettingPage::Hud,
         "0.50",
         0.50,
         1.00,
-        2),
+        2,
+        true),
     Decimal(
         "KISAK_VR_HUD_SAFE_Y",
         "HUD vertical safe area",
-        "Smaller values pull top and bottom HUD elements toward the center.",
+        "Smaller values pull top and bottom HUD elements toward the center. The visual editor is the recommended way to change this.",
         SettingPage::Hud,
         "1.00",
         0.50,
         1.00,
-        2),
+        2,
+        true),
+    Integer(
+        "KISAK_VR_HUD_BOTTOM_LEFT_X_OFFSET",
+        "Ammo/equipment horizontal offset",
+        "Move the bottom-left ammo and equipment cluster right in virtual HUD pixels. The visual editor writes this value.",
+        SettingPage::Hud,
+        0,
+        -320,
+        640,
+        true),
+    Integer(
+        "KISAK_VR_HUD_BOTTOM_LEFT_Y_OFFSET",
+        "Ammo/equipment vertical offset",
+        "Move the bottom-left ammo and equipment cluster up in virtual HUD pixels. The visual editor writes this value.",
+        SettingPage::Hud,
+        0,
+        -240,
+        480,
+        true),
     Decimal(
         "KISAK_VR_HUD_BOTTOM_LEFT_SCALE",
         "Ammo/action HUD scale",
-        "Scale for the bottom-left weapon, ammunition, and action-slot cluster.",
+        "Scale for the bottom-left weapon, ammunition, and action-slot cluster. Drag its resize handle in the visual editor.",
         SettingPage::Hud,
         "0.50",
         0.50,
-        1.00,
-        2),
+        2.00,
+        2,
+        true),
     Toggle(
         "KISAK_VR_COMPASS_ENABLED",
         "Compass",
@@ -216,7 +319,8 @@ const std::vector<SettingDefinition> kCatalog = {
         "1.00",
         0.50,
         2.00,
-        2),
+        2,
+        true),
     Toggle(
         "KISAK_VR_COMPASS_ROTATION",
         "Rotating compass",
@@ -229,16 +333,18 @@ const std::vector<SettingDefinition> kCatalog = {
         "Move the lower-right compass left in virtual HUD pixels.",
         SettingPage::Hud,
         220,
-        0,
-        320),
+        -80,
+        600,
+        true),
     Integer(
         "KISAK_VR_COMPASS_INSET_Y",
         "Compass inset up",
         "Move the lower-right compass upward in virtual HUD pixels.",
         SettingPage::Hud,
         48,
-        0,
-        180),
+        -80,
+        440,
+        true),
     Integer(
         "KISAK_VR_GAME_MESSAGE_X_OFFSET",
         "Game-text horizontal offset",
@@ -246,15 +352,17 @@ const std::vector<SettingDefinition> kCatalog = {
         SettingPage::Hud,
         0,
         -300,
-        300),
+        300,
+        true),
     Integer(
         "KISAK_VR_GAME_MESSAGE_Y_OFFSET",
         "Game-text vertical offset",
-        "Move mission notifications down from COD4's original position.",
+        "Move normal mission notifications down (positive) or up (negative).",
         SettingPage::Hud,
         72,
-        0,
-        200),
+        -240,
+        400,
+        true),
     Decimal(
         "KISAK_VR_GAME_MESSAGE_SCALE",
         "Game-text scale",
@@ -262,8 +370,37 @@ const std::vector<SettingDefinition> kCatalog = {
         SettingPage::Hud,
         "1.00",
         0.50,
-        1.50,
-        2),
+        2.00,
+        2,
+        true),
+    Integer(
+        "KISAK_VR_OBJECTIVE_MESSAGE_X_OFFSET",
+        "Objective/banner horizontal offset",
+        "Move bold objective and mission-status banners right (positive) or left (negative).",
+        SettingPage::Hud,
+        0,
+        -300,
+        300,
+        true),
+    Integer(
+        "KISAK_VR_OBJECTIVE_MESSAGE_Y_OFFSET",
+        "Objective/banner vertical offset",
+        "Move bold objective and mission-status banners down (positive) or up (negative).",
+        SettingPage::Hud,
+        0,
+        -180,
+        270,
+        true),
+    Decimal(
+        "KISAK_VR_OBJECTIVE_MESSAGE_SCALE",
+        "Objective/banner scale",
+        "Scale bold objective and mission-status banners.",
+        SettingPage::Hud,
+        "1.00",
+        0.50,
+        2.00,
+        2,
+        true),
     Toggle(
         "KISAK_VR_CROSSHAIR",
         "Crosshair",
@@ -275,6 +412,34 @@ const std::vector<SettingDefinition> kCatalog = {
         "Subtitles",
         "Show spoken-dialogue subtitles.",
         SettingPage::Hud,
+        true),
+    Integer(
+        "KISAK_VR_SUBTITLE_X_OFFSET",
+        "Subtitle horizontal offset",
+        "Move spoken-dialogue subtitles right (positive) or left (negative).",
+        SettingPage::Hud,
+        0,
+        -300,
+        300,
+        true),
+    Integer(
+        "KISAK_VR_SUBTITLE_Y_OFFSET",
+        "Subtitle vertical offset",
+        "Move spoken-dialogue subtitles down (positive) or up (negative).",
+        SettingPage::Hud,
+        0,
+        -400,
+        80,
+        true),
+    Decimal(
+        "KISAK_VR_SUBTITLE_SCALE",
+        "Subtitle scale",
+        "Scale spoken-dialogue subtitles without changing notification text.",
+        SettingPage::Hud,
+        "1.00",
+        0.50,
+        2.00,
+        2,
         true),
 
     Decimal(
@@ -641,48 +806,62 @@ const std::vector<SettingDefinition> kCatalog = {
         true,
         true),
 
-    Choice(
-        "KISAK_VR_BIND_USE",
-        "Use / interact",
-        "Physical left-controller button used for COD4's use/interact action.",
+    Integer(
+        "KISAK_VR_INPUT_BINDINGS_VERSION",
+        "Controller binding format",
+        "Internal schema version for controller-neutral bindings.",
         SettingPage::Controls,
-        "x",
-        {{"x", "Left X"}, {"y", "Left Y"}, {"stick", "Left stick click"}}),
-    Choice(
-        "KISAK_VR_BIND_SPRINT",
-        "Sprint",
-        "Physical left-controller button used for sprint.",
-        SettingPage::Controls,
-        "stick",
-        {{"x", "Left X"}, {"y", "Left Y"}, {"stick", "Left stick click"}}),
-    Choice(
-        "KISAK_VR_BIND_NEXT_WEAPON",
-        "Next weapon",
-        "Physical left-controller button used to switch weapons.",
-        SettingPage::Controls,
-        "y",
-        {{"x", "Left X"}, {"y", "Left Y"}, {"stick", "Left stick click"}}),
-    Choice(
-        "KISAK_VR_BIND_RELOAD",
-        "Reload / eject magazine",
-        "Physical right-controller button used for reload or manual magazine ejection.",
-        SettingPage::Controls,
-        "a",
-        {{"a", "Right A"}, {"b", "Right B"}, {"stick", "Right stick click"}}),
-    Choice(
-        "KISAK_VR_BIND_MELEE",
-        "Melee",
-        "Physical right-controller button used for melee.",
-        SettingPage::Controls,
-        "stick",
-        {{"a", "Right A"}, {"b", "Right B"}, {"stick", "Right stick click"}}),
-    Choice(
-        "KISAK_VR_BIND_STANCE",
-        "Stance",
-        "Physical right-controller button used for the stance/crouch action.",
-        SettingPage::Controls,
-        "b",
-        {{"a", "Right A"}, {"b", "Right B"}, {"stick", "Right stick click"}}),
+        4,
+        4,
+        4,
+        true),
+
+    Binding(kisak::vr::input::Action::Attack, false),
+    Binding(kisak::vr::input::Action::Attack, true),
+    Binding(kisak::vr::input::Action::Aim, false),
+    Binding(kisak::vr::input::Action::Aim, true),
+    Binding(kisak::vr::input::Action::Jump, false),
+    Binding(kisak::vr::input::Action::Jump, true),
+    Binding(kisak::vr::input::Action::Use, false),
+    Binding(kisak::vr::input::Action::Use, true),
+    Binding(kisak::vr::input::Action::Reload, false),
+    Binding(kisak::vr::input::Action::Reload, true),
+    Binding(kisak::vr::input::Action::Sprint, false),
+    Binding(kisak::vr::input::Action::Sprint, true),
+    Binding(kisak::vr::input::Action::Melee, false),
+    Binding(kisak::vr::input::Action::Melee, true),
+    Binding(kisak::vr::input::Action::Stance, false),
+    Binding(kisak::vr::input::Action::Stance, true),
+    Binding(kisak::vr::input::Action::LowerStance, false),
+    Binding(kisak::vr::input::Action::LowerStance, true),
+    Binding(kisak::vr::input::Action::NextWeapon, false),
+    Binding(kisak::vr::input::Action::NextWeapon, true),
+    Binding(kisak::vr::input::Action::Offhand, false),
+    Binding(kisak::vr::input::Action::Offhand, true),
+    Binding(kisak::vr::input::Action::SupportGrip, false),
+    Binding(kisak::vr::input::Action::SupportGrip, true),
+    Binding(kisak::vr::input::Action::PauseMenu, false),
+    Binding(kisak::vr::input::Action::PauseMenu, true),
+    Binding(kisak::vr::input::Action::MenuConfirm, false),
+    Binding(kisak::vr::input::Action::MenuConfirm, true),
+    Binding(kisak::vr::input::Action::MenuBack, false),
+    Binding(kisak::vr::input::Action::MenuBack, true),
+    Binding(kisak::vr::input::Action::MenuNavigate, false),
+    Binding(kisak::vr::input::Action::MenuNavigate, true),
+    Binding(kisak::vr::input::Action::GrenadeLauncher, false),
+    Binding(kisak::vr::input::Action::GrenadeLauncher, true),
+    Binding(kisak::vr::input::Action::NightVision, false),
+    Binding(kisak::vr::input::Action::NightVision, true),
+    Binding(kisak::vr::input::Action::Airstrike, false),
+    Binding(kisak::vr::input::Action::Airstrike, true),
+    Binding(kisak::vr::input::Action::C4, false),
+    Binding(kisak::vr::input::Action::C4, true),
+    Binding(kisak::vr::input::Action::ScopeZoom, false),
+    Binding(kisak::vr::input::Action::ScopeZoom, true),
+    Binding(kisak::vr::input::Action::Move, false),
+    Binding(kisak::vr::input::Action::Move, true),
+    Binding(kisak::vr::input::Action::Turn, false),
+    Binding(kisak::vr::input::Action::Turn, true),
 
     Toggle(
         "KISAK_VR_UNLOCK_MISSIONS",
@@ -799,12 +978,269 @@ std::string TimestampForFileName()
     return output.str();
 }
 
+std::string TimestampForDisplay()
+{
+    const auto now = std::chrono::system_clock::now();
+    const std::time_t time = std::chrono::system_clock::to_time_t(now);
+    std::tm local = {};
+
+#ifdef _WIN32
+    localtime_s(&local, &time);
+#else
+    localtime_r(&time, &local);
+#endif
+
+    std::ostringstream output;
+    output << std::put_time(&local, "%Y-%m-%d %H:%M:%S");
+    return output.str();
+}
+
+std::string SafeMetadataValue(
+    const std::string& value,
+    const char* const fallback)
+{
+    std::string safe = Trim(value);
+    for (char& character : safe)
+    {
+        const unsigned char byte = static_cast<unsigned char>(character);
+        if (byte < 0x20u || character == '"' || character == '%' ||
+            character == '!' || character == '&' || character == '|' ||
+            character == '<' || character == '>' || character == '^')
+        {
+            character = ' ';
+        }
+    }
+    safe = Trim(safe);
+    return safe.empty() ? std::string(fallback) : safe;
+}
+
+std::string MetadataValue(
+    const std::string& text,
+    const char* const name)
+{
+    const std::regex metadata(
+        std::string(R"regex(^\s*rem\s+)regex") + name +
+            R"regex(\s*:\s*(.*?)\s*$)regex",
+        std::regex::icase);
+    std::istringstream input(text);
+    std::string line;
+    while (std::getline(input, line))
+    {
+        if (!line.empty() && line.back() == '\r')
+        {
+            line.pop_back();
+        }
+
+        std::smatch match;
+        if (std::regex_match(line, match, metadata))
+        {
+            return Trim(match[1].str());
+        }
+    }
+    return {};
+}
+
+std::string BuildSettingsRevision(const SettingsMap& values)
+{
+    std::uint64_t hash = 1469598103934665603ull;
+    const auto hashByte = [&hash](const unsigned char byte)
+    {
+        hash ^= byte;
+        hash *= 1099511628211ull;
+    };
+
+    for (const SettingDefinition& definition : kCatalog)
+    {
+        const auto found = values.find(definition.key);
+        const std::string& value = found == values.end()
+            ? definition.defaultValue
+            : found->second;
+        for (const char character : definition.key)
+        {
+            hashByte(static_cast<unsigned char>(character));
+        }
+        hashByte(static_cast<unsigned char>('='));
+        for (const char character : value)
+        {
+            hashByte(static_cast<unsigned char>(character));
+        }
+        hashByte(static_cast<unsigned char>('\n'));
+    }
+
+    const auto now = std::chrono::system_clock::now();
+    const auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now.time_since_epoch()) % 1000;
+
+    std::ostringstream revision;
+    revision << TimestampForFileName() << '-'
+             << std::setw(3) << std::setfill('0') << milliseconds.count()
+             << '-' << std::hex << std::setw(16) << std::setfill('0') << hash;
+    return revision.str();
+}
+
+bool RestoreAfterVerificationFailure(
+    const std::filesystem::path& userPath,
+    const std::filesystem::path& backupPath,
+    std::string* const error)
+{
+    std::error_code filesystemError;
+    if (backupPath.empty())
+    {
+        std::filesystem::remove(userPath, filesystemError);
+    }
+    else
+    {
+        std::filesystem::copy_file(
+            backupPath,
+            userPath,
+            std::filesystem::copy_options::overwrite_existing,
+            filesystemError);
+    }
+
+    if (filesystemError)
+    {
+        if (error != nullptr)
+        {
+            *error += " The previous settings could not be restored: " +
+                filesystemError.message();
+        }
+        return false;
+    }
+    return true;
+}
+
 void Set(SettingsMap* values, const char* key, const char* value)
 {
     if (values != nullptr)
     {
         (*values)[key] = value;
     }
+}
+
+void UpgradeControllerBindings(SettingsMap* const values)
+{
+    if (values == nullptr)
+    {
+        return;
+    }
+
+    const auto versionValue = values->find(
+        "KISAK_VR_INPUT_BINDINGS_VERSION");
+    const int version = versionValue == values->end()
+        ? 2
+        : std::atoi(versionValue->second.c_str());
+
+    namespace input = kisak::vr::input;
+    if (version >= 4)
+    {
+        return;
+    }
+
+    if (version < 3)
+    {
+        for (const input::Action action : {
+                 input::Action::GrenadeLauncher,
+                 input::Action::NightVision,
+                 input::Action::Airstrike,
+                 input::Action::C4})
+        {
+            const input::ActionDefinition& definition =
+                input::GetActionDefinition(action);
+            const auto current = values->find(definition.settingKey);
+            if (current == values->end() ||
+                current->second.empty() ||
+                current->second == "unbound")
+            {
+                (*values)[definition.settingKey] =
+                    definition.defaultBinding;
+            }
+        }
+
+        // V57's first test build assigned the right grip to a redundant native
+        // off-hand action. Physical grenades already use the support-hand grip,
+        // so migrate that former test default to the restored unbound default.
+        const input::ActionDefinition& offhand =
+            input::GetActionDefinition(input::Action::Offhand);
+        const auto offhandValue = values->find(offhand.settingKey);
+        if (offhandValue != values->end() &&
+            offhandValue->second == "right.squeeze")
+        {
+            offhandValue->second = "unbound";
+        }
+    }
+
+    if (version < 4)
+    {
+        const input::ActionDefinition& jump =
+            input::GetActionDefinition(input::Action::Jump);
+
+        const auto valueOr = [values](
+            const char* const key,
+            const char* const fallback) -> std::string
+        {
+            const auto found = values->find(key);
+            return found == values->end() || found->second.empty()
+                ? std::string(fallback)
+                : found->second;
+        };
+
+        const std::string oldJump =
+            valueOr(jump.settingKey, "left.trigger");
+        const std::string oldJumpAlternate =
+            valueOr(jump.alternateSettingKey, "unbound");
+        const std::string oldRaise =
+            valueOr(
+                "KISAK_VR_BIND_RAISE_STANCE",
+                "right.primary_axis.up");
+        const std::string oldRaiseAlternate =
+            valueOr(
+                "KISAK_VR_BIND_RAISE_STANCE_ALT",
+                "unbound");
+
+        const bool standardV3Layout =
+            oldJump == "left.trigger" &&
+            oldJumpAlternate == "unbound" &&
+            oldRaise == "right.primary_axis.up" &&
+            oldRaiseAlternate == "unbound";
+
+        if (standardV3Layout)
+        {
+            (*values)[jump.settingKey] =
+                jump.defaultBinding;
+            (*values)[jump.alternateSettingKey] =
+                jump.defaultAlternateBinding;
+        }
+        else
+        {
+            // Fold a customized V3 Raise stance / jump slot into any free
+            // Jump slot so upgrading does not silently discard it.
+            for (const std::string& oldRaiseBinding :
+                 {oldRaise, oldRaiseAlternate})
+            {
+                if (oldRaiseBinding.empty() ||
+                    oldRaiseBinding == "unbound" ||
+                    oldRaiseBinding == (*values)[jump.settingKey] ||
+                    oldRaiseBinding == (*values)[jump.alternateSettingKey])
+                {
+                    continue;
+                }
+
+                if ((*values)[jump.settingKey] == "unbound")
+                {
+                    (*values)[jump.settingKey] = oldRaiseBinding;
+                }
+                else if ((*values)[jump.alternateSettingKey] == "unbound")
+                {
+                    (*values)[jump.alternateSettingKey] = oldRaiseBinding;
+                }
+            }
+        }
+
+        values->erase("KISAK_VR_BIND_RAISE_STANCE");
+        values->erase("KISAK_VR_BIND_RAISE_STANCE_ALT");
+    }
+
+    (*values)["KISAK_VR_INPUT_BINDINGS_VERSION"] = "4";
 }
 
 } // namespace
@@ -835,6 +1271,143 @@ SettingsMap BuiltInDefaults()
         values[definition.key] = definition.defaultValue;
     }
     return values;
+}
+
+kisak::vr::hud::Layout HudLayoutFromSettings(
+    const SettingsMap& values)
+{
+    namespace hud = kisak::vr::hud;
+
+    hud::Layout layout = hud::DefaultLayout();
+    const auto number = [&](
+        const char* const key,
+        const float fallback)
+    {
+        const auto found = values.find(key);
+        double parsed = fallback;
+        if (found != values.end() &&
+            ParseFiniteNumber(found->second, &parsed))
+        {
+            return static_cast<float>(parsed);
+        }
+        return fallback;
+    };
+
+    layout.safeX = number("KISAK_VR_HUD_SAFE_X", layout.safeX);
+    layout.safeY = number("KISAK_VR_HUD_SAFE_Y", layout.safeY);
+    layout.ammoOffsetX = number(
+        "KISAK_VR_HUD_BOTTOM_LEFT_X_OFFSET",
+        layout.ammoOffsetX);
+    layout.ammoOffsetY = number(
+        "KISAK_VR_HUD_BOTTOM_LEFT_Y_OFFSET",
+        layout.ammoOffsetY);
+    layout.ammoScale = number(
+        "KISAK_VR_HUD_BOTTOM_LEFT_SCALE",
+        layout.ammoScale);
+    layout.compassEnabled =
+        values.count("KISAK_VR_COMPASS_ENABLED") == 0u ||
+        values.at("KISAK_VR_COMPASS_ENABLED") != "0";
+    layout.compassInsetX = number(
+        "KISAK_VR_COMPASS_INSET_X",
+        layout.compassInsetX);
+    layout.compassInsetY = number(
+        "KISAK_VR_COMPASS_INSET_Y",
+        layout.compassInsetY);
+    layout.compassScale = number(
+        "KISAK_VR_COMPASS_SIZE",
+        layout.compassScale);
+    layout.notificationOffsetX = number(
+        "KISAK_VR_GAME_MESSAGE_X_OFFSET",
+        layout.notificationOffsetX);
+    layout.notificationOffsetY = number(
+        "KISAK_VR_GAME_MESSAGE_Y_OFFSET",
+        layout.notificationOffsetY);
+    layout.notificationScale = number(
+        "KISAK_VR_GAME_MESSAGE_SCALE",
+        layout.notificationScale);
+    layout.objectiveOffsetX = number(
+        "KISAK_VR_OBJECTIVE_MESSAGE_X_OFFSET",
+        layout.objectiveOffsetX);
+    layout.objectiveOffsetY = number(
+        "KISAK_VR_OBJECTIVE_MESSAGE_Y_OFFSET",
+        layout.objectiveOffsetY);
+    layout.objectiveScale = number(
+        "KISAK_VR_OBJECTIVE_MESSAGE_SCALE",
+        layout.objectiveScale);
+    layout.subtitleOffsetX = number(
+        "KISAK_VR_SUBTITLE_X_OFFSET",
+        layout.subtitleOffsetX);
+    layout.subtitleOffsetY = number(
+        "KISAK_VR_SUBTITLE_Y_OFFSET",
+        layout.subtitleOffsetY);
+    layout.subtitleScale = number(
+        "KISAK_VR_SUBTITLE_SCALE",
+        layout.subtitleScale);
+
+    hud::ClampLayout(&layout);
+    return layout;
+}
+
+void ApplyHudLayoutToSettings(
+    const kisak::vr::hud::Layout& requestedLayout,
+    SettingsMap* const values)
+{
+    if (values == nullptr)
+    {
+        return;
+    }
+
+    kisak::vr::hud::Layout layout = requestedLayout;
+    kisak::vr::hud::ClampLayout(&layout);
+
+    const auto integer = [](const float value)
+    {
+        return std::to_string(
+            static_cast<int>(std::lround(value)));
+    };
+    const auto decimal = [](const float value)
+    {
+        std::ostringstream output;
+        output.setf(std::ios::fixed, std::ios::floatfield);
+        output.precision(2);
+        output << value;
+        return output.str();
+    };
+
+    (*values)["KISAK_VR_HUD_SAFE_X"] = decimal(layout.safeX);
+    (*values)["KISAK_VR_HUD_SAFE_Y"] = decimal(layout.safeY);
+    (*values)["KISAK_VR_HUD_BOTTOM_LEFT_X_OFFSET"] =
+        integer(layout.ammoOffsetX);
+    (*values)["KISAK_VR_HUD_BOTTOM_LEFT_Y_OFFSET"] =
+        integer(layout.ammoOffsetY);
+    (*values)["KISAK_VR_HUD_BOTTOM_LEFT_SCALE"] =
+        decimal(layout.ammoScale);
+    (*values)["KISAK_VR_COMPASS_ENABLED"] =
+        layout.compassEnabled ? "1" : "0";
+    (*values)["KISAK_VR_COMPASS_INSET_X"] =
+        integer(layout.compassInsetX);
+    (*values)["KISAK_VR_COMPASS_INSET_Y"] =
+        integer(layout.compassInsetY);
+    (*values)["KISAK_VR_COMPASS_SIZE"] =
+        decimal(layout.compassScale);
+    (*values)["KISAK_VR_GAME_MESSAGE_X_OFFSET"] =
+        integer(layout.notificationOffsetX);
+    (*values)["KISAK_VR_GAME_MESSAGE_Y_OFFSET"] =
+        integer(layout.notificationOffsetY);
+    (*values)["KISAK_VR_GAME_MESSAGE_SCALE"] =
+        decimal(layout.notificationScale);
+    (*values)["KISAK_VR_OBJECTIVE_MESSAGE_X_OFFSET"] =
+        integer(layout.objectiveOffsetX);
+    (*values)["KISAK_VR_OBJECTIVE_MESSAGE_Y_OFFSET"] =
+        integer(layout.objectiveOffsetY);
+    (*values)["KISAK_VR_OBJECTIVE_MESSAGE_SCALE"] =
+        decimal(layout.objectiveScale);
+    (*values)["KISAK_VR_SUBTITLE_X_OFFSET"] =
+        integer(layout.subtitleOffsetX);
+    (*values)["KISAK_VR_SUBTITLE_Y_OFFSET"] =
+        integer(layout.subtitleOffsetY);
+    (*values)["KISAK_VR_SUBTITLE_SCALE"] =
+        decimal(layout.subtitleScale);
 }
 
 SettingsMap ParseBatchSettings(
@@ -874,10 +1447,20 @@ SettingsMap ParseBatchSettings(
                 return static_cast<char>(std::toupper(character));
             });
 
-        const std::string value = Trim(match[2].str());
-        if (FindSetting(key) == nullptr)
+        std::string value = Trim(match[2].str());
+        const SettingDefinition* const definition = FindSetting(key);
+        const bool legacyRaiseStanceSetting =
+            key == "KISAK_VR_BIND_RAISE_STANCE" ||
+            key == "KISAK_VR_BIND_RAISE_STANCE_ALT";
+        if (definition == nullptr && !legacyRaiseStanceSetting)
         {
             continue;
+        }
+
+        if (definition != nullptr &&
+            definition->type == SettingType::Binding)
+        {
+            value = kisak::vr::input::CanonicalizeLegacyValue(key, value);
         }
 
         if (!IsSafeBatchValue(value))
@@ -946,6 +1529,33 @@ std::vector<ValidationMessage> ValidateSettings(
                     ValidationMessage::Severity::Error,
                     definition.key,
                     "The selected value is not supported.",
+                });
+            }
+            continue;
+        }
+
+        if (definition.type == SettingType::Binding)
+        {
+            namespace input = kisak::vr::input;
+
+            const input::ActionDefinition* const action =
+                input::FindActionDefinition(definition.key);
+            input::Binding binding;
+            std::string bindingError;
+
+            if (action == nullptr ||
+                !input::ParseBinding(
+                    action->action,
+                    value,
+                    &binding,
+                    &bindingError))
+            {
+                messages.push_back({
+                    ValidationMessage::Severity::Error,
+                    definition.key,
+                    bindingError.empty()
+                        ? "The selected controller binding is not compatible with this action."
+                        : bindingError,
                 });
             }
             continue;
@@ -1055,39 +1665,66 @@ std::vector<ValidationMessage> ValidateSettings(
         });
     }
 
-    const std::vector<std::string> leftBindings = {
-        valueOf("KISAK_VR_BIND_USE"),
-        valueOf("KISAK_VR_BIND_SPRINT"),
-        valueOf("KISAK_VR_BIND_NEXT_WEAPON"),
-    };
-    const std::vector<std::string> rightBindings = {
-        valueOf("KISAK_VR_BIND_RELOAD"),
-        valueOf("KISAK_VR_BIND_MELEE"),
-        valueOf("KISAK_VR_BIND_STANCE"),
-    };
+    namespace input = kisak::vr::input;
+    std::map<std::string, std::vector<const input::ActionDefinition*>>
+        gameplayAssignments;
 
-    const auto hasDuplicate = [](std::vector<std::string> bindings)
+    for (const input::ActionDefinition& action : input::ActionDefinitions())
     {
-        std::sort(bindings.begin(), bindings.end());
-        return std::adjacent_find(bindings.begin(), bindings.end()) !=
-               bindings.end();
-    };
+        if (!action.gameplayConflictGroup)
+        {
+            continue;
+        }
 
-    if (hasDuplicate(leftBindings))
-    {
-        messages.push_back({
-            ValidationMessage::Severity::Error,
-            "KISAK_VR_BIND_USE",
-            "Use, Sprint, and Next weapon must use three different left-controller buttons.",
-        });
+        for (const char* const key :
+             {action.settingKey, action.alternateSettingKey})
+        {
+            input::Binding binding;
+            if (input::ParseBinding(
+                    action.action,
+                    valueOf(key),
+                    &binding) &&
+                binding.sourceCount != 0u)
+            {
+                std::sort(
+                    binding.sources.begin(),
+                    binding.sources.begin() + binding.sourceCount);
+                gameplayAssignments[
+                    input::BindingId(binding)].push_back(&action);
+            }
+        }
     }
 
-    if (hasDuplicate(rightBindings))
+    for (const auto& [bindingValue, actions] : gameplayAssignments)
     {
+        if (actions.size() <= 1u)
+        {
+            continue;
+        }
+
+        std::ostringstream conflict;
+        input::Binding binding;
+        input::ParseBinding(
+            actions.front()->action,
+            bindingValue,
+            &binding);
+        conflict << input::BindingLabel(binding)
+                 << " is assigned to multiple gameplay actions (";
+
+        for (std::size_t index = 0u; index < actions.size(); ++index)
+        {
+            if (index != 0u)
+            {
+                conflict << ", ";
+            }
+            conflict << actions[index]->label;
+        }
+        conflict << "). This is allowed, but both actions will activate together.";
+
         messages.push_back({
-            ValidationMessage::Severity::Error,
-            "KISAK_VR_BIND_RELOAD",
-            "Reload, Melee, and Stance must use three different right-controller buttons.",
+            ValidationMessage::Severity::Warning,
+            actions.front()->settingKey,
+            conflict.str(),
         });
     }
 
@@ -1110,27 +1747,46 @@ LoadResult LoadSettings(
 {
     LoadResult result;
     result.values = BuiltInDefaults();
+    result.activePath = defaultsPath;
 
     if (std::filesystem::is_regular_file(defaultsPath))
     {
+        const std::string defaultsText = ReadTextFile(defaultsPath);
         const SettingsMap defaults =
-            ParseBatchSettings(ReadTextFile(defaultsPath), &result.messages);
+            ParseBatchSettings(defaultsText, &result.messages);
         for (const auto& [key, value] : defaults)
         {
             result.values[key] = value;
         }
+
+        const std::string profile = MetadataValue(defaultsText, "Profile");
+        const std::string revision = MetadataValue(defaultsText, "Revision");
+        if (!profile.empty())
+        {
+            result.profileName = profile;
+        }
+        result.revision = revision;
     }
 
     if (std::filesystem::is_regular_file(userPath))
     {
         result.userFileFound = true;
+        result.activePath = userPath;
+        const std::string userText = ReadTextFile(userPath);
         const SettingsMap overrides =
-            ParseBatchSettings(ReadTextFile(userPath), &result.messages);
+            ParseBatchSettings(userText, &result.messages);
         for (const auto& [key, value] : overrides)
         {
             result.values[key] = value;
         }
+
+        const std::string profile = MetadataValue(userText, "Profile");
+        const std::string revision = MetadataValue(userText, "Revision");
+        result.profileName = profile.empty() ? "Custom" : profile;
+        result.revision = revision;
     }
+
+    UpgradeControllerBindings(&result.values);
 
     const std::vector<ValidationMessage> validation =
         ValidateSettings(result.values);
@@ -1144,13 +1800,22 @@ LoadResult LoadSettings(
 
 std::string SerializeUserSettings(
     const SettingsMap& values,
-    const std::string& profileName)
+    const std::string& profileName,
+    const std::string& revision)
 {
+    const std::string safeProfile =
+        SafeMetadataValue(profileName, "Custom");
+    const std::string safeRevision =
+        SafeMetadataValue(revision, "unspecified");
+
     std::ostringstream output;
     output << "@echo off\r\n";
-    output << "rem KisakCOD VR user settings - generated by V56 Configurator\r\n";
+    output << "rem KisakCOD VR user settings - generated by v0.10.0-beta.8 Configurator (Visual HUD, Input V4)\r\n";
     output << "rem Stored separately so extracting a future release cannot erase preferences.\r\n";
-    output << "rem Profile: " << profileName << "\r\n\r\n";
+    output << "rem Profile: " << safeProfile << "\r\n";
+    output << "rem Revision: " << safeRevision << "\r\n";
+    output << "set \"KISAK_VR_SETTINGS_PROFILE=" << safeProfile << "\"\r\n";
+    output << "set \"KISAK_VR_SETTINGS_REVISION=" << safeRevision << "\"\r\n\r\n";
 
     SettingPage previousPage = SettingPage::Quick;
     bool first = true;
@@ -1172,6 +1837,92 @@ std::string SerializeUserSettings(
     return output.str();
 }
 
+VerificationResult VerifyUserSettingsFile(
+    const std::filesystem::path& userPath,
+    const SettingsMap& expectedValues,
+    const std::string& expectedProfileName,
+    const std::string& expectedRevision)
+{
+    VerificationResult result;
+    result.profileName = SafeMetadataValue(expectedProfileName, "Custom");
+    result.revision = SafeMetadataValue(expectedRevision, "unspecified");
+
+    if (!std::filesystem::is_regular_file(userPath))
+    {
+        result.error = "The saved settings file does not exist after writing.";
+        return result;
+    }
+
+    const std::string savedText = ReadTextFile(userPath);
+    const std::string expectedText = SerializeUserSettings(
+        expectedValues,
+        result.profileName,
+        result.revision);
+    if (savedText != expectedText)
+    {
+        result.error = "The bytes read back from disk did not match the settings that were written.";
+        return result;
+    }
+
+    std::vector<ValidationMessage> parseMessages;
+    const SettingsMap parsed = ParseBatchSettings(savedText, &parseMessages);
+    const auto parseError = std::find_if(
+        parseMessages.begin(),
+        parseMessages.end(),
+        [](const ValidationMessage& message)
+        {
+            return message.severity == ValidationMessage::Severity::Error;
+        });
+    if (parseError != parseMessages.end())
+    {
+        result.error = "The saved file could not be parsed after writing: " +
+            parseError->message;
+        return result;
+    }
+
+    for (const SettingDefinition& definition : kCatalog)
+    {
+        const auto expected = expectedValues.find(definition.key);
+        const std::string expectedValue = expected == expectedValues.end()
+            ? definition.defaultValue
+            : expected->second;
+        const auto actual = parsed.find(definition.key);
+        if (actual == parsed.end() || actual->second != expectedValue)
+        {
+            result.error = "Read-back verification failed for " +
+                definition.key + ".";
+            return result;
+        }
+        ++result.verifiedSettingCount;
+    }
+
+    if (MetadataValue(savedText, "Profile") != result.profileName ||
+        MetadataValue(savedText, "Revision") != result.revision)
+    {
+        result.error = "The saved profile metadata did not survive read-back.";
+        return result;
+    }
+
+    const std::vector<ValidationMessage> validation =
+        ValidateSettings(parsed);
+    const auto validationError = std::find_if(
+        validation.begin(),
+        validation.end(),
+        [](const ValidationMessage& message)
+        {
+            return message.severity == ValidationMessage::Severity::Error;
+        });
+    if (validationError != validation.end())
+    {
+        result.error = "The saved file failed validation after read-back: " +
+            validationError->message;
+        return result;
+    }
+
+    result.success = true;
+    return result;
+}
+
 SaveResult SaveUserSettingsAtomic(
     const std::filesystem::path& userPath,
     const SettingsMap& values,
@@ -1179,6 +1930,9 @@ SaveResult SaveUserSettingsAtomic(
 {
     SaveResult result;
     result.settingsPath = userPath;
+    result.profileName = SafeMetadataValue(profileName, "Custom");
+    result.revision = BuildSettingsRevision(values);
+    result.savedAt = TimestampForDisplay();
 
     const std::vector<ValidationMessage> validation = ValidateSettings(values);
     const auto error = std::find_if(
@@ -1232,7 +1986,12 @@ SaveResult SaveUserSettingsAtomic(
     }
 
     const std::filesystem::path temporaryPath =
-        userPath.parent_path() / (userPath.filename().string() + ".new");
+        userPath.parent_path() /
+        (userPath.filename().string() + ".new-" + result.revision);
+    const std::string serialized = SerializeUserSettings(
+        values,
+        result.profileName,
+        result.revision);
     {
         std::ofstream stream(temporaryPath, std::ios::binary | std::ios::trunc);
         if (!stream)
@@ -1241,7 +2000,6 @@ SaveResult SaveUserSettingsAtomic(
             return result;
         }
 
-        const std::string serialized = SerializeUserSettings(values, profileName);
         stream.write(serialized.data(), static_cast<std::streamsize>(serialized.size()));
         stream.flush();
         if (!stream)
@@ -1282,6 +2040,24 @@ SaveResult SaveUserSettingsAtomic(
         }
     }
 
+    const VerificationResult verification = VerifyUserSettingsFile(
+        userPath,
+        values,
+        result.profileName,
+        result.revision);
+    if (!verification.success)
+    {
+        result.error = "Settings were written but failed mandatory read-back verification: " +
+            verification.error;
+        RestoreAfterVerificationFailure(
+            userPath,
+            result.backupPath,
+            &result.error);
+        return result;
+    }
+
+    result.readBackVerified = true;
+    result.verifiedSettingCount = verification.verifiedSettingCount;
     result.success = true;
     return result;
 }
@@ -1332,6 +2108,7 @@ bool ApplyPreset(
 
     if (presetName == "Seated")
     {
+        Set(values, "KISAK_VR_PLAY_MODE", "seated");
         Set(values, "KISAK_VR_TURN_MODE", "snap");
         Set(values, "KISAK_VR_SNAP_TURN_ANGLE", "30");
         Set(values, "KISAK_VR_BELT_HEIGHT", "-20.0");

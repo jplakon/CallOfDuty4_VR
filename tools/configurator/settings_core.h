@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include "vr/vr_hud_layout.h"
+
 namespace kisak::configurator
 {
 
@@ -14,11 +16,13 @@ enum class SettingType
     Integer,
     Decimal,
     Choice,
+    Binding,
 };
 
 enum class SettingPage
 {
     Quick,
+    Calibration,
     Hud,
     Weapons,
     Interactions,
@@ -69,19 +73,42 @@ struct LoadResult
     SettingsMap values;
     std::vector<ValidationMessage> messages;
     bool userFileFound = false;
+    std::string profileName = "Tested Quest 3";
+    std::string revision;
+    std::filesystem::path activePath;
+};
+
+struct VerificationResult
+{
+    bool success = false;
+    std::size_t verifiedSettingCount = 0u;
+    std::string profileName;
+    std::string revision;
+    std::string error;
 };
 
 struct SaveResult
 {
     bool success = false;
+    bool readBackVerified = false;
+    std::size_t verifiedSettingCount = 0u;
     std::filesystem::path settingsPath;
     std::filesystem::path backupPath;
+    std::string profileName;
+    std::string revision;
+    std::string savedAt;
     std::string error;
 };
 
 const std::vector<SettingDefinition>& SettingsCatalog();
 const SettingDefinition* FindSetting(const std::string& key);
 SettingsMap BuiltInDefaults();
+
+kisak::vr::hud::Layout HudLayoutFromSettings(
+    const SettingsMap& values);
+void ApplyHudLayoutToSettings(
+    const kisak::vr::hud::Layout& layout,
+    SettingsMap* values);
 
 SettingsMap ParseBatchSettings(
     const std::string& text,
@@ -96,7 +123,14 @@ LoadResult LoadSettings(
 
 std::string SerializeUserSettings(
     const SettingsMap& values,
-    const std::string& profileName = "Custom");
+    const std::string& profileName = "Custom",
+    const std::string& revision = {});
+
+VerificationResult VerifyUserSettingsFile(
+    const std::filesystem::path& userPath,
+    const SettingsMap& expectedValues,
+    const std::string& expectedProfileName,
+    const std::string& expectedRevision);
 
 SaveResult SaveUserSettingsAtomic(
     const std::filesystem::path& userPath,
