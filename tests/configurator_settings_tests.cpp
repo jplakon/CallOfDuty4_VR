@@ -1,10 +1,13 @@
 #include "../tools/configurator/settings_core.h"
 #include "vr/vr_hud_layout.h"
 #include "vr/vr_input_bindings.h"
+#include "vr/vr_interactions.h"
 #include "vr/vr_calibration.h"
+#include "vr/vr_compatibility.h"
 #include "vr/vr_openvr_input.h"
 #include "vr/vr_openxr_profiles.h"
 #include "vr/vr_weapon_calibration.h"
+#include "vr/vr_weapon_profiles.h"
 
 #include <algorithm>
 #include <cmath>
@@ -16,8 +19,11 @@
 
 namespace kc = kisak::configurator;
 namespace vi = kisak::vr::input;
+namespace vint = kisak::vr::interactions;
 namespace vc = kisak::vr::calibration;
+namespace vrc = kisak::vr::compatibility;
 namespace vh = kisak::vr::hud;
+namespace vwp = kisak::vr::weapon_profiles;
 
 namespace
 {
@@ -80,6 +86,65 @@ std::string Read(const std::filesystem::path& path)
 
 int main(const int argumentCount, char** arguments)
 {
+    {
+        Check(
+            vint::WeaponControllerIndex(vint::DominantHand::Right) == 1u &&
+                vint::OffHandControllerIndex(vint::DominantHand::Right) == 0u &&
+                vint::WeaponControllerIndex(vint::DominantHand::Left) == 0u &&
+                vint::OffHandControllerIndex(vint::DominantHand::Left) == 1u,
+            "V64 handedness should swap the actual weapon/off-hand controller roles");
+        Check(
+            vint::MirrorBindingHands(
+                "right.thumbrest_touch+left.primary_axis.up") ==
+                "left.thumbrest_touch+right.primary_axis.up" &&
+                vint::MirrorBindingHands("unbound") == "unbound",
+            "V64 should mirror every physical hand term while preserving chords and unbound slots");
+        Check(
+            NearlyEqual(
+                vint::MagazineHipCenter(
+                    vint::DominantHand::Right,
+                    vint::MagazineHip::OffHand,
+                    13.0f),
+                13.0f) &&
+                NearlyEqual(
+                    vint::MagazineHipCenter(
+                        vint::DominantHand::Left,
+                        vint::MagazineHip::OffHand,
+                        13.0f),
+                    -13.0f) &&
+                vint::FragUsesLeftHip(
+                    vint::DominantHand::Right,
+                    vint::GrenadeBeltLayout::Handed) &&
+                !vint::FragUsesLeftHip(
+                    vint::DominantHand::Left,
+                    vint::GrenadeBeltLayout::Handed),
+            "V64 handed belt layouts should place magazine and grenade zones on the intended physical side");
+
+        const float forwardThrust[3] = {120.0f, 10.0f, 0.0f};
+        const float sidewaysSwing[3] = {20.0f, 120.0f, 0.0f};
+        const float weaponForward[3] = {1.0f, 0.0f, 0.0f};
+        Check(
+            vint::MeleeGestureQualifies(
+                forwardThrust,
+                weaponForward,
+                95.0f,
+                0.55f) &&
+                !vint::MeleeGestureQualifies(
+                    sidewaysSwing,
+                    weaponForward,
+                    95.0f,
+                    0.55f),
+            "V64 physical melee should accept deliberate forward thrusts and reject sideways controller motion");
+        Check(
+            NearlyEqual(
+                vint::EffectiveHapticAmplitude(true, 0.8f, 1.5f),
+                1.0f) &&
+                NearlyEqual(
+                    vint::EffectiveHapticAmplitude(false, 0.8f, 1.0f),
+                    0.0f),
+            "V64 haptic scaling should clamp safely and honor the accessibility disable switch");
+    }
+
     {
         const float controllerAxisCameraLocal[3][3] = {
             {0.0f, 1.0f, 0.0f},
@@ -166,6 +231,158 @@ int main(const int argumentCount, char** arguments)
             vc::EyeHeightCorrectionInches(67.5f) == 7.5f &&
                 vc::EyeHeightCorrectionInches(60.0f) == 0.0f,
             "height correction should be relative to COD4's native 60-inch standing camera");
+    }
+
+    {
+        vwp::Document profiles = vwp::DefaultDocument();
+        profiles.gunstocks.front().shouldered.offset = {1.0f, 2.0f, 3.0f};
+        profiles.gunstocks.front().shouldered.angles = {4.0f, 5.0f, 6.0f};
+        vwp::WeaponProfile mp5;
+        mp5.id = "mp5";
+        mp5.name = "MP5";
+        mp5.hip.offset = {0.5f, -0.5f, 1.0f};
+        mp5.hip.angles = {1.0f, -2.0f, 3.0f};
+        mp5.shouldered.offset = {2.0f, 0.0f, -1.0f};
+        mp5.shouldered.angles = {10.0f, 0.0f, -4.0f};
+        profiles.weapons.push_back(mp5);
+
+        vwp::Document parsed;
+        std::string profileError;
+        const std::string serialized = vwp::SerializeDocument(profiles);
+        Check(
+            vwp::ParseDocument(serialized, &parsed, &profileError) &&
+                vwp::SerializeDocument(parsed) == serialized &&
+                vwp::DocumentRevision(parsed) ==
+                    vwp::DocumentRevision(profiles),
+            "V63 weapon/gunstock profiles should round-trip deterministically");
+
+        vwp::Pose global;
+        global.offset = {3.0f, 0.0f, 0.0f};
+        const vwp::EffectiveCalibration hip =
+            vwp::Resolve(parsed, true, global, "MP5", 0.0f);
+        const vwp::EffectiveCalibration shoulder =
+            vwp::Resolve(parsed, true, global, "mp5", 1.0f);
+        const vwp::EffectiveCalibration halfway =
+            vwp::Resolve(parsed, true, global, "mp5", 0.5f);
+        Check(
+            NearlyEqual(hip.pose.offset[0], 3.5f) &&
+                NearlyEqual(hip.pose.offset[1], -0.5f) &&
+                NearlyEqual(hip.pose.angles[0], 1.0f) &&
+                hip.weaponOverrideApplied && !hip.gunstockApplied,
+            "V63 hip calibration should layer the weapon override over the global baseline");
+        Check(
+            NearlyEqual(shoulder.pose.offset[0], 6.5f) &&
+                NearlyEqual(shoulder.pose.offset[1], 1.5f) &&
+                NearlyEqual(shoulder.pose.offset[2], 3.0f) &&
+                NearlyEqual(shoulder.pose.angles[0], 15.0f) &&
+                shoulder.weaponOverrideApplied && shoulder.gunstockApplied,
+            "V63 shouldered calibration should add gunstock and per-weapon shoulder deltas");
+        Check(
+            NearlyEqual(halfway.pose.offset[0], 5.0f) &&
+                NearlyEqual(halfway.pose.angles[0], 8.0f),
+            "V63 shoulder calibration should blend smoothly instead of snapping");
+        Check(
+            NearlyEqual(
+                vwp::Resolve(parsed, false, global, "mp5", 1.0f)
+                    .pose.offset[0],
+                3.0f),
+            "disabling V63 profiles should preserve the proven global baseline alone");
+
+        vwp::GunstockProfile importedStock;
+        Check(
+            vwp::ParseGunstock(
+                vwp::SerializeGunstock(profiles.gunstocks.front()),
+                &importedStock,
+                &profileError) &&
+                importedStock.id == "generic" &&
+                importedStock.shouldered.offset[2] == 3.0f,
+            "V63 shareable .vrstock profiles should round-trip independently");
+        Check(
+            !vwp::ParseDocument(
+                "VERSION=1\nACTIVE_GUNSTOCK=bad&id\n",
+                &parsed,
+                &profileError),
+            "V63 should reject unsafe profile identifiers");
+
+        vwp::Request request;
+        request.requestId = "weapon-capture-123";
+        request.command = vwp::Command::CaptureAim;
+        request.target = vwp::CaptureTarget::WeaponShouldered;
+        request.weaponId = "mp5";
+        request.gunstockId = "generic";
+        vwp::Request parsedRequest;
+        Check(
+            vwp::ParseRequest(
+                vwp::SerializeRequest(request),
+                &parsedRequest,
+                &profileError) &&
+                parsedRequest.requestId == request.requestId &&
+                parsedRequest.command == request.command &&
+                parsedRequest.target == request.target,
+            "V63 live reload/capture requests should round-trip through one shared protocol");
+        Check(
+            !vwp::ParseRequest(
+                "VERSION=1\nREQUEST_ID=weapon-capture-123\n"
+                "COMMAND=capture_aim\nTARGET=surprise\n"
+                "WEAPON_ID=mp5\nGUNSTOCK_ID=generic\n",
+                &parsedRequest,
+                &profileError),
+            "V63 should reject unknown live-capture targets");
+
+        vwp::RuntimeStatus runtimeStatus;
+        runtimeStatus.status = "captured";
+        runtimeStatus.requestId = request.requestId;
+        runtimeStatus.weaponIndex = 19;
+        runtimeStatus.weaponId = "mp5";
+        runtimeStatus.weaponName = "MP5";
+        runtimeStatus.activeGunstockId = "generic";
+        runtimeStatus.profileRevision = vwp::DocumentRevision(profiles);
+        runtimeStatus.effective = shoulder;
+        runtimeStatus.capturedAnglesValid = true;
+        runtimeStatus.capturedEffectiveAngles = {11.0f, -2.0f, 3.0f};
+        vwp::RuntimeStatus parsedStatus;
+        Check(
+            vwp::ParseRuntimeStatus(
+                vwp::SerializeRuntimeStatus(runtimeStatus),
+                &parsedStatus,
+                &profileError) &&
+                parsedStatus.status == "captured" &&
+                parsedStatus.weaponId == "mp5" &&
+                parsedStatus.capturedAnglesValid &&
+                parsedStatus.capturedEffectiveAngles[0] == 11.0f,
+            "V63 runtime weapon identity, effective pose, and capture result should round-trip");
+
+        const float identity[3][3] = {
+            {1.0f, 0.0f, 0.0f},
+            {0.0f, 1.0f, 0.0f},
+            {0.0f, 0.0f, 1.0f},
+        };
+        const float yawedController[3][3] = {
+            {0.0f, 1.0f, 0.0f},
+            {-1.0f, 0.0f, 0.0f},
+            {0.0f, 0.0f, 1.0f},
+        };
+        float capturedRotation[3][3] = {};
+        kisak::vr::weapon_calibration::AimAlignedEffectiveRotation(
+            identity,
+            yawedController,
+            capturedRotation);
+        float aligned[3][3] = {};
+        for (int row = 0; row < 3; ++row)
+        {
+            for (int column = 0; column < 3; ++column)
+            {
+                aligned[row][column] =
+                    capturedRotation[row][0] * yawedController[0][column] +
+                    capturedRotation[row][1] * yawedController[1][column] +
+                    capturedRotation[row][2] * yawedController[2][column];
+            }
+        }
+        Check(
+            NearlyEqual(aligned[0][0], 1.0f) &&
+                NearlyEqual(aligned[1][1], 1.0f) &&
+                NearlyEqual(aligned[2][2], 1.0f),
+            "V63 deliberate aim capture should solve an absolute correction without startup-pose calibration");
     }
 
     {
@@ -276,8 +493,98 @@ int main(const int argumentCount, char** arguments)
             "the runtime's saved layout response should round-trip exactly");
     }
 
+    {
+        vrc::Probe vd;
+        vd.is64BitWindows = true;
+        vd.gameExecutablePresent = true;
+        vd.modExecutablePresent = true;
+        vd.configuratorPresent = true;
+        vd.settingsPresent = true;
+        vd.launcherPresent = true;
+        vd.d3dx9Present = true;
+        vd.openXr32Registered = true;
+        vd.openXr32ManifestPresent = true;
+        vd.openXr32ManifestPath = "C:/Program Files/Virtual Desktop/VDXR/OpenXR.json";
+        vd.openXr32ManifestText = "{\"runtime\":{\"library_path\":\"VirtualDesktop.OpenXR-32.dll\"}}";
+        vd.openVrInstalled = true;
+        vd.gpuName = "NVIDIA GeForce RTX 3080 Ti";
+        vd.dedicatedVideoMemoryBytes = 12ull * 1024ull * 1024ull * 1024ull;
+        vd.backendPolicy = "auto";
+        const vrc::Report report = vrc::Evaluate(vd);
+        Check(
+            report.readyForLaunch &&
+                report.status == vrc::Status::Warning &&
+                report.runtimeFamily == vrc::RuntimeFamily::VirtualDesktop &&
+                report.recommendedBackend == "openxr" &&
+                report.recommendedGraphicsProfile == "native" &&
+                report.headsetTestRequired,
+            "V65 should recommend the primary tested VDXR/native path while requiring one live headset test");
+
+        vd.lastRuntimeStatus = "READY";
+        vd.lastRuntimeBackend = "OpenXR";
+        vd.lastRuntimeName = "VirtualDesktopXR";
+        vd.lastHeadsetName = "Meta Quest 3";
+        vd.lastLeftControllerProfile = "/interaction_profiles/meta/touch_controller_plus";
+        vd.lastRightControllerProfile = vd.lastLeftControllerProfile;
+        const vrc::Report proven = vrc::Evaluate(vd);
+        Check(
+            proven.status == vrc::Status::Ready &&
+                !proven.headsetTestRequired,
+            "V65 should become fully ready after a successful runtime/controller receipt");
+
+        const std::string serialized = vrc::SerializeReport(
+            vd,
+            proven,
+            "2026-08-10T20:00:00-0300");
+        Check(
+            serialized.find("STATUS=READY") != std::string::npos &&
+                serialized.find("RUNTIME_FAMILY=virtual_desktop") != std::string::npos &&
+                serialized.find("LAST_HEADSET=Meta Quest 3") != std::string::npos &&
+                serialized.find("RECOMMENDED_BACKEND=openxr") != std::string::npos &&
+                serialized.find("CHECK_runtime=READY") != std::string::npos,
+            "V65 support reports should preserve machine, runtime, recommendation, and per-check evidence");
+    }
+
+    {
+        vrc::Probe mismatch;
+        mismatch.is64BitWindows = true;
+        mismatch.gameExecutablePresent = true;
+        mismatch.modExecutablePresent = true;
+        mismatch.configuratorPresent = true;
+        mismatch.settingsPresent = true;
+        mismatch.launcherPresent = true;
+        mismatch.d3dx9Present = true;
+        mismatch.openXr64Registered = true;
+        mismatch.openXr64ManifestPresent = true;
+        mismatch.openXr64ManifestPath = "C:/Runtime/openxr64.json";
+        mismatch.gpuName = "8 GiB GPU";
+        mismatch.dedicatedVideoMemoryBytes = 8ull * 1024ull * 1024ull * 1024ull;
+        mismatch.backendPolicy = "auto";
+        const vrc::Report blocked = vrc::Evaluate(mismatch);
+        Check(
+            blocked.status == vrc::Status::Blocked &&
+                !blocked.readyForLaunch,
+            "V65 should block a 32-bit launch when only a 64-bit OpenXR runtime is available and OpenVR is absent");
+
+        mismatch.openVrInstalled = true;
+        mismatch.openVrEvidence = "openvrpaths.vrpath";
+        const vrc::Report fallback = vrc::Evaluate(mismatch);
+        Check(
+            fallback.readyForLaunch &&
+                fallback.status == vrc::Status::Warning &&
+                fallback.recommendedBackend == "openvr" &&
+                fallback.recommendedGraphicsProfile == "performance",
+            "V65 should identify the x86 OpenVR escape path and recommend Performance for an 8 GiB adapter");
+
+        mismatch.backendPolicy = "openxr";
+        const vrc::Report forced = vrc::Evaluate(mismatch);
+        Check(
+            forced.status == vrc::Status::Blocked,
+            "V65 should honor an explicit OpenXR-only policy instead of silently changing backends");
+    }
+
     const auto& catalog = kc::SettingsCatalog();
-    Check(catalog.size() == 125u, "V61 should expose 125 verified settings");
+    Check(catalog.size() == 142u, "V65 should retain all 142 verified settings");
     Check(vi::kActionCount == 23u, "V57 input V4 should expose 23 actions");
 
     std::set<std::string> keys;
@@ -290,6 +597,178 @@ int main(const int argumentCount, char** arguments)
     auto messages = kc::ValidateSettings(values);
     Check(!HasError(messages, "VR_CUSTOM_MODE"), "built-in defaults should validate");
     Check(messages.empty(), "built-in defaults should have no warnings or errors");
+    Check(
+        values["KISAK_VR_UNIT_SYSTEM"] == "metric" &&
+            kc::MeasurementUnitsFromSettings(values) ==
+                kc::MeasurementUnitSystem::Metric,
+        "V62 should default the configurator to metric presentation");
+    Check(
+        values["KISAK_VR_WEAPON_PROFILES_ENABLED"] == "1",
+        "V63 should enable per-weapon and gunstock layering by default");
+    Check(
+        values["KISAK_VR_DOMINANT_HAND"] == "right" &&
+            values["KISAK_VR_SUPPORT_GRIP_MODE"] == "hold" &&
+            values["KISAK_VR_OBJECT_GRIP_MODE"] == "hold" &&
+            values["KISAK_VR_MELEE_MODE"] == "both" &&
+            values["KISAK_VR_GRENADE_BELT_LAYOUT"] == "handed",
+        "V64 should preserve the tested right-handed behavior while enabling optional physical interactions");
+
+    {
+        kc::SettingsMap handed = values;
+        const std::string originalAttack = handed["KISAK_VR_BIND_ATTACK"];
+        const std::string originalMove = handed["KISAK_VR_BIND_MOVE_AXIS"];
+        Check(
+            kc::ApplyDominantHand("left", &handed) &&
+                handed["KISAK_VR_DOMINANT_HAND"] == "left" &&
+                handed["KISAK_VR_BIND_ATTACK"] == "left.trigger" &&
+                handed["KISAK_VR_BIND_MOVE_AXIS"] == "right.primary_axis" &&
+                kc::ValidateSettings(handed).empty(),
+            "V64 left-handed selection should mirror bindings and remain fully valid");
+        Check(
+            kc::ApplyDominantHand("right", &handed) &&
+                handed["KISAK_VR_BIND_ATTACK"] == originalAttack &&
+                handed["KISAK_VR_BIND_MOVE_AXIS"] == originalMove,
+            "V64 handedness should round-trip custom controller sources without drift");
+    }
+
+    std::size_t physicalSettingCount = 0u;
+    for (const kc::SettingDefinition& definition : catalog)
+    {
+        if (definition.measurementKind == kc::MeasurementKind::None)
+        {
+            continue;
+        }
+
+        ++physicalSettingCount;
+        for (const kc::MeasurementUnitSystem units : {
+                 kc::MeasurementUnitSystem::Metric,
+                 kc::MeasurementUnitSystem::Imperial})
+        {
+            std::string displayed;
+            std::string canonical;
+            Check(
+                kc::CanonicalValueToDisplay(
+                    definition,
+                    units,
+                    definition.defaultValue,
+                    &displayed) &&
+                    kc::DisplayValueToCanonical(
+                        definition,
+                        units,
+                        displayed,
+                        &canonical),
+                "physical setting should convert in both directions: " +
+                    definition.key);
+
+            const double original = std::stod(definition.defaultValue);
+            const double recovered = std::stod(canonical);
+            const double tolerance =
+                0.5001 * std::pow(10.0, -definition.decimalPlaces);
+            Check(
+                std::abs(original - recovered) <= tolerance,
+                "unit display round-trip should preserve the canonical calibration: " +
+                    definition.key);
+        }
+    }
+    Check(
+        physicalSettingCount == 22u,
+        "V64 should classify all 22 physical calibration/interaction fields and no HUD pixel fields");
+
+    const kc::SettingDefinition* const standingHeight =
+        kc::FindSetting("KISAK_VR_STANDING_EYE_HEIGHT");
+    const kc::SettingDefinition* const weaponForward =
+        kc::FindSetting("KISAK_VR_WEAPON_OFFSET_FORWARD");
+    const kc::SettingDefinition* const grenadeDrop =
+        kc::FindSetting("KISAK_VR_GRENADE_DROP_SPEED");
+    const kc::SettingDefinition* const scopeForward =
+        kc::FindSetting("KISAK_VR_SCOPE_FORWARD_METERS");
+    std::string converted;
+    std::string canonical;
+    Check(
+        standingHeight != nullptr &&
+            kc::CanonicalValueToDisplay(
+                *standingHeight,
+                kc::MeasurementUnitSystem::Metric,
+                "60.0",
+                &converted) &&
+            converted == "152.4" &&
+            kc::DisplaySettingLabel(
+                *standingHeight,
+                kc::MeasurementUnitSystem::Metric) ==
+                "Standing virtual eye height (cm)",
+        "60 game inches should be presented as 152.4 cm");
+    Check(
+        standingHeight != nullptr &&
+            kc::DisplayValueToCanonical(
+                *standingHeight,
+                kc::MeasurementUnitSystem::Metric,
+                "106.7",
+                &canonical) &&
+            canonical == "42.00" &&
+            kc::DisplayValueToCanonical(
+                *standingHeight,
+                kc::MeasurementUnitSystem::Metric,
+                "213.4",
+                &canonical) &&
+            canonical == "84.00",
+        "rounded metric range endpoints should snap to the exact canonical limits");
+    Check(
+        weaponForward != nullptr &&
+            kc::CanonicalValueToDisplay(
+                *weaponForward,
+                kc::MeasurementUnitSystem::Metric,
+                "3.00",
+                &converted) &&
+            converted == "7.62" &&
+            kc::DisplayValueToCanonical(
+                *weaponForward,
+                kc::MeasurementUnitSystem::Metric,
+                converted,
+                &canonical) &&
+            canonical == "3.00",
+        "weapon offsets should round-trip between game inches and centimeters exactly");
+    Check(
+        grenadeDrop != nullptr &&
+            kc::CanonicalValueToDisplay(
+                *grenadeDrop,
+                kc::MeasurementUnitSystem::Metric,
+                "35",
+                &converted) &&
+            converted == "89" &&
+            kc::DisplaySettingLabel(
+                *grenadeDrop,
+                kc::MeasurementUnitSystem::Metric) ==
+                "Grenade drop threshold (cm/s)",
+        "physical hand speeds should use centimeters per second in metric mode");
+    Check(
+        scopeForward != nullptr &&
+            kc::CanonicalValueToDisplay(
+                *scopeForward,
+                kc::MeasurementUnitSystem::Metric,
+                "-0.100",
+                &converted) &&
+            converted == "-10.0" &&
+            kc::CanonicalValueToDisplay(
+                *scopeForward,
+                kc::MeasurementUnitSystem::Imperial,
+                "-0.100",
+                &canonical) &&
+            canonical == "-3.94",
+        "scope meters should be presented as centimeters or inches without changing runtime storage");
+    values["KISAK_VR_STANDING_EYE_HEIGHT"] = "90.0";
+    messages = kc::ValidateSettings(values);
+    Check(
+        std::any_of(
+            messages.begin(),
+            messages.end(),
+            [](const kc::ValidationMessage& message)
+            {
+                return message.key == "KISAK_VR_STANDING_EYE_HEIGHT" &&
+                    message.message.find("106.7 through 213.4 cm") !=
+                        std::string::npos;
+            }),
+        "metric range errors should be reported in the units shown by the editor");
+    values = kc::BuiltInDefaults();
     {
         vh::Layout edited = kc::HudLayoutFromSettings(values);
         vh::MoveElement(
@@ -466,7 +945,7 @@ int main(const int argumentCount, char** arguments)
         Check(packaged.values == values, "packaged release defaults should match the configurator catalog");
         Check(
             packaged.profileName == "Tested Quest 3" &&
-                packaged.revision == "v61-release-defaults",
+                packaged.revision == "beta9-unified-calibration-interactions-defaults",
             "packaged defaults should identify their active profile and revision");
         Check(
             packaged.activePath == releaseDefaults,
@@ -484,21 +963,63 @@ int main(const int argumentCount, char** arguments)
                 launcher.find("Calibration-Status.txt") != std::string::npos &&
                 launcher.find("HUD-Editor-Request.txt") != std::string::npos &&
                 launcher.find("HUD-Editor-Status.txt") != std::string::npos &&
+                launcher.find("VR-Weapon-Profiles.ini") !=
+                    std::string::npos &&
+                launcher.find("Weapon-Calibration-Request.txt") !=
+                    std::string::npos &&
+                launcher.find("Weapon-Calibration-Status.txt") !=
+                    std::string::npos &&
+                launcher.find("Compatibility-Report.txt") !=
+                    std::string::npos &&
+                launcher.find("--compatibility-report") !=
+                    std::string::npos &&
+                launcher.find("compatibility preflight found a launch blocker") !=
+                    std::string::npos &&
                 launcher.find("--validate") != std::string::npos,
-            "the launcher should validate overrides and write an effective-settings receipt");
+            "the launcher should validate overrides, run beta.9 preflight, and publish every guarded state path");
         Check(
             runtime.find("STATUS=RUNTIME_ACCEPTED") != std::string::npos &&
+                runtime.find("RUNTIME_MEASUREMENT_UNITS") !=
+                    std::string::npos &&
+                runtime.find("RUNTIME_ACTIVE_EYE_HEIGHT_DISPLAY") !=
+                    std::string::npos &&
                 runtime.find("RUNTIME_WEAPON_OFFSET") != std::string::npos &&
                 runtime.find("RUNTIME_MANUAL_RELOAD") != std::string::npos &&
+                runtime.find("RUNTIME_DOMINANT_HAND") !=
+                    std::string::npos &&
+                runtime.find("RUNTIME_SUPPORT_GRIP_MODE") !=
+                    std::string::npos &&
+                runtime.find("RUNTIME_RELOAD_EJECT_MODE") !=
+                    std::string::npos &&
+                runtime.find("RUNTIME_GRENADE_BELT_LAYOUT") !=
+                    std::string::npos &&
+                runtime.find("RUNTIME_MELEE_MODE") !=
+                    std::string::npos &&
+                runtime.find("WeaponControllerIndex") !=
+                    std::string::npos &&
+                runtime.find("OffHandControllerIndex") !=
+                    std::string::npos &&
+                runtime.find("MeleeGestureQualifies") !=
+                    std::string::npos &&
+                runtime.find("VrManualMagazineReloadStage::HoldingLoaded") !=
+                    std::string::npos &&
+                runtime.find("VR_ApplyOffhandControllerHaptic") !=
+                    std::string::npos &&
                 runtime.find("STATUS=RUNTIME_WEAPON_POSE_APPLIED") !=
                     std::string::npos &&
                 runtime.find("RUNTIME_WEAPON_ALIGNMENT_ERROR") !=
+                    std::string::npos &&
+                runtime.find("RUNTIME_WEAPON_DISPLAY_UNITS") !=
+                    std::string::npos &&
+                runtime.find("RUNTIME_WEAPON_OFFSET_APPLIED_DISPLAY") !=
                     std::string::npos &&
                 runtime.find("CalibratedGripTargetWorld") !=
                     std::string::npos &&
                 runtime.find("STATUS=RUNTIME_HEIGHT_APPLIED") !=
                     std::string::npos &&
                 runtime.find("STATUS=RUNTIME_CALIBRATION_APPLIED") !=
+                    std::string::npos &&
+                runtime.find("RUNTIME_CALIBRATION_DISPLAY_UNITS") !=
                     std::string::npos &&
                 runtime.find("VR_RecenterHeadPose") !=
                     std::string::npos &&
@@ -511,8 +1032,28 @@ int main(const int argumentCount, char** arguments)
                 runtime.find("VR_ProcessHudEditorRequest") !=
                     std::string::npos &&
                 runtime.find("VR_HudEditorConsumesGameplayInput") !=
+                    std::string::npos &&
+                runtime.find("g_vrWeaponAttachmentBaselines") !=
+                    std::string::npos &&
+                runtime.find("VR_ProcessWeaponCalibrationRequest") !=
+                    std::string::npos &&
+                runtime.find("STATUS=RUNTIME_WEAPON_PROFILE_APPLIED") !=
+                    std::string::npos &&
+                runtime.find("effective.pose.offset.data()") !=
+                    std::string::npos &&
+                runtime.find("(std::max)(twoHandBlend, adsFraction)") !=
+                    std::string::npos &&
+                runtime.find("AimAlignedEffectiveRotation") !=
+                    std::string::npos &&
+                runtime.find("STATUS=RUNTIME_COMPATIBILITY_READY") !=
+                    std::string::npos &&
+                runtime.find("RUNTIME_COMPATIBILITY_RUNTIME") !=
+                    std::string::npos &&
+                runtime.find("RUNTIME_COMPATIBILITY_HEADSET") !=
+                    std::string::npos &&
+                runtime.find("RUNTIME_COMPATIBILITY_LEFT_CONTROLLER") !=
                     std::string::npos,
-            "the game should acknowledge settings, calibration, and the live HUD editor lifecycle");
+            "the game should acknowledge settings, calibration, compatibility, live HUD editing, and per-weapon/gunstock lifecycle receipts");
         const std::size_t lostPoseStatus =
             runtime.find("\"NO_TRACKED_POSE\"");
         const std::size_t heightCommit =
@@ -538,6 +1079,8 @@ int main(const int argumentCount, char** arguments)
             root / "src/cgame/cg_main.cpp");
         const std::string debugDraw = Read(
             root / "src/cgame/cg_draw_debug.cpp");
+        const std::string weapons = Read(
+            root / "src/cgame/cg_weapons.cpp");
         Check(
             screenPlacement.find("layout.ammoOffsetX") !=
                     std::string::npos &&
@@ -566,20 +1109,52 @@ int main(const int argumentCount, char** arguments)
                     "if (!cg_drawPerformanceWarnings->current.enabled)") !=
                     std::string::npos,
             "V61 should keep the diagnostic FPS/stat overlays opt-in");
+        Check(
+            weapons.find("vrCalibrationWeapon->szInternalName") !=
+                    std::string::npos &&
+                weapons.find("vrCalibrationWeapon->szDisplayName") !=
+                    std::string::npos &&
+                weapons.find("ps->fWeaponPosFrac") !=
+                    std::string::npos,
+            "V63 should pass stable weapon identity and ADS blend into the runtime calibration path");
     }
 
     if (argumentCount >= 5)
     {
         const std::string configurator = Read(arguments[4]);
         Check(
-            configurator.find("Height & Recenter") != std::string::npos &&
+            configurator.find("Setup & Compatibility") !=
+                    std::string::npos &&
+                configurator.find("v0.10.0-beta.9") !=
+                    std::string::npos &&
+                configurator.find("Rescan system") !=
+                    std::string::npos &&
+                configurator.find("Apply recommended") !=
+                    std::string::npos &&
+                configurator.find("Copy support report") !=
+                    std::string::npos &&
+                configurator.find("--compatibility-report") !=
+                    std::string::npos &&
+                configurator.find("Handedness, units, comfort, controls, HUD, weapon profiles, and calibration will not change") !=
+                    std::string::npos &&
+                configurator.find("Height & Recenter") != std::string::npos &&
+                configurator.find("Beta.9 unified setup") !=
+                    std::string::npos &&
                 configurator.find("Recenter now") != std::string::npos &&
                 configurator.find("Measure standing height") !=
                     std::string::npos &&
                 configurator.find("Apply seated calibration") !=
                     std::string::npos &&
+                configurator.find("1 cm shorter") != std::string::npos &&
+                configurator.find("1 cm taller") != std::string::npos &&
                 configurator.find("1 in shorter") != std::string::npos &&
                 configurator.find("1 in taller") != std::string::npos &&
+                configurator.find("lastRenderedCanonicalValue") !=
+                    std::string::npos &&
+                configurator.find("DisplayValueToCanonical") !=
+                    std::string::npos &&
+                configurator.find("displayDelta / 2.54") !=
+                    std::string::npos &&
                 configurator.find("Open desktop visual editor") !=
                     std::string::npos &&
                 configurator.find("Edit live in headset") !=
@@ -587,8 +1162,20 @@ int main(const int argumentCount, char** arguments)
                 configurator.find("Apply layout") !=
                     std::string::npos &&
                 configurator.find("Snap anchors: ON") !=
+                    std::string::npos &&
+                configurator.find("Open calibration editor") !=
+                    std::string::npos &&
+                configurator.find("Use equipped weapon") !=
+                    std::string::npos &&
+                configurator.find("per-weapon shouldered/ADS delta") !=
+                    std::string::npos &&
+                configurator.find("Apply live") !=
+                    std::string::npos &&
+                configurator.find("Guided aim capture") !=
+                    std::string::npos &&
+                configurator.find("*.vrstock") !=
                     std::string::npos,
-            "the V61 menu should expose both complete visual HUD workflows");
+            "the beta.9 menu should unify compatibility with handed interactions, weapon/gunstock, metric, calibration, and both visual HUD workflows");
     }
 
     const std::string mixed =
@@ -707,6 +1294,14 @@ int main(const int argumentCount, char** arguments)
     values["KISAK_VR_BELT_GRAB_RADIUS"] = "8.0";
     messages = kc::ValidateSettings(values);
     Check(HasError(messages, "KISAK_VR_BELT_GRAB_RADIUS"), "overlapping belt zones should be rejected");
+
+    values = kc::BuiltInDefaults();
+    values["KISAK_VR_RELOAD_EJECT_MODE"] = "pull";
+    values["KISAK_VR_RELOAD_PULL_DISTANCE"] = "6.0";
+    messages = kc::ValidateSettings(values);
+    Check(
+        HasError(messages, "KISAK_VR_RELOAD_PULL_DISTANCE"),
+        "physical pull distance should remain outside the magazine-well insertion radius");
 
     values = kc::BuiltInDefaults();
     values["KISAK_VR_GRENADE_MIN_STRENGTH"] = "1.00";
@@ -1082,6 +1677,7 @@ int main(const int argumentCount, char** arguments)
     values["KISAK_VR_WEAPON_OFFSET_LEFT"] = "-2.50";
     values["KISAK_VR_WEAPON_OFFSET_UP"] = "4.75";
     values["KISAK_VR_MANUAL_RELOAD"] = "0";
+    values["KISAK_VR_UNIT_SYSTEM"] = "imperial";
     kc::SaveResult saved = kc::SaveUserSettingsAtomic(userFile, values, "Test profile");
     Check(saved.success, "first atomic save should succeed: " + saved.error);
     Check(saved.readBackVerified, "a successful save must include disk read-back verification");
@@ -1094,9 +1690,9 @@ int main(const int argumentCount, char** arguments)
     Check(saved.backupPath.empty(), "first save should not create a backup");
     Check(Read(userFile).find("\r\n") != std::string::npos, "saved batch file should use CRLF");
     Check(
-        Read(userFile).find("generated by v0.10.0-beta.8 Configurator (Visual HUD, Input V4)") !=
+        Read(userFile).find("generated by beta.9 Configurator (Unified Setup/Compatibility)") !=
             std::string::npos,
-        "saved settings should identify the beta.8 visual-HUD schema");
+        "saved settings should identify the beta.9 unified-compatibility schema");
     Check(
         Read(userFile).find("KISAK_VR_SETTINGS_REVISION=" + saved.revision) !=
             std::string::npos,
@@ -1112,6 +1708,9 @@ int main(const int argumentCount, char** arguments)
     Check(
         loaded.values["KISAK_VR_MANUAL_RELOAD"] == "0",
         "automatic/native reload mode should round-trip exactly");
+    Check(
+        loaded.values["KISAK_VR_UNIT_SYSTEM"] == "imperial",
+        "the selected measurement presentation should round-trip exactly");
     Check(
         loaded.profileName == "Test profile" &&
             loaded.revision == saved.revision &&

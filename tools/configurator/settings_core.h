@@ -19,6 +19,20 @@ enum class SettingType
     Binding,
 };
 
+enum class MeasurementUnitSystem
+{
+    Metric,
+    Imperial,
+};
+
+enum class MeasurementKind
+{
+    None,
+    Inches,
+    InchesPerSecond,
+    Meters,
+};
+
 enum class SettingPage
 {
     Quick,
@@ -51,6 +65,9 @@ struct SettingDefinition
     int decimalPlaces = 0;
     bool advanced = false;
     std::vector<SettingChoice> choices;
+    MeasurementKind measurementKind = MeasurementKind::None;
+    int metricDecimalPlaces = 0;
+    int imperialDecimalPlaces = 0;
 };
 
 struct ValidationMessage
@@ -104,6 +121,26 @@ const std::vector<SettingDefinition>& SettingsCatalog();
 const SettingDefinition* FindSetting(const std::string& key);
 SettingsMap BuiltInDefaults();
 
+MeasurementUnitSystem MeasurementUnitsFromSettings(
+    const SettingsMap& values);
+const char* MeasurementUnitSystemId(MeasurementUnitSystem units);
+std::string MeasurementUnitSuffix(
+    const SettingDefinition& definition,
+    MeasurementUnitSystem units);
+std::string DisplaySettingLabel(
+    const SettingDefinition& definition,
+    MeasurementUnitSystem units);
+bool CanonicalValueToDisplay(
+    const SettingDefinition& definition,
+    MeasurementUnitSystem units,
+    const std::string& canonicalValue,
+    std::string* displayValue);
+bool DisplayValueToCanonical(
+    const SettingDefinition& definition,
+    MeasurementUnitSystem units,
+    const std::string& displayValue,
+    std::string* canonicalValue);
+
 kisak::vr::hud::Layout HudLayoutFromSettings(
     const SettingsMap& values);
 void ApplyHudLayoutToSettings(
@@ -139,6 +176,14 @@ SaveResult SaveUserSettingsAtomic(
 
 bool ApplyPreset(
     const std::string& presetName,
+    SettingsMap* values);
+
+// Changes the physical weapon hand and mirrors every configured controller
+// source exactly once when the requested handedness differs from the active
+// value. This preserves custom chords instead of replacing them with a fixed
+// controller layout.
+bool ApplyDominantHand(
+    const std::string& dominantHand,
     SettingsMap* values);
 
 std::vector<std::string> PresetNames();

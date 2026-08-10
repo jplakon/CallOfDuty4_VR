@@ -294,7 +294,7 @@ static void VR_RegisterFloatingLeftHandCalibrationDvars()
 
     Com_Printf(
         0,
-        "[VR][HANDS] Model-aware free left-hand fit is "
+        "[VR][HANDS] Model-aware free off-hand fit is "
         "enabled: offset forward %.2f, left %.2f, up %.2f; "
         "pitch %.1f, yaw %.1f, roll %.1f; weapon-grip radius %.1f.  "
         "The vr_leftHandModel* dvars update live and are archived; V18's "
@@ -4519,7 +4519,7 @@ VR_GetManualGrenadeRenderObject(
 
         Com_Printf(
             0,
-            "[VR][GRENADE] Prepared tracked left-hand model '%s' "
+            "[VR][GRENADE] Prepared tracked off-hand model '%s' "
             "for weapon %u.\n",
             XModelGetName(projectileModel),
             weaponNum);
@@ -5489,7 +5489,7 @@ void __cdecl CG_AddPlayerWeapon(
                         Com_Printf(
                             0,
                             "[VR] Aligned viewmodel grip tag '%s' "
-                            "to the tracked right grip pose.\n",
+                            "to the tracked weapon-hand grip pose.\n",
                             selectedTagName);
 
                         loggedVrGripTagAlignment = true;
@@ -7060,6 +7060,8 @@ void __cdecl CG_AddViewWeapon(int32_t localClientNum)
                 AxisToQuat(axis, placement.base.quat);
 
                 float vrAbsoluteWeaponAxis[3][3] = {};
+                const WeaponDef* const vrCalibrationWeapon =
+                    BG_GetWeaponDef(weaponIndex);
 
                 memcpy(
                     vrAbsoluteWeaponAxis,
@@ -7067,6 +7069,14 @@ void __cdecl CG_AddViewWeapon(int32_t localClientNum)
                     sizeof(vrAbsoluteWeaponAxis));
 
                 if (VR_ApplyRightControllerToWeaponPlacement(
+                        weaponIndex,
+                        vrCalibrationWeapon != nullptr
+                            ? vrCalibrationWeapon->szInternalName
+                            : nullptr,
+                        vrCalibrationWeapon != nullptr
+                            ? vrCalibrationWeapon->szDisplayName
+                            : nullptr,
+                        ps->fWeaponPosFrac,
                         cgameGlob->refdef.vieworg,
                         cgameGlob->refdef.viewaxis,
                         placement.base.origin,
@@ -7150,7 +7160,18 @@ void __cdecl CG_AddViewWeapon(int32_t localClientNum)
 
                 AxisToQuat(axis, placement.base.quat);
 
+                const WeaponDef* const vrCalibrationWeapon =
+                    BG_GetWeaponDef(weaponIndex);
+
                 if (VR_ApplyRightControllerToWeaponPlacement(
+                        weaponIndex,
+                        vrCalibrationWeapon != nullptr
+                            ? vrCalibrationWeapon->szInternalName
+                            : nullptr,
+                        vrCalibrationWeapon != nullptr
+                            ? vrCalibrationWeapon->szDisplayName
+                            : nullptr,
+                        ps->fWeaponPosFrac,
                         cgameGlob->refdef.vieworg,
                         cgameGlob->refdef.viewaxis,
                         placement.base.origin,

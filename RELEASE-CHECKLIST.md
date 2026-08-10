@@ -1,6 +1,6 @@
 # Release checklist
 
-This checklist is for the `v0.10.0-beta.8` release candidate.
+This checklist is for `v0.10.0-beta.9` over `v0.10.0-beta.8`.
 
 ## Documentation blockers
 
@@ -41,17 +41,47 @@ This checklist is for the `v0.10.0-beta.8` release candidate.
   `KisakCOD-VR-Input-Mapper`, and `KisakCOD-VR-Configurator-Tests` in Win32
   Release configuration from the committed source.
 - Run the settings tests against `release/package/VR-Settings.bat` and require
-  all 125 catalog settings plus the launcher/runtime/configurator receipts to
-  pass.
+  all 142 catalog settings plus beta.9 compatibility, launcher, runtime, and
+  configurator receipts to pass.
 - Confirm `git status --porcelain --untracked-files=no` remains empty.
 - Copy nothing from `bin/Debug` into the player package.
 - Test `bin/Release/KisakCOD-sp.exe` in a clean COD4 installation.
 
 ## Runtime test
 
+- Open **Setup & Compatibility** on the primary VDXR/Quest 3/RTX 3080 Ti
+  system. Require file, DirectX, OS, GPU, and 32-bit OpenXR checks to pass;
+  before the first beta.9 run, require honest headset/controller warnings.
+- Apply the recommendation only after verifying its confirmation lists the
+  exact backend/graphics delta. Snapshot all other settings before/after and
+  require handedness, units, comfort, input, HUD, height, interactions, and
+  weapon/gunstock calibration to remain identical.
+- Run diagnostics, rescan, and require the runtime/headset/controller receipt
+  to replace the offline warnings with live proof. Test Copy/Open report and
+  inspect every report field for support relevance and bounded privacy.
+- Test the compatibility matrix: VDXR OpenXR, another valid 32-bit OpenXR
+  runtime, 64-bit-only OpenXR with and without OpenVR, forced OpenXR missing,
+  forced OpenVR missing, missing DirectX, and an incomplete game/mod folder.
+- Launch from the batch file with one Warning and one Blocked configuration.
+  Require warnings to continue, blockers to stop before KisakCOD-sp.exe, and
+  both paths to produce `Compatibility-Report.txt`.
 - Start a new campaign.
 - Test save/resume and at least one checkpoint reload.
 - Test ordinary rifles, grenades, use, reload, sprint, crouch/prone, and melee.
+- Switch from right- to left-handed and verify the actual weapon pose, muzzle,
+  scope, support/reload/grenade roles, HUD pointer, movement/turn axes, and
+  haptics change physical sides in both OpenXR and OpenVR.
+- Customize a multi-input chord, change handedness, and confirm every binding
+  mirrors exactly once. Switch back and require an exact round trip.
+- Test semantic weapon/off-hand and fixed physical-left/right movement
+  directions.
+- Test hold, toggle, and proximity support grip plus hold/toggle object grip.
+- Test button and physical-pull magazine ejection, release and contact
+  insertion, all magazine-hip choices, and fixed/handed grenade belt layouts.
+- Test button, gesture, and combined melee modes. Require a forward thrust over
+  the speed threshold to trigger and reject a similarly fast sideways swing.
+- Disable haptics, vary haptic strength, and disable muzzle obstruction; verify
+  each accepted value appears in `Active-VR-Settings.txt`.
 - Test both snap and analog smooth turning with the Turn action bound to the
   right and left axes, including partial/full deflection and neutral behavior.
 - Test jump and tap/hold stance on several face, trigger, grip, click, and
@@ -90,9 +120,20 @@ This checklist is for the `v0.10.0-beta.8` release candidate.
   and that the crosshair remains at optical center.
 - Confirm `Active-VR-Settings.txt` records all five accepted groups and a
   `STATUS=RUNTIME_HUD_EDITOR_SAVED` or canceled receipt with the request ID.
+- Create separate MP5 and pistol profiles, verify their hip corrections do not
+  cross-contaminate, and confirm deleting either falls back to the global fit.
+- Create two gunstock profiles, switch the active stock, export/import one as
+  `.vrstock`, and verify exact file read-back plus live runtime revision.
+- Capture a shouldered aim rotation with the controller held normally, restart
+  with the controller pointed upward, and confirm startup pose never changes
+  the saved calibration or absolute live aim.
+- Exercise hip-to-two-hand, ADS, release, weapon switching, muzzle obstruction,
+  bullets, haptics, and grip-tag alignment with nonzero profile translations.
 - Test ejecting, hip-drawing, rotating, inserting, and dropping a physical
   magazine on supported rifles, SMGs, and pistols.
-- Test the tracked left hand in free, rifle-grip, and magazine-grip states.
+- Test the tracked off hand in free, rifle-grip, and magazine-grip states on
+  both dominant-hand selections. Record the known non-mirrored authored glove
+  geometry separately from functional hand-routing defects.
 - Confirm physical body turns and snap turns do not change hand alignment.
 - Test the physical sniper scope.
 - Confirm `3072x1536` is rejected and both documented packed presets retain the
@@ -118,9 +159,10 @@ This checklist is for the `v0.10.0-beta.8` release candidate.
 
 ## Tag and package
 
-- Create annotated tag `v0.10.0-beta.8` only after Controller Input V4 and the
-  cumulative menu, rendering, crash-diagnostic, tracked-hand, reload, grenade,
-  and campaign state are validated.
+- Create annotated tag `v0.10.0-beta.9` only after the compatibility,
+  Metric/Imperial, per-weapon/gunstock, handed-interaction, controller, menu,
+  rendering, crash-diagnostic, tracked-hand, reload, grenade, and campaign
+  state is validated.
 - Run `tools/package_release.py`.
 - The packager must refuse to run if any documentation placeholder or
   controller-map `VERIFY` marker remains.

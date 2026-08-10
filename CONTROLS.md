@@ -15,28 +15,25 @@ main thumbstick, or the trackpad on a Vive wand.
 
 | Action | Default binding |
 |---|---|
-| Move | Left primary axis; movement follows the configured head/body/hand direction |
-| Turn | Right primary axis; configurable snap or smooth turning |
-| Fire | Right trigger |
+| Move | Off-hand primary axis; movement follows the configured head/body/hand direction |
+| Turn | Weapon-hand primary axis; configurable snap or smooth turning |
+| Fire | Weapon-hand trigger |
 | Aim / ADS | Physical two-hand shouldering; optional button override is unbound |
 | Jump | Right primary axis up; left trigger is the alternate default |
-| Use / interact | Left primary action |
-| Reload / eject magazine | Right primary action |
-| Sprint | Left thumbstick click |
-| Melee | Right thumbstick click |
-| Stance | Right secondary action; tap changes stance and hold toggles prone |
-| Lower stance | Right primary axis down; lowers one step |
-| Next weapon | Left secondary action |
-| Native off-hand action | Unbound; physical grenades use the left grip |
-| Support hand / physical interaction | Left squeeze |
-| Pause | Left menu |
-| Menu confirm / back | Right primary / right secondary |
-| Menu cursor | Left primary axis |
-| Grenade launcher / slot 5 | Right thumbrest touch + left primary axis up |
-| Night vision | Right thumbrest touch + left primary axis down |
-| Airstrike / slot 6 | Right thumbrest touch + left primary axis left |
-| C4 / slot 7 | Right thumbrest touch + left primary axis right |
-| Mounted-scope zoom | Left primary axis |
+| Use / interact | Off-hand primary action |
+| Reload / eject magazine | Weapon-hand primary action |
+| Sprint | Off-hand thumbstick click |
+| Melee | Weapon-hand thumbstick click |
+| Stance | Weapon-hand secondary action; tap changes stance and hold toggles prone |
+| Lower stance | Weapon-hand primary axis down; lowers one step |
+| Next weapon | Off-hand secondary action |
+| Native off-hand action | Unbound; physical grenades use the off-hand grip |
+| Support hand / physical interaction | Off-hand squeeze |
+| Pause | Off-hand menu |
+| Menu confirm / back | Weapon-hand primary / weapon-hand secondary |
+| Menu cursor | Off-hand primary axis |
+| Mission shortcuts | Weapon-hand thumbrest touch + off-hand primary-axis direction |
+| Mounted-scope zoom | Off-hand primary axis |
 
 The upward gesture is shown directly as the primary binding for **Jump**. It
 jumps while standing and uses COD4's native `+gostand` behavior to
@@ -76,6 +73,34 @@ remains:
 | Left | Airstrike / mission slot 6 |
 | Right | C4 / mission slot 7 |
 
+## Per-weapon and gunstock calibration
+
+Open **Weapons & Hands** and choose **Open calibration editor**. Keep the six
+global weapon-hand values as the baseline that works for most weapons. Beta.9
+then resolves the rendered pose in this order:
+
+1. global Forward/Left/Up and Pitch/Yaw/Roll baseline;
+2. the equipped weapon's hip-fire delta;
+3. the active physical-gunstock delta, blended while shouldering/ADS;
+4. the equipped weapon's shouldered/ADS delta, blended over the same interval.
+
+Use **Use equipped weapon** after entering a mission. This records COD4's
+stable internal weapon id rather than relying on a display name. Adjust the
+hip-fire layer first, then select the shouldered/ADS or gunstock layer and use
+**Apply live**. Moving the support hand onto or off the foregrip and entering
+or leaving ADS should transition without a pose snap.
+
+For a physical stock, create or select a gunstock and choose **Guided aim
+capture** from its layer. Shoulder it normally and aim at a fixed point ahead
+during the five-second countdown. The capture solves rotation only; use
+Forward/Left/Up for the final sight and cheek-weld position. The capture is
+explicit and uses the current absolute controller orientation—it does not
+derive a hidden calibration from the pose held at game startup.
+
+Use **Export gunstock** to share one guarded `.vrstock` profile and **Import
+gunstock** to add it on another installation. Weapon overrides stay local
+because weapon fit can depend on the player's hands and preferred stance.
+
 ### Press-to-bind capture
 
 Use **Bind...** beside the primary or alternate dropdown to capture a physical
@@ -114,17 +139,29 @@ the configurator's conflict warnings and test the result in-game.
 
 ## Physical interactions
 
-The tracked-hands build keeps COD4's combined hand mesh and uses two-bone
-shoulder/elbow IK to place the left wrist at the controller pose. The right hand
-follows the rifle. Set `KISAK_VR_TRACKED_HANDS=0` to restore the original weapon
-animation. Continuous touch-driven finger curling is not implemented.
+Beta.9's **Dominant hand** setting assigns semantic weapon-hand and off-hand roles
+to the physical controllers. Changing it in the configurator also mirrors all
+controller bindings once. Switching back restores the original sides, including
+custom multi-input chords. The default is right-handed.
 
-- Supported detachable-magazine weapons use physical reloading. Activate the
-  configured Reload action to eject, use the configured Support-hand action at
-  the left hip to draw, then release at the magazine well to insert.
-- With the support hand released, press its configured binding inside the left
-  hip zone for a frag or the right hip zone for the equipped tactical grenade.
-  Hold/cook, physically swing, and release to throw.
+The tracked-hands build keeps COD4's authored combined hand mesh and uses
+two-bone shoulder/elbow IK to place the off-hand wrist at its controller pose.
+Set `KISAK_VR_TRACKED_HANDS=0` to restore the original weapon animation.
+Continuous touch-driven finger curling is not implemented, and the authored
+glove/arm geometry is not anatomically mirrored in left-handed mode.
+
+- Supported detachable-magazine weapons can eject with the Reload action or by
+  gripping the loaded magazine and pulling it clear of the well. Draw a fresh
+  magazine from the off-hand or fixed hip, then either release it or touch it
+  to the well according to the selected insertion mode.
+- The support grip can require a held squeeze, toggle on each squeeze, or engage
+  by proximity. Object grabs can use hold or toggle behavior independently.
+- With the off hand free, grip inside either hip zone to draw a grenade. The
+  handed layout places frag on the off-hand side and tactical on the weapon-hand
+  side; the fixed layout always keeps frag left and tactical right. Hold/cook,
+  physically swing, and release to throw.
+- Physical melee recognizes a sufficiently fast forward weapon-hand thrust. A
+  sideways swing alone is rejected. It can replace or supplement the button.
 - A stationary grenade release deliberately drops it. Release position is
   limited to arm's reach and traced against nearby geometry.
 - The virtual belt follows headset yaw only. Manual magazine reload takes
@@ -135,5 +172,5 @@ animation. Continuous touch-driven finger curling is not implemented.
   interaction.
 
 Javelin, Stinger, mounted, and vehicle weapons continue to aim from the tracked
-right controller. **Death From Above** remains unsupported; follow the skip
+weapon controller. **Death From Above** remains unsupported; follow the skip
 procedure in `INSTALL.md`.

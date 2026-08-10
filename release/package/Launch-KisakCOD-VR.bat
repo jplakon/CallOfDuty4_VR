@@ -51,7 +51,7 @@ if errorlevel 1 (
 )
 set "KISAK_VR_SETTINGS_SOURCE=%~dp0VR-Settings.bat"
 
-rem KISAK_SP_VR_SETTINGS_APPLICATION_V61
+rem KISAK_SP_VR_SETTINGS_APPLICATION_V62
 rem Personal overrides live outside the game directory so Steam, extraction,
 rem and future mod updates cannot overwrite them. A portable override beside
 rem the launcher is also supported; LocalAppData wins when both exist.
@@ -123,9 +123,37 @@ set "KISAK_VR_CALIBRATION_REQUEST_PATH=%KISAK_VR_SETTINGS_STATE_DIR%\Calibration
 set "KISAK_VR_CALIBRATION_STATUS_PATH=%KISAK_VR_SETTINGS_STATE_DIR%\Calibration-Status.txt"
 set "KISAK_VR_HUD_EDITOR_REQUEST_PATH=%KISAK_VR_SETTINGS_STATE_DIR%\HUD-Editor-Request.txt"
 set "KISAK_VR_HUD_EDITOR_STATUS_PATH=%KISAK_VR_SETTINGS_STATE_DIR%\HUD-Editor-Status.txt"
+set "KISAK_VR_WEAPON_PROFILES_PATH=%KISAK_VR_SETTINGS_STATE_DIR%\VR-Weapon-Profiles.ini"
+set "KISAK_VR_WEAPON_CALIBRATION_REQUEST_PATH=%KISAK_VR_SETTINGS_STATE_DIR%\Weapon-Calibration-Request.txt"
+set "KISAK_VR_WEAPON_CALIBRATION_STATUS_PATH=%KISAK_VR_SETTINGS_STATE_DIR%\Weapon-Calibration-Status.txt"
+set "KISAK_VR_COMPATIBILITY_REPORT_PATH=%KISAK_VR_SETTINGS_STATE_DIR%\Compatibility-Report.txt"
+
+rem KISAK_SP_VR_UNIFIED_COMPATIBILITY_V65
+rem Use the same evaluator as the first configurator page. Warnings are written
+rem to the support report but do not block launch; missing required files,
+rem DirectX, or the explicitly selected runtime backend do block before game
+rem process creation.
+"%~dp0KisakCOD-VR-Configurator.exe" --compatibility-report "%KISAK_VR_COMPATIBILITY_REPORT_PATH%"
+set "KISAK_VR_COMPATIBILITY_EXIT=%ERRORLEVEL%"
+if "%KISAK_VR_COMPATIBILITY_EXIT%"=="2" (
+  echo ERROR: The beta.9 compatibility preflight found a launch blocker.
+  echo Open KisakCOD-VR-Configurator.exe and review Setup ^& Compatibility.
+  echo Support-ready report:
+  echo   "%KISAK_VR_COMPATIBILITY_REPORT_PATH%"
+  pause
+  exit /b 1
+)
+if not "%KISAK_VR_COMPATIBILITY_EXIT%"=="0" (
+  echo ERROR: The beta.9 compatibility report could not be written.
+  echo   "%KISAK_VR_COMPATIBILITY_REPORT_PATH%"
+  pause
+  exit /b 1
+)
+
 del /q "%KISAK_VR_CALIBRATION_REQUEST_PATH%" "%KISAK_VR_CALIBRATION_STATUS_PATH%" >nul 2>&1
+del /q "%KISAK_VR_WEAPON_CALIBRATION_REQUEST_PATH%" "%KISAK_VR_WEAPON_CALIBRATION_STATUS_PATH%" >nul 2>&1
 set "KISAK_VR_SETTINGS_STATUS=LAUNCHER_VERIFIED"
->"%KISAK_VR_SETTINGS_RECEIPT_PATH%" echo KisakCOD VR v0.10.0-beta.8 effective settings receipt
+>"%KISAK_VR_SETTINGS_RECEIPT_PATH%" echo KisakCOD VR beta.9 effective settings receipt
 >>"%KISAK_VR_SETTINGS_RECEIPT_PATH%" echo STATUS=LAUNCHER_VERIFIED
 >>"%KISAK_VR_SETTINGS_RECEIPT_PATH%" echo DATE=%DATE% %TIME%
 >>"%KISAK_VR_SETTINGS_RECEIPT_PATH%" set KISAK_VR_

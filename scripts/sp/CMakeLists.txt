@@ -65,10 +65,13 @@ target_sources(
         ${SRC_DIR}/vr/vr_hud_layout.h
         ${SRC_DIR}/vr/vr_input_bindings.cpp
         ${SRC_DIR}/vr/vr_input_bindings.h
+        ${SRC_DIR}/vr/vr_interactions.h
         ${SRC_DIR}/vr/vr_openvr_input.cpp
         ${SRC_DIR}/vr/vr_openvr_input.h
         ${SRC_DIR}/vr/vr_openxr_profiles.cpp
         ${SRC_DIR}/vr/vr_openxr_profiles.h
+        ${SRC_DIR}/vr/vr_weapon_profiles.cpp
+        ${SRC_DIR}/vr/vr_weapon_profiles.h
         ${SRC_DIR}/vr/vr_d3d9_capture.cpp
         ${SRC_DIR}/vr/vr_d3d9ex_interop_probe.cpp
         ${SRC_DIR}/vr/vr_d3d9ex_interop_probe.h

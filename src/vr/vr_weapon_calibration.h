@@ -58,4 +58,41 @@ inline void CalibratedGripTargetWorld(
     }
 }
 
+// Solves the absolute controller-local rotation that makes the final weapon
+// basis match the HMD/camera basis for a deliberate gunstock capture.  The
+// rendered basis is baseAttachment * effectiveRotation * controllerAxis, so
+// the required rotation is transpose(baseAttachment) *
+// transpose(controllerAxis).  This is an explicit user-triggered capture; it
+// is never sampled automatically at startup.
+inline void AimAlignedEffectiveRotation(
+    const float baseAttachmentAxis[3][3],
+    const float controllerAxis[3][3],
+    float effectiveRotationAxis[3][3])
+{
+    float baseTranspose[3][3] = {};
+    float controllerTranspose[3][3] = {};
+
+    for (int row = 0; row < 3; ++row)
+    {
+        for (int column = 0; column < 3; ++column)
+        {
+            baseTranspose[row][column] =
+                baseAttachmentAxis[column][row];
+            controllerTranspose[row][column] =
+                controllerAxis[column][row];
+        }
+    }
+
+    for (int row = 0; row < 3; ++row)
+    {
+        for (int column = 0; column < 3; ++column)
+        {
+            effectiveRotationAxis[row][column] =
+                baseTranspose[row][0] * controllerTranspose[0][column] +
+                baseTranspose[row][1] * controllerTranspose[1][column] +
+                baseTranspose[row][2] * controllerTranspose[2][column];
+        }
+    }
+}
+
 } // namespace kisak::vr::weapon_calibration

@@ -1,5 +1,74 @@
 # Changelog
 
+## v0.10.0-beta.9
+
+Unified setup, per-weapon/gunstock calibration, Metric/Imperial presentation,
+and handed physical-interaction update over `v0.10.0-beta.8`.
+
+### Unified setup and compatibility
+
+- Adds one Setup & Compatibility page with read-only detection of required
+  game/mod files, DirectX June 2010, Windows architecture, GPU/dedicated
+  memory, both registry views of OpenXR, OpenVR fallback, and the last live
+  headset/controller result.
+- Uses one deterministic evaluator for the desktop page, launcher preflight,
+  support report, and regression tests so their Ready/Warning/Blocked decisions
+  cannot drift independently.
+- Adds explicit backend and Native/Performance recommendations. Applying one
+  previews the exact changes and preserves every personal comfort, hand,
+  control, HUD, height, interaction, and weapon/gunstock value.
+- Adds an atomic `Compatibility-Report.txt` with Copy/Open actions and precise
+  remediation for each failed or unproven check.
+- Adds live runtime receipts for the initialized backend, OpenXR/OpenVR runtime,
+  headset/system, and controller profiles, separating registry-level detection
+  from proven session compatibility.
+
+### Metric and Imperial calibration
+
+- Adds a Metric/Imperial measurement selector with Metric as the default.
+- Converts all 20 physical configurator fields: eye height, weapon and hand
+  offsets, grip/reload/belt distances, grenade hand speeds, and scope geometry.
+- Keeps HUD pixels, angles, normalized scales, and gameplay response values in
+  their native non-physical forms.
+- Preserves exact canonical runtime values through unit switching and unchanged
+  saves, avoiding conversion drift, and uses 1 cm or 1 in height refinement.
+
+### Per-weapon and gunstock calibration
+
+- Adds persistent six-axis hip-fire and shouldered/ADS deltas keyed by COD4's
+  stable internal weapon id.
+- Adds an active physical-gunstock layer shared across weapons, with portable
+  `.vrstock` import/export and a guarded 32-profile limit.
+- Blends the global baseline, per-weapon hip, gunstock, and per-weapon shoulder
+  layers without replacing the controller's absolute live orientation.
+- Adds an editor with equipped-weapon discovery, live apply, reset/delete,
+  guarded ranges, and deliberate guided rotation capture. Startup pose is never
+  sampled as a hidden neutral orientation.
+- Replaces the single shared native attachment cache with a per-weapon
+  baseline, preventing one gun's viewmodel geometry from becoming another's.
+
+### Handedness and physical interactions
+
+- Adds a right/left dominant-hand selector that swaps the physical weapon and
+  off-hand controller roles across OpenXR and OpenVR.
+- Mirrors primary and alternate bindings once when handedness changes while
+  preserving directional inputs and multi-input chords.
+- Routes weapon aiming, muzzle, scope, gunstock, support grip, reload,
+  grenades, HUD-editor pointing, controller proxies, and haptics through
+  semantic weapon-hand/off-hand roles.
+- Adds hold/toggle/proximity support grip, hold/toggle object grip, button or
+  physical-pull magazine ejection, release/contact insertion, handed/fixed
+  belts, guarded gesture melee, haptic strength, and muzzle-obstruction options.
+
+### Validation and fixes
+
+- Expands strict settings coverage from 125 to 142 values and adds profile,
+  compatibility, launcher, runtime, and effective-pose receipts.
+- Preserves per-weapon/gunstock translation through final grip-tag correction.
+- Prevents physical-unit round-trip drift at normal and boundary values.
+- Detects unusable forced backends—including a missing 32-bit OpenXR runtime—
+  before process creation while allowing explicit warning-only headset tests.
+
 ## v0.10.0-beta.8
 
 Visual HUD editing, guided calibration, verified settings application, and

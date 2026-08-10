@@ -1,5 +1,6 @@
 #include "settings_core.h"
 #include "vr/vr_input_bindings.h"
+#include "vr/vr_interactions.h"
 #include "vr/vr_hud_layout.h"
 
 #include <algorithm>
@@ -12,6 +13,7 @@
 #include <ctime>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <regex>
 #include <sstream>
 #include <system_error>
@@ -95,6 +97,36 @@ SettingDefinition Decimal(
     };
 }
 
+SettingDefinition PhysicalDecimal(
+    const char* key,
+    const char* label,
+    const char* description,
+    const SettingPage page,
+    const char* defaultValue,
+    const double minimumValue,
+    const double maximumValue,
+    const int canonicalDecimalPlaces,
+    const MeasurementKind measurementKind,
+    const int metricDecimalPlaces,
+    const int imperialDecimalPlaces,
+    const bool advanced = false)
+{
+    SettingDefinition definition = Decimal(
+        key,
+        label,
+        description,
+        page,
+        defaultValue,
+        minimumValue,
+        maximumValue,
+        canonicalDecimalPlaces,
+        advanced);
+    definition.measurementKind = measurementKind;
+    definition.metricDecimalPlaces = metricDecimalPlaces;
+    definition.imperialDecimalPlaces = imperialDecimalPlaces;
+    return definition;
+}
+
 SettingDefinition Choice(
     const char* key,
     const char* label,
@@ -175,6 +207,20 @@ const std::vector<SettingDefinition> kCatalog = {
         "auto",
         {{"auto", "Automatic"}, {"openxr", "OpenXR only"}, {"openvr", "OpenVR fallback"}}),
     Choice(
+        "KISAK_VR_UNIT_SYSTEM",
+        "Measurement units",
+        "Choose metric or imperial values in the configurator. This changes presentation only; saved game-compatible calibration values keep their canonical units.",
+        SettingPage::Quick,
+        "metric",
+        {{"metric", "Metric (cm and cm/s)"}, {"imperial", "Imperial (in and in/s)"}}),
+    Choice(
+        "KISAK_VR_DOMINANT_HAND",
+        "Weapon hand",
+        "Right or Left changes the actual tracked controller that owns the firearm, muzzle, recoil haptics, scope, gunstock, and HUD pointer. Changing this selector mirrors every saved controller binding once so custom chords remain usable.",
+        SettingPage::Quick,
+        "right",
+        {{"right", "Right-handed"}, {"left", "Left-handed"}}),
+    Choice(
         "KISAK_VR_TURN_MODE",
         "Turning",
         "Choose comfort snap turning or continuous analog smooth turning.",
@@ -211,10 +257,10 @@ const std::vector<SettingDefinition> kCatalog = {
     Choice(
         "KISAK_VR_MOVEMENT_DIRECTION",
         "Movement direction",
-        "Head uses gaze yaw, Body uses the game body, and Left hand uses controller pointing direction.",
+        "Choose gaze, game-body, semantic off-hand/weapon-hand, or a fixed physical controller as the locomotion reference.",
         SettingPage::Quick,
         "head",
-        {{"head", "Head-relative"}, {"body", "Body-relative"}, {"left_hand", "Left-hand-relative"}}),
+        {{"head", "Head-relative"}, {"body", "Body-relative"}, {"off_hand", "Off-hand-relative"}, {"weapon_hand", "Weapon-hand-relative"}, {"left_hand", "Physical left-hand"}, {"right_hand", "Physical right-hand"}}),
     Decimal(
         "KISAK_VR_MOVEMENT_DEADZONE",
         "Movement deadzone",
@@ -232,23 +278,29 @@ const std::vector<SettingDefinition> kCatalog = {
         SettingPage::Calibration,
         "standing",
         {{"standing", "Standing"}, {"seated", "Seated"}}),
-    Decimal(
+    PhysicalDecimal(
         "KISAK_VR_STANDING_EYE_HEIGHT",
-        "Standing virtual eye height (inches)",
+        "Standing virtual eye height",
         "Virtual eye height used in standing mode. The guided measurement button can fill this from the headset's floor reference.",
         SettingPage::Calibration,
         "60.0",
         42.0,
         84.0,
+        2,
+        MeasurementKind::Inches,
+        1,
         1),
-    Decimal(
+    PhysicalDecimal(
         "KISAK_VR_SEATED_EYE_HEIGHT",
-        "Seated virtual eye height (inches)",
+        "Seated virtual eye height",
         "Virtual player eye height while you remain physically seated. Keep 60 for COD4's native full standing stature.",
         SettingPage::Calibration,
         "60.0",
         42.0,
         84.0,
+        2,
+        MeasurementKind::Inches,
+        1,
         1),
     Toggle(
         "KISAK_VR_RECENTER_ON_START",
@@ -442,37 +494,46 @@ const std::vector<SettingDefinition> kCatalog = {
         2,
         true),
 
-    Decimal(
+    PhysicalDecimal(
         "KISAK_VR_WEAPON_OFFSET_FORWARD",
         "Weapon forward offset",
-        "Move the right-hand weapon along the controller's forward axis, in game inches.",
+        "Move the weapon along the selected weapon controller's forward axis.",
         SettingPage::Weapons,
         "0.00",
         -8.0,
         8.0,
+        2,
+        MeasurementKind::Inches,
+        2,
         2),
-    Decimal(
+    PhysicalDecimal(
         "KISAK_VR_WEAPON_OFFSET_LEFT",
         "Weapon left offset",
-        "Move the right-hand weapon along the controller's left axis, in game inches.",
+        "Move the weapon along the selected weapon controller's left axis.",
         SettingPage::Weapons,
         "0.00",
         -8.0,
         8.0,
+        2,
+        MeasurementKind::Inches,
+        2,
         2),
-    Decimal(
+    PhysicalDecimal(
         "KISAK_VR_WEAPON_OFFSET_UP",
         "Weapon up offset",
-        "Move the right-hand weapon along the controller's up axis, in game inches.",
+        "Move the weapon along the selected weapon controller's up axis.",
         SettingPage::Weapons,
         "0.00",
         -8.0,
         8.0,
+        2,
+        MeasurementKind::Inches,
+        2,
         2),
     Decimal(
         "KISAK_VR_WEAPON_PITCH",
         "Weapon pitch",
-        "Rotate the right-hand weapon around controller-local pitch.",
+        "Rotate the weapon around weapon-controller-local pitch.",
         SettingPage::Weapons,
         "0.0",
         -45.0,
@@ -481,7 +542,7 @@ const std::vector<SettingDefinition> kCatalog = {
     Decimal(
         "KISAK_VR_WEAPON_YAW",
         "Weapon yaw",
-        "Rotate the right-hand weapon around controller-local yaw.",
+        "Rotate the weapon around weapon-controller-local yaw.",
         SettingPage::Weapons,
         "0.0",
         -45.0,
@@ -490,43 +551,58 @@ const std::vector<SettingDefinition> kCatalog = {
     Decimal(
         "KISAK_VR_WEAPON_ROLL",
         "Weapon roll",
-        "Rotate the right-hand weapon around controller-local roll.",
+        "Rotate the weapon around weapon-controller-local roll.",
         SettingPage::Weapons,
         "0.0",
         -45.0,
         45.0,
         1),
-    Decimal(
+    Toggle(
+        "KISAK_VR_WEAPON_PROFILES_ENABLED",
+        "Per-weapon and gunstock profiles",
+        "Apply the active gunstock profile and weapon-specific hip/shouldered overrides. The global values above remain the baseline.",
+        SettingPage::Weapons,
+        true),
+    PhysicalDecimal(
         "KISAK_VR_LEFT_HAND_OFFSET_FORWARD",
-        "Left hand forward offset",
-        "Move the floating left glove along controller forward, in game inches.",
+        "Off-hand forward offset",
+        "Move the floating off-hand glove along controller forward.",
         SettingPage::Weapons,
         "0.00",
         -8.0,
         8.0,
+        2,
+        MeasurementKind::Inches,
+        2,
         2),
-    Decimal(
+    PhysicalDecimal(
         "KISAK_VR_LEFT_HAND_OFFSET_LEFT",
-        "Left hand left offset",
-        "Move the floating left glove along controller left, in game inches.",
+        "Off-hand left offset",
+        "Move the floating off-hand glove along controller left.",
         SettingPage::Weapons,
         "0.00",
         -8.0,
         8.0,
+        2,
+        MeasurementKind::Inches,
+        2,
         2),
-    Decimal(
+    PhysicalDecimal(
         "KISAK_VR_LEFT_HAND_OFFSET_UP",
-        "Left hand up offset",
-        "Move the floating left glove along controller up, in game inches.",
+        "Off-hand up offset",
+        "Move the floating off-hand glove along controller up.",
         SettingPage::Weapons,
         "0.00",
         -8.0,
         8.0,
+        2,
+        MeasurementKind::Inches,
+        2,
         2),
     Decimal(
         "KISAK_VR_LEFT_HAND_PITCH",
-        "Left hand pitch",
-        "Rotate the floating left glove around controller-local pitch.",
+        "Off-hand pitch",
+        "Rotate the floating off-hand glove around controller-local pitch.",
         SettingPage::Weapons,
         "0.0",
         -180.0,
@@ -534,8 +610,8 @@ const std::vector<SettingDefinition> kCatalog = {
         1),
     Decimal(
         "KISAK_VR_LEFT_HAND_YAW",
-        "Left hand yaw",
-        "Rotate the floating left glove around controller-local yaw.",
+        "Off-hand yaw",
+        "Rotate the floating off-hand glove around controller-local yaw.",
         SettingPage::Weapons,
         "0.0",
         -180.0,
@@ -543,14 +619,14 @@ const std::vector<SettingDefinition> kCatalog = {
         1),
     Decimal(
         "KISAK_VR_LEFT_HAND_ROLL",
-        "Left hand roll",
-        "Rotate the floating left glove around controller-local roll.",
+        "Off-hand roll",
+        "Rotate the floating off-hand glove around controller-local roll.",
         SettingPage::Weapons,
         "0.0",
         -180.0,
         180.0,
         1),
-    Decimal(
+    PhysicalDecimal(
         "KISAK_VR_LEFT_HAND_GRIP_RADIUS",
         "Support-hand grip radius",
         "Maximum distance from the weapon wrist anchor at which squeeze attaches the support hand.",
@@ -558,6 +634,9 @@ const std::vector<SettingDefinition> kCatalog = {
         "14.0",
         3.0,
         24.0,
+        1,
+        MeasurementKind::Inches,
+        1,
         1),
     Decimal(
         "KISAK_VR_TWO_HAND_STRENGTH",
@@ -595,37 +674,156 @@ const std::vector<SettingDefinition> kCatalog = {
         "Eject, draw, and insert supported magazines physically. Off uses COD4's automatic reload.",
         SettingPage::Interactions,
         true),
+    Choice(
+        "KISAK_VR_RELOAD_EJECT_MODE",
+        "Magazine ejection",
+        "Button uses the configured Reload action. Physical pull lets the off hand grip the loaded magazine at the well and pull it free.",
+        SettingPage::Interactions,
+        "button",
+        {{"button", "Reload button"}, {"pull", "Physical pull"}}),
+    Choice(
+        "KISAK_VR_RELOAD_INSERT_MODE",
+        "Magazine insertion",
+        "Release commits when the off-hand grip is released inside the well. Contact commits as soon as the fresh magazine enters the insertion radius.",
+        SettingPage::Interactions,
+        "release",
+        {{"release", "Release in well"}, {"contact", "Insert on contact"}}),
+    PhysicalDecimal(
+        "KISAK_VR_RELOAD_PULL_DISTANCE",
+        "Magazine pull distance",
+        "Distance the loaded magazine must move from the well before a physical-pull ejection succeeds.",
+        SettingPage::Interactions,
+        "8.0",
+        4.0,
+        18.0,
+        1,
+        MeasurementKind::Inches,
+        1,
+        1),
+    Choice(
+        "KISAK_VR_MAGAZINE_HIP",
+        "Fresh-magazine holster",
+        "Off hand follows handedness automatically. Fixed Left and Right keep the magazine zone on that physical hip.",
+        SettingPage::Interactions,
+        "off_hand",
+        {{"off_hand", "Off-hand hip"}, {"left", "Left hip"}, {"right", "Right hip"}}),
     Toggle(
         "KISAK_VR_MANUAL_GRENADES",
         "Physical hip grenades",
-        "Draw grenades from the belt and throw with tracked left-hand motion.",
+        "Draw grenades from the belt and throw with tracked off-hand motion.",
         SettingPage::Interactions,
         true),
+    Choice(
+        "KISAK_VR_GRENADE_BELT_LAYOUT",
+        "Grenade belt layout",
+        "Fixed keeps frag on the physical left and tactical on the right. Handed keeps frag on the off-hand side and mirrors both slots for left-handed play.",
+        SettingPage::Interactions,
+        "handed",
+        {{"handed", "Follow handedness"}, {"fixed", "Frag left / tactical right"}}),
     Toggle(
         "KISAK_VR_TRACKED_HANDS",
-        "Tracked left hand",
-        "Render the independent IK left glove at its OpenXR palm pose.",
+        "Tracked off hand",
+        "Render the independent support glove at the selected off-hand OpenXR palm pose.",
+        SettingPage::Interactions,
+        true),
+    Choice(
+        "KISAK_VR_SUPPORT_GRIP_MODE",
+        "Support-hand grip",
+        "Hold follows the bound Support grip action, Toggle changes attachment on each press, and Proximity attaches automatically near the fore-end.",
+        SettingPage::Interactions,
+        "hold",
+        {{"hold", "Hold"}, {"toggle", "Toggle"}, {"proximity", "Automatic proximity"}}),
+    Choice(
+        "KISAK_VR_OBJECT_GRIP_MODE",
+        "Magazine/grenade grabbing",
+        "Hold releases an object when the Support grip action is released. Toggle grabs on one press and releases or throws on the next press.",
+        SettingPage::Interactions,
+        "hold",
+        {{"hold", "Hold to grip"}, {"toggle", "Toggle grip"}}),
+    Choice(
+        "KISAK_VR_MELEE_MODE",
+        "Melee interaction",
+        "Choose the configured button, a deliberate forward weapon-hand thrust, or either input.",
+        SettingPage::Interactions,
+        "both",
+        {{"both", "Button or gesture"}, {"gesture", "Physical gesture only"}, {"button", "Button only"}}),
+    PhysicalDecimal(
+        "KISAK_VR_MELEE_SPEED",
+        "Physical melee speed",
+        "Minimum weapon-hand speed required for a physical melee thrust.",
+        SettingPage::Interactions,
+        "95",
+        50.0,
+        240.0,
+        0,
+        MeasurementKind::InchesPerSecond,
+        0,
+        0),
+    Decimal(
+        "KISAK_VR_MELEE_FORWARD_BIAS",
+        "Melee forward-direction requirement",
+        "Minimum fraction of the hand velocity that must point along the weapon's forward axis. Higher values reject sideways swings.",
+        SettingPage::Interactions,
+        "0.55",
+        0.20,
+        0.95,
+        2,
+        true),
+    Integer(
+        "KISAK_VR_MELEE_COOLDOWN_MS",
+        "Physical melee cooldown (ms)",
+        "Minimum time between recognized physical melee thrusts.",
+        SettingPage::Interactions,
+        550,
+        250,
+        1500,
+        true),
+    Toggle(
+        "KISAK_VR_HAPTICS",
+        "Controller haptics",
+        "Enable weapon-hand recoil and off-hand physical-interaction feedback on the selected hands.",
         SettingPage::Interactions,
         true),
     Decimal(
+        "KISAK_VR_HAPTIC_STRENGTH",
+        "Haptic strength",
+        "Multiplier applied to firearm, magazine, and grenade vibration amplitudes.",
+        SettingPage::Interactions,
+        "1.00",
+        0.0,
+        1.5,
+        2),
+    Toggle(
+        "KISAK_VR_MUZZLE_OBSTRUCTION",
+        "Physical muzzle obstruction",
+        "Prevent firing when world geometry lies between the player and the tracked muzzle. Disable only if reach or accessibility needs make this uncomfortable.",
+        SettingPage::Interactions,
+        true),
+    PhysicalDecimal(
         "KISAK_VR_BELT_FORWARD_OFFSET",
         "Belt forward offset",
-        "Move all hip grab zones forward or backward relative to the headset, in inches.",
+        "Move all hip grab zones forward or backward relative to the headset.",
         SettingPage::Interactions,
         "0.0",
         -12.0,
         12.0,
+        1,
+        MeasurementKind::Inches,
+        1,
         1),
-    Decimal(
+    PhysicalDecimal(
         "KISAK_VR_BELT_HEIGHT",
         "Belt height",
-        "Vertical center of the hip grab zones relative to the headset, in inches.",
+        "Vertical center of the hip grab zones relative to the headset.",
         SettingPage::Interactions,
         "-28.0",
         -48.0,
         -8.0,
+        1,
+        MeasurementKind::Inches,
+        1,
         1),
-    Decimal(
+    PhysicalDecimal(
         "KISAK_VR_BELT_HIP_DISTANCE",
         "Hip distance from center",
         "Left/right distance from body center to each grenade or magazine grab zone.",
@@ -633,8 +831,11 @@ const std::vector<SettingDefinition> kCatalog = {
         "13.0",
         4.0,
         24.0,
+        1,
+        MeasurementKind::Inches,
+        1,
         1),
-    Decimal(
+    PhysicalDecimal(
         "KISAK_VR_BELT_GRAB_RADIUS",
         "Hip grab radius",
         "Lateral half-width of each hip grab zone. Keep it smaller than hip distance.",
@@ -642,8 +843,11 @@ const std::vector<SettingDefinition> kCatalog = {
         "11.0",
         3.0,
         18.0,
+        1,
+        MeasurementKind::Inches,
+        1,
         1),
-    Decimal(
+    PhysicalDecimal(
         "KISAK_VR_RELOAD_INSERT_RADIUS",
         "Magazine insertion radius",
         "Distance from the magazine well that counts as a successful insertion.",
@@ -651,8 +855,11 @@ const std::vector<SettingDefinition> kCatalog = {
         "6.5",
         3.0,
         12.0,
+        1,
+        MeasurementKind::Inches,
+        1,
         1),
-    Decimal(
+    PhysicalDecimal(
         "KISAK_VR_GRENADE_DROP_SPEED",
         "Grenade drop threshold",
         "Hand speed below this value is treated as a deliberate drop rather than a throw.",
@@ -661,8 +868,11 @@ const std::vector<SettingDefinition> kCatalog = {
         10.0,
         100.0,
         0,
+        MeasurementKind::InchesPerSecond,
+        0,
+        0,
         true),
-    Decimal(
+    PhysicalDecimal(
         "KISAK_VR_GRENADE_FULL_THROW_SPEED",
         "Full-strength hand speed",
         "Hand speed that maps to the strongest configured grenade throw.",
@@ -670,6 +880,9 @@ const std::vector<SettingDefinition> kCatalog = {
         "260",
         100.0,
         500.0,
+        0,
+        MeasurementKind::InchesPerSecond,
+        0,
         0,
         true),
     Decimal(
@@ -703,42 +916,54 @@ const std::vector<SettingDefinition> kCatalog = {
         2,
         true),
 
-    Decimal(
+    PhysicalDecimal(
         "KISAK_VR_SCOPE_FORWARD_METERS",
-        "Scope forward offset (m)",
+        "Scope forward offset",
         "Fine adjustment along the final rendered weapon's forward axis.",
         SettingPage::Scope,
         "-0.10",
         -0.25,
         0.25,
-        3),
-    Decimal(
+        3,
+        MeasurementKind::Meters,
+        1,
+        2),
+    PhysicalDecimal(
         "KISAK_VR_SCOPE_LEFT_METERS",
-        "Scope left offset (m)",
+        "Scope left offset",
         "Fine adjustment along the final rendered weapon's left axis.",
         SettingPage::Scope,
         "0.000",
         -0.25,
         0.25,
-        3),
-    Decimal(
+        3,
+        MeasurementKind::Meters,
+        1,
+        2),
+    PhysicalDecimal(
         "KISAK_VR_SCOPE_UP_METERS",
-        "Scope up offset (m)",
+        "Scope up offset",
         "Fine adjustment along the final rendered weapon's up axis.",
         SettingPage::Scope,
         "0.000",
         -0.25,
         0.25,
-        3),
-    Decimal(
+        3,
+        MeasurementKind::Meters,
+        1,
+        2),
+    PhysicalDecimal(
         "KISAK_VR_SCOPE_RADIUS_METERS",
-        "Scope lens radius (m)",
+        "Scope lens radius",
         "Physical radius of the circular lens rendered on the rifle optic.",
         SettingPage::Scope,
         "0.024",
         0.015,
         0.080,
-        3),
+        3,
+        MeasurementKind::Meters,
+        1,
+        2),
     Choice(
         "KISAK_VR_SCOPE_CAPTURE_SIZE",
         "Scope capture quality",
@@ -941,6 +1166,49 @@ bool ParseFiniteNumber(const std::string& text, double* value)
 
     *value = parsed;
     return true;
+}
+
+double MeasurementDisplayFactor(
+    const MeasurementKind kind,
+    const MeasurementUnitSystem units)
+{
+    constexpr double kCentimetersPerInch = 2.54;
+    constexpr double kCentimetersPerMeter = 100.0;
+    constexpr double kInchesPerMeter =
+        kCentimetersPerMeter / kCentimetersPerInch;
+
+    switch (kind)
+    {
+    case MeasurementKind::Inches:
+    case MeasurementKind::InchesPerSecond:
+        return units == MeasurementUnitSystem::Metric
+            ? kCentimetersPerInch
+            : 1.0;
+    case MeasurementKind::Meters:
+        return units == MeasurementUnitSystem::Metric
+            ? kCentimetersPerMeter
+            : kInchesPerMeter;
+    default:
+        return 1.0;
+    }
+}
+
+std::string FormatFixedNumber(
+    double value,
+    const int decimalPlaces)
+{
+    const double zeroThreshold =
+        0.5 * std::pow(10.0, -decimalPlaces);
+    if (std::abs(value) < zeroThreshold)
+    {
+        value = 0.0;
+    }
+
+    std::ostringstream formatted;
+    formatted.setf(std::ios::fixed, std::ios::floatfield);
+    formatted.precision(decimalPlaces);
+    formatted << value;
+    return formatted.str();
 }
 
 bool IsSafeBatchValue(const std::string& value)
@@ -1273,6 +1541,130 @@ SettingsMap BuiltInDefaults()
     return values;
 }
 
+MeasurementUnitSystem MeasurementUnitsFromSettings(
+    const SettingsMap& values)
+{
+    const auto found = values.find("KISAK_VR_UNIT_SYSTEM");
+    return found != values.end() && found->second == "imperial"
+        ? MeasurementUnitSystem::Imperial
+        : MeasurementUnitSystem::Metric;
+}
+
+const char* MeasurementUnitSystemId(
+    const MeasurementUnitSystem units)
+{
+    return units == MeasurementUnitSystem::Imperial
+        ? "imperial"
+        : "metric";
+}
+
+std::string MeasurementUnitSuffix(
+    const SettingDefinition& definition,
+    const MeasurementUnitSystem units)
+{
+    switch (definition.measurementKind)
+    {
+    case MeasurementKind::Inches:
+        return units == MeasurementUnitSystem::Metric ? "cm" : "in";
+    case MeasurementKind::InchesPerSecond:
+        return units == MeasurementUnitSystem::Metric ? "cm/s" : "in/s";
+    case MeasurementKind::Meters:
+        return units == MeasurementUnitSystem::Metric ? "cm" : "in";
+    default:
+        return {};
+    }
+}
+
+std::string DisplaySettingLabel(
+    const SettingDefinition& definition,
+    const MeasurementUnitSystem units)
+{
+    const std::string suffix = MeasurementUnitSuffix(definition, units);
+    return suffix.empty()
+        ? definition.label
+        : definition.label + " (" + suffix + ")";
+}
+
+bool CanonicalValueToDisplay(
+    const SettingDefinition& definition,
+    const MeasurementUnitSystem units,
+    const std::string& canonicalValue,
+    std::string* const displayValue)
+{
+    if (displayValue == nullptr ||
+        definition.measurementKind == MeasurementKind::None)
+    {
+        return false;
+    }
+
+    double parsed = 0.0;
+    if (!ParseFiniteNumber(canonicalValue, &parsed))
+    {
+        return false;
+    }
+
+    const int decimalPlaces =
+        units == MeasurementUnitSystem::Metric
+            ? definition.metricDecimalPlaces
+            : definition.imperialDecimalPlaces;
+    *displayValue = FormatFixedNumber(
+        parsed * MeasurementDisplayFactor(
+                     definition.measurementKind,
+                     units),
+        decimalPlaces);
+    return true;
+}
+
+bool DisplayValueToCanonical(
+    const SettingDefinition& definition,
+    const MeasurementUnitSystem units,
+    const std::string& displayValue,
+    std::string* const canonicalValue)
+{
+    if (canonicalValue == nullptr ||
+        definition.measurementKind == MeasurementKind::None)
+    {
+        return false;
+    }
+
+    double parsed = 0.0;
+    if (!ParseFiniteNumber(displayValue, &parsed))
+    {
+        return false;
+    }
+
+    const double factor = MeasurementDisplayFactor(
+        definition.measurementKind,
+        units);
+    double converted = parsed / factor;
+
+    // A displayed range endpoint can be rounded slightly outside its exact
+    // canonical value (84 in is shown as 213.4 cm, for example). Accept only
+    // that half-display-step rounding margin and snap back to the endpoint.
+    const int displayDecimalPlaces =
+        units == MeasurementUnitSystem::Metric
+            ? definition.metricDecimalPlaces
+            : definition.imperialDecimalPlaces;
+    const double endpointTolerance =
+        0.5 * std::pow(10.0, -displayDecimalPlaces) / factor +
+        std::numeric_limits<double>::epsilon() * 8.0;
+    if (std::abs(converted - definition.minimumValue) <=
+        endpointTolerance)
+    {
+        converted = definition.minimumValue;
+    }
+    else if (std::abs(converted - definition.maximumValue) <=
+             endpointTolerance)
+    {
+        converted = definition.maximumValue;
+    }
+
+    *canonicalValue = FormatFixedNumber(
+        converted,
+        definition.decimalPlaces);
+    return true;
+}
+
 kisak::vr::hud::Layout HudLayoutFromSettings(
     const SettingsMap& values)
 {
@@ -1487,6 +1879,8 @@ std::vector<ValidationMessage> ValidateSettings(
     const SettingsMap& values)
 {
     std::vector<ValidationMessage> messages;
+    const MeasurementUnitSystem displayUnits =
+        MeasurementUnitsFromSettings(values);
 
     for (const SettingDefinition& definition : kCatalog)
     {
@@ -1586,8 +1980,34 @@ std::vector<ValidationMessage> ValidateSettings(
             number > definition.maximumValue)
         {
             std::ostringstream range;
-            range << "Enter a value from " << definition.minimumValue
-                  << " through " << definition.maximumValue << ".";
+            if (definition.measurementKind != MeasurementKind::None)
+            {
+                const int decimalPlaces =
+                    displayUnits == MeasurementUnitSystem::Metric
+                        ? definition.metricDecimalPlaces
+                        : definition.imperialDecimalPlaces;
+                const double factor = MeasurementDisplayFactor(
+                    definition.measurementKind,
+                    displayUnits);
+                range << "Enter a value from "
+                      << FormatFixedNumber(
+                             definition.minimumValue * factor,
+                             decimalPlaces)
+                      << " through "
+                      << FormatFixedNumber(
+                             definition.maximumValue * factor,
+                             decimalPlaces)
+                      << ' '
+                      << MeasurementUnitSuffix(
+                             definition,
+                             displayUnits)
+                      << ".";
+            }
+            else
+            {
+                range << "Enter a value from " << definition.minimumValue
+                      << " through " << definition.maximumValue << ".";
+            }
             messages.push_back({
                 ValidationMessage::Severity::Error,
                 definition.key,
@@ -1635,16 +2055,43 @@ std::vector<ValidationMessage> ValidateSettings(
         });
     }
 
+    double reloadInsertRadius = 0.0;
+    double reloadPullDistance = 0.0;
+    if (valueOf("KISAK_VR_RELOAD_EJECT_MODE") == "pull" &&
+        ParseFiniteNumber(
+            valueOf("KISAK_VR_RELOAD_INSERT_RADIUS"),
+            &reloadInsertRadius) &&
+        ParseFiniteNumber(
+            valueOf("KISAK_VR_RELOAD_PULL_DISTANCE"),
+            &reloadPullDistance) &&
+        reloadPullDistance <= reloadInsertRadius)
+    {
+        messages.push_back({
+            ValidationMessage::Severity::Error,
+            "KISAK_VR_RELOAD_PULL_DISTANCE",
+            "Physical magazine pull distance must be larger than the insertion radius so the grab and ejection thresholds cannot overlap.",
+        });
+    }
+
     double dropSpeed = 0.0;
     double fullSpeed = 0.0;
     if (ParseFiniteNumber(valueOf("KISAK_VR_GRENADE_DROP_SPEED"), &dropSpeed) &&
         ParseFiniteNumber(valueOf("KISAK_VR_GRENADE_FULL_THROW_SPEED"), &fullSpeed) &&
         fullSpeed <= dropSpeed + 25.0)
     {
+        const double displayDifference = 25.0 *
+            (displayUnits == MeasurementUnitSystem::Metric ? 2.54 : 1.0);
         messages.push_back({
             ValidationMessage::Severity::Error,
             "KISAK_VR_GRENADE_FULL_THROW_SPEED",
-            "Full-strength hand speed must be at least 25 units above the deliberate-drop threshold.",
+            "Full-strength hand speed must be at least " +
+                FormatFixedNumber(
+                    displayDifference,
+                    displayUnits == MeasurementUnitSystem::Metric ? 1 : 0) +
+                (displayUnits == MeasurementUnitSystem::Metric
+                    ? " cm/s"
+                    : " in/s") +
+                " above the deliberate-drop threshold.",
         });
     }
 
@@ -1810,7 +2257,7 @@ std::string SerializeUserSettings(
 
     std::ostringstream output;
     output << "@echo off\r\n";
-    output << "rem KisakCOD VR user settings - generated by v0.10.0-beta.8 Configurator (Visual HUD, Input V4)\r\n";
+    output << "rem KisakCOD VR user settings - generated by beta.9 Configurator (Unified Setup/Compatibility)\r\n";
     output << "rem Stored separately so extracting a future release cannot erase preferences.\r\n";
     output << "rem Profile: " << safeProfile << "\r\n";
     output << "rem Revision: " << safeRevision << "\r\n";
@@ -2062,6 +2509,48 @@ SaveResult SaveUserSettingsAtomic(
     return result;
 }
 
+bool ApplyDominantHand(
+    const std::string& dominantHand,
+    SettingsMap* values)
+{
+    namespace interaction = kisak::vr::interactions;
+
+    if (values == nullptr ||
+        (dominantHand != "right" && dominantHand != "left"))
+    {
+        return false;
+    }
+
+    const auto current = values->find("KISAK_VR_DOMINANT_HAND");
+    const std::string currentHand =
+        current != values->end() ? current->second : "right";
+    if (currentHand == dominantHand)
+    {
+        return true;
+    }
+
+    for (const kisak::vr::input::ActionDefinition& action :
+         kisak::vr::input::ActionDefinitions())
+    {
+        const char* const keys[] = {
+            action.settingKey,
+            action.alternateSettingKey,
+        };
+        for (const char* const key : keys)
+        {
+            const auto value = values->find(key);
+            if (value != values->end())
+            {
+                value->second =
+                    interaction::MirrorBindingHands(value->second);
+            }
+        }
+    }
+
+    (*values)["KISAK_VR_DOMINANT_HAND"] = dominantHand;
+    return true;
+}
+
 bool ApplyPreset(
     const std::string& presetName,
     SettingsMap* values)
@@ -2086,6 +2575,16 @@ bool ApplyPreset(
         Set(values, "KISAK_VR_FSR_SHARPNESS", "0.60");
         Set(values, "KISAK_VR_SCOPE_CAPTURE_SIZE", "768");
         return true;
+    }
+
+    if (presetName == "Right-handed")
+    {
+        return ApplyDominantHand("right", values);
+    }
+
+    if (presetName == "Left-handed")
+    {
+        return ApplyDominantHand("left", values);
     }
 
     if (presetName == "Comfort Snap")
@@ -2136,6 +2635,8 @@ std::vector<std::string> PresetNames()
     return {
         "Tested Quest 3",
         "Performance",
+        "Right-handed",
+        "Left-handed",
         "Comfort Snap",
         "Smooth Turn",
         "Seated",

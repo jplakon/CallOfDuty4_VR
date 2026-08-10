@@ -150,19 +150,23 @@ bool VR_GetCurrentRenderEyeProjection(
     float* tanDown,
     float* tanUp);
 
-// Applies the tracked right-controller pose to the already-built
+// Applies the tracked semantic weapon-controller pose to the already-built
 // first-person weapon placement. The viewmodel attachment is calibrated
 // against a canonical controller basis, so startup controller orientation
 // cannot become a permanent neutral-pose offset. Positional calibration is
 // also published for the final viewmodel grip-tag alignment, preventing that
 // later correction from cancelling forward/left/up offsets.
 bool VR_ApplyRightControllerToWeaponPlacement(
+    int weaponIndex,
+    const char* weaponId,
+    const char* weaponName,
+    float adsFraction,
     const float cameraOrigin[3],
     const float cameraAxis[3][3],
     float weaponOrigin[3],
     float weaponAxis[3][3]);
 
-// Returns the filtered right-controller grip target in world space, including
+// Returns the filtered weapon-controller grip target in world space, including
 // the positional calibration published by the final weapon transform.
 bool VR_GetRightControllerWeaponGripWorld(
     const float cameraOrigin[3],
@@ -177,8 +181,9 @@ void VR_ReportRightControllerWeaponGripAlignment(
     const float alignedTagWorld[3]);
 
 // KISAK_SP_VR_TRACKED_HANDS_V1
-// Returns the latest OpenXR grip pose in CoD world space.  The left hand
-// uses the raw grip pose; the right hand uses the filtered grip position but
+// Returns the latest semantic grip pose in CoD world space.  The legacy
+// leftHand=true branch is the off hand; false is the weapon hand. The off hand
+// uses the raw grip pose; the weapon hand uses the filtered grip position but
 // retains the runtime's grip-space orientation instead of its aim-space
 // orientation.  This keeps independently rendered gloves attached to the
 // physical controllers without changing weapon aiming.
@@ -190,7 +195,7 @@ bool VR_GetTrackedControllerGripPoseWorld(
     float gripAxis[3][3]);
 
 // KISAK_SP_VR_TRACKED_HANDS_V24_DIRECT_OPENXR_GRIP_QUATERNION
-// Returns the left grip origin in CoD world space plus the normalized OpenXR
+// Returns the off-hand grip origin in CoD world space plus the normalized OpenXR
 // grip orientation relative to the current HMD.  The free-hand renderer uses
 // this quaternion to reproduce the same rigid pose as the compositor proxy,
 // bypassing the legacy shared foregrip matrix without changing reload or
@@ -214,19 +219,19 @@ bool VR_GetTrackedLeftControllerPalmQuaternionWorld(
 
 // KISAK_SP_VR_TRACKED_HANDS_V22_CONTROLLER_SPACE_DIAGNOSTICS
 // Enables the temporary in-game transform measurements and the compositor-
-// true left-grip origin/axis overlay.  KISAK_VR_HAND_DIAGNOSTICS=0 disables
+// true off-hand grip origin/axis overlay. KISAK_VR_HAND_DIAGNOSTICS=0 disables
 // both without changing tracked-hand behavior.
 bool VR_TrackedHandDiagnosticsEnabled();
 
 // KISAK_SP_VR_TRACKED_HANDS_V14_QUATERNION_WEAPON_GRIP
-// Returns the left squeeze state already gated by controller tracking and the
+// Returns the off-hand support state already gated by controller tracking and the
 // manual-magazine reload state.  Rendering can therefore attach a support hand
 // without duplicating or interfering with OpenXR input ownership.
 bool VR_GetLeftControllerSupportGripPressed(
     bool* supportGripPressed);
 
-// Returns the final rendered right-hand weapon direction as CoD pitch/yaw
-// and the current right index-trigger state. The direction is taken from
+// Returns the final rendered weapon-hand direction as CoD pitch/yaw
+// and the configured Attack state. The direction is taken from
 // the transformed viewmodel axis, keeping shots aligned with the visible gun.
 bool VR_GetRightControllerWeaponCommand(
     float* gunPitch,
@@ -234,7 +239,7 @@ bool VR_GetRightControllerWeaponCommand(
     bool* attackPressed);
 
 // KISAK_SP_VR_MOUNTED_TURRET_AIM_V1
-// Returns the live right-controller direction in world-space CoD angles.
+// Returns the live weapon-controller direction in world-space CoD angles.
 // Unlike the normal weapon-command snapshot, this remains available while
 // mounted weapons suppress the first-person viewmodel.
 bool VR_GetRightControllerMountedWeaponAim(
@@ -243,13 +248,13 @@ bool VR_GetRightControllerMountedWeaponAim(
 
 // KISAK_SP_VR_FIXED_SCOPED_TURRET_CONTROLS_V3_HEADER
 // The fixed Barrett's binocular reticle represents the completed HMD-center
-// camera ray, not the freely moving right controller used by ordinary
+// camera ray, not the freely moving weapon controller used by ordinary
 // mounted guns.
 bool VR_GetFixedScopedTurretAim(
     float* gunPitch,
     float* gunYaw);
 
-// Returns true whenever the raw OpenXR left-stick state is available,
+// Returns true whenever the configured scope-zoom axis is available,
 // including while the vertical axis is centered in its deadzone.
 bool VR_GetFixedScopedTurretZoomAxis(
     float* zoomAxis);
@@ -264,12 +269,12 @@ void VR_SetFixedScopedTurretZoomFov(
     float maximumFovDegrees);
 
 // KISAK_SP_VR_MOUNTED_WEAPON_TRIGGER_BOOTSTRAP_V1
-// Returns the raw right-trigger state while the live mounted-weapon
+// Returns the configured Attack state while the live mounted-weapon
 // controller pose is available.  This does not depend on a viewmodel.
 bool VR_GetRightControllerMountedWeaponTrigger(
     bool* attackPressed);
 
-// Returns left-thumbstick movement rotated by the horizontal HMD yaw.
+// Returns configured movement input rotated by the selected reference yaw.
 // Values are normalized to [-1, 1] after a circular remapped deadzone.
 // Forward and right are expressed in the current CoD usercmd/body basis.
 bool VR_GetHmdOrientedMovement(
@@ -336,10 +341,10 @@ bool VR_IsManualMagazineReloadCommitActive(
     int weaponIndex);
 
 // KISAK_SP_VR_MANUAL_GRENADE_THROW_V53
-// Advances the left-grip hip interaction and returns the native offhand
+// Advances the off-hand hip interaction and returns the native offhand
 // buttons that must remain held for COD4's existing cook/throw state machine.
-// The selected indices come from the predicted player state: left hip owns
-// frag, while right hip owns the mission's equipped flash or smoke grenade.
+// The selected indices come from predicted player state; configurable belt
+// layout decides which physical hip owns frag versus flash/smoke.
 bool VR_UpdateManualGrenadeInput(
     int fragWeaponIndex,
     int tacticalWeaponIndex,
@@ -349,14 +354,14 @@ bool VR_UpdateManualGrenadeInput(
     bool* fragHeld,
     bool* tacticalHeld);
 
-// Returns the tracked grenade pose rendered in the left hand while grip is
+// Returns the tracked grenade pose rendered in the off hand while grip is
 // held.  The model is resolved by cgame from weaponIndex.
 bool VR_GetManualGrenadeRenderState(
     int* weaponIndex,
     float heldOrigin[3],
     float heldAxis[3][3]);
 
-// Keeps the ordinary firearm visible in the tracked right hand while the
+// Keeps the ordinary firearm visible in the tracked weapon hand while the
 // native offhand state temporarily selects the grenade viewmodel.
 bool VR_IsManualGrenadeViewOverrideActive();
 
@@ -400,9 +405,16 @@ bool VR_GetWeaponUtilityButtons(
     bool* leftYHeld);
 
 
-// Applies a short vibration pulse to the right-hand OpenXR controller.
-// Intended for confirmed local firearm events.
+// Legacy-named compatibility API: applies a short vibration pulse to the
+// selected semantic weapon controller for confirmed local firearm events.
 bool VR_ApplyRightControllerWeaponHaptic(
+    float amplitude,
+    float durationSeconds);
+
+// Applies physical-object feedback to whichever controller is currently the
+// semantic off hand. Left-handed mode therefore moves magazine/grenade
+// feedback to the physical right controller.
+bool VR_ApplyOffhandControllerHaptic(
     float amplitude,
     float durationSeconds);
 

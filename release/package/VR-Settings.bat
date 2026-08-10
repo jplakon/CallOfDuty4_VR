@@ -1,15 +1,20 @@
 @echo off
-rem KisakCOD VR beta.8 release defaults (visual HUD editor, Controller Input V4 schema).
+rem KisakCOD VR beta.9 defaults (setup, calibration, and interactions).
 rem Do not put personal changes here: KisakCOD-VR-Configurator.exe writes a
 rem separate VR-User-Settings.bat under LocalAppData so upgrades preserve them.
 rem Profile: Tested Quest 3
-rem Revision: v61-release-defaults
+rem Revision: beta9-unified-calibration-interactions-defaults
 
 set "KISAK_VR_SETTINGS_PROFILE=Tested Quest 3"
-set "KISAK_VR_SETTINGS_REVISION=v61-release-defaults"
+set "KISAK_VR_SETTINGS_REVISION=beta9-unified-calibration-interactions-defaults"
 
 rem Runtime backend: auto, openxr, or the experimental openvr fallback.
 set "KISAK_VR_BACKEND=auto"
+
+rem Configurator measurement presentation. Runtime values below retain their
+rem canonical game-compatible units so existing profiles remain compatible.
+set "KISAK_VR_UNIT_SYSTEM=metric"
+set "KISAK_VR_DOMINANT_HAND=right"
 
 rem Verified packed rendering layouts. Never use the obsolete 3072x1536 mode.
 set "VR_CUSTOM_MODE=6016x2688"
@@ -59,17 +64,18 @@ set "KISAK_VR_SUBTITLE_X_OFFSET=0"
 set "KISAK_VR_SUBTITLE_Y_OFFSET=0"
 set "KISAK_VR_SUBTITLE_SCALE=1.00"
 
-rem Right-hand weapon calibration and tracking response.
+rem Dominant weapon-hand calibration and tracking response.
 set "KISAK_VR_WEAPON_OFFSET_FORWARD=0.00"
 set "KISAK_VR_WEAPON_OFFSET_LEFT=0.00"
 set "KISAK_VR_WEAPON_OFFSET_UP=0.00"
 set "KISAK_VR_WEAPON_PITCH=0.0"
 set "KISAK_VR_WEAPON_YAW=0.0"
 set "KISAK_VR_WEAPON_ROLL=0.0"
+set "KISAK_VR_WEAPON_PROFILES_ENABLED=1"
 set "KISAK_VR_WEAPON_POSITION_RESPONSE=0.45"
 set "KISAK_VR_WEAPON_ORIENTATION_RESPONSE=0.55"
 
-rem Floating left-hand fit and two-hand stabilization.
+rem Floating off-hand fit and two-hand stabilization.
 set "KISAK_VR_TRACKED_HANDS=1"
 set "KISAK_VR_LEFT_HAND_OFFSET_FORWARD=0.00"
 set "KISAK_VR_LEFT_HAND_OFFSET_LEFT=0.00"
@@ -82,7 +88,21 @@ set "KISAK_VR_TWO_HAND_STRENGTH=1.00"
 
 rem Physical interactions and shared belt calibration.
 set "KISAK_VR_MANUAL_RELOAD=1"
+set "KISAK_VR_RELOAD_EJECT_MODE=button"
+set "KISAK_VR_RELOAD_INSERT_MODE=release"
+set "KISAK_VR_RELOAD_PULL_DISTANCE=8.0"
+set "KISAK_VR_MAGAZINE_HIP=off_hand"
 set "KISAK_VR_MANUAL_GRENADES=1"
+set "KISAK_VR_GRENADE_BELT_LAYOUT=handed"
+set "KISAK_VR_SUPPORT_GRIP_MODE=hold"
+set "KISAK_VR_OBJECT_GRIP_MODE=hold"
+set "KISAK_VR_MELEE_MODE=both"
+set "KISAK_VR_MELEE_SPEED=95"
+set "KISAK_VR_MELEE_FORWARD_BIAS=0.55"
+set "KISAK_VR_MELEE_COOLDOWN_MS=550"
+set "KISAK_VR_HAPTICS=1"
+set "KISAK_VR_HAPTIC_STRENGTH=1.00"
+set "KISAK_VR_MUZZLE_OBSTRUCTION=1"
 set "KISAK_VR_BELT_FORWARD_OFFSET=0.0"
 set "KISAK_VR_BELT_HEIGHT=-28.0"
 set "KISAK_VR_BELT_HIP_DISTANCE=13.0"

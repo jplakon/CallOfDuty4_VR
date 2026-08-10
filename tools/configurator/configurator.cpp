@@ -1,6 +1,9 @@
 #include "settings_core.h"
+#include "compatibility_probe_win32.h"
 #include "vr/vr_calibration.h"
+#include "vr/vr_compatibility.h"
 #include "vr/vr_input_bindings.h"
+#include "vr/vr_weapon_profiles.h"
 
 #include <windows.h>
 #include <windowsx.h>
@@ -12,10 +15,12 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <sstream>
@@ -32,19 +37,24 @@
 namespace kc = kisak::configurator;
 namespace vi = kisak::vr::input;
 namespace vc = kisak::vr::calibration;
+namespace vrc = kisak::vr::compatibility;
 namespace vh = kisak::vr::hud;
+namespace vwp = kisak::vr::weapon_profiles;
+namespace wc = kisak::configurator::win32_compatibility;
 
 namespace
 {
 
-constexpr wchar_t kWindowClass[] = L"KisakCODVrConfiguratorV61";
-constexpr wchar_t kPreviewClass[] = L"KisakCODVrPreviewV61";
+constexpr wchar_t kWindowClass[] = L"KisakCODVrConfiguratorV65";
+constexpr wchar_t kPreviewClass[] = L"KisakCODVrPreviewV65";
 constexpr wchar_t kChordEditorClass[] =
-    L"KisakCODVrBindingChordEditorV61";
+    L"KisakCODVrBindingChordEditorV65";
 constexpr wchar_t kHudEditorClass[] =
-    L"KisakCODVrVisualHudEditorV61";
+    L"KisakCODVrVisualHudEditorV65";
+constexpr wchar_t kWeaponEditorClass[] =
+    L"KisakCODVrWeaponCalibrationEditorV65";
 constexpr wchar_t kWindowTitle[] =
-    L"KisakCOD VR Configurator - v0.10.0-beta.8";
+    L"KisakCOD VR Configurator - v0.10.0-beta.9";
 
 constexpr int kWindowWidth = 1160;
 constexpr int kWindowHeight = 790;
@@ -84,7 +94,30 @@ constexpr int kIdCalibrationTaller = 123;
 constexpr int kIdHudVisualEditor = 124;
 constexpr int kIdHudHeadsetEditor = 125;
 constexpr int kIdHudPollTimer = 126;
+constexpr int kIdWeaponEditor = 127;
+constexpr int kIdWeaponRefresh = 128;
+constexpr int kIdWeaponPollTimer = 129;
+constexpr int kIdSetupRescan = 130;
+constexpr int kIdSetupApplyRecommended = 131;
+constexpr int kIdSetupCopyReport = 132;
+constexpr int kIdSetupOpenReport = 133;
 constexpr int kIdSettingBase = 2000;
+
+constexpr int kIdWeaponEditWeapon = 500;
+constexpr int kIdWeaponEditUseCurrent = 501;
+constexpr int kIdWeaponEditDeleteWeapon = 502;
+constexpr int kIdWeaponEditGunstock = 503;
+constexpr int kIdWeaponEditNewGunstock = 504;
+constexpr int kIdWeaponEditDeleteGunstock = 505;
+constexpr int kIdWeaponEditImportGunstock = 506;
+constexpr int kIdWeaponEditExportGunstock = 507;
+constexpr int kIdWeaponEditLayer = 508;
+constexpr int kIdWeaponEditEnabled = 509;
+constexpr int kIdWeaponEditName = 510;
+constexpr int kIdWeaponEditValueBase = 520;
+constexpr int kIdWeaponEditReset = 526;
+constexpr int kIdWeaponEditApplyLive = 527;
+constexpr int kIdWeaponEditCapture = 528;
 
 const std::array<kc::SettingPage, 9> kPageOrder = {
     kc::SettingPage::Quick,
@@ -99,7 +132,7 @@ const std::array<kc::SettingPage, 9> kPageOrder = {
 };
 
 const std::array<const wchar_t*, 9> kPageNames = {
-    L"Quick Setup",
+    L"Setup & Compatibility",
     L"Height & Recenter",
     L"HUD & Text",
     L"Weapons & Hands",
@@ -220,6 +253,158 @@ std::filesystem::path UserSettingsPath()
         L"VR-User-Settings.bat";
 }
 
+std::filesystem::path UserStateDirectory()
+{
+    return UserSettingsPath().parent_path();
+}
+
+std::filesystem::path UserWeaponProfilesPath()
+{
+    return UserStateDirectory() / L"VR-Weapon-Profiles.ini";
+}
+
+std::filesystem::path UserWeaponCalibrationRequestPath()
+{
+    return UserStateDirectory() / L"Weapon-Calibration-Request.txt";
+}
+
+std::filesystem::path UserWeaponCalibrationStatusPath()
+{
+    return UserStateDirectory() / L"Weapon-Calibration-Status.txt";
+}
+
+std::filesystem::path UserRuntimeReceiptPath()
+{
+    return UserStateDirectory() / L"Active-VR-Settings.txt";
+}
+
+std::filesystem::path UserCompatibilityReportPath()
+{
+    return UserStateDirectory() / L"Compatibility-Report.txt";
+}
+
+std::string ReadTextFile(const std::filesystem::path& path)
+{
+    std::ifstream input(path, std::ios::binary);
+    if (!input)
+    {
+        return {};
+    }
+    return std::string(
+        std::istreambuf_iterator<char>(input),
+        std::istreambuf_iterator<char>());
+}
+
+bool WriteTextFileAtomic(
+    const std::filesystem::path& path,
+    const std::string& text,
+    std::string* const error)
+{
+    std::error_code filesystemError;
+    std::filesystem::create_directories(path.parent_path(), filesystemError);
+    if (filesystemError)
+    {
+        if (error != nullptr)
+        {
+            *error = "Could not create the calibration settings folder.";
+        }
+        return false;
+    }
+
+    const std::filesystem::path temporary = path.wstring() + L".tmp";
+    {
+        std::ofstream output(
+            temporary,
+            std::ios::binary | std::ios::trunc);
+        if (!output)
+        {
+            if (error != nullptr)
+            {
+                *error = "Could not open the temporary calibration file.";
+            }
+            return false;
+        }
+        output.write(text.data(), static_cast<std::streamsize>(text.size()));
+        output.flush();
+        if (!output)
+        {
+            std::filesystem::remove(temporary, filesystemError);
+            if (error != nullptr)
+            {
+                *error = "The calibration file could not be flushed completely.";
+            }
+            return false;
+        }
+    }
+
+    if (!MoveFileExW(
+            temporary.c_str(),
+            path.c_str(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+    {
+        std::filesystem::remove(temporary, filesystemError);
+        if (error != nullptr)
+        {
+            *error = "Windows could not atomically replace the calibration file.";
+        }
+        return false;
+    }
+    if (error != nullptr)
+    {
+        error->clear();
+    }
+    return true;
+}
+
+bool SaveWeaponProfiles(
+    const std::filesystem::path& path,
+    const vwp::Document& document,
+    std::string* const error)
+{
+    if (!vwp::ValidateDocument(document, error))
+    {
+        return false;
+    }
+    const std::string serialized = vwp::SerializeDocument(document);
+    if (!WriteTextFileAtomic(path, serialized, error))
+    {
+        return false;
+    }
+    vwp::Document verified;
+    std::string verifyError;
+    if (!vwp::ParseDocument(ReadTextFile(path), &verified, &verifyError) ||
+        vwp::SerializeDocument(verified) != serialized)
+    {
+        if (error != nullptr)
+        {
+            *error = "Weapon profiles failed mandatory disk read-back: " +
+                verifyError;
+        }
+        return false;
+    }
+    return true;
+}
+
+vwp::Document LoadWeaponProfiles(
+    const std::filesystem::path& path,
+    std::string* const error)
+{
+    if (!std::filesystem::is_regular_file(path))
+    {
+        if (error != nullptr)
+        {
+            error->clear();
+        }
+        return vwp::DefaultDocument();
+    }
+    vwp::Document document;
+    if (!vwp::ParseDocument(ReadTextFile(path), &document, error))
+    {
+        return vwp::DefaultDocument();
+    }
+    return document;
+}
+
 double NumberValue(
     const kc::SettingsMap& values,
     const char* key,
@@ -248,12 +433,52 @@ std::string StringValue(
     return found == values.end() ? fallback : found->second;
 }
 
+kc::MeasurementUnitSystem ActiveMeasurementUnits(
+    const kc::SettingsMap& values)
+{
+    return kc::MeasurementUnitsFromSettings(values);
+}
+
+std::wstring DisplayMeasurement(
+    const kc::SettingsMap& values,
+    const char* const key,
+    const std::string& canonicalValue)
+{
+    const kc::SettingDefinition* const definition =
+        kc::FindSetting(key);
+    if (definition == nullptr)
+    {
+        return ToWide(canonicalValue);
+    }
+
+    const kc::MeasurementUnitSystem units =
+        ActiveMeasurementUnits(values);
+    std::string displayValue;
+    if (!kc::CanonicalValueToDisplay(
+            *definition,
+            units,
+            canonicalValue,
+            &displayValue))
+    {
+        displayValue = canonicalValue;
+    }
+
+    const std::string suffix =
+        kc::MeasurementUnitSuffix(*definition, units);
+    return ToWide(
+        suffix.empty()
+            ? displayValue
+            : displayValue + " " + suffix);
+}
+
 struct ControlBinding
 {
     const kc::SettingDefinition* definition = nullptr;
     HWND label = nullptr;
     HWND control = nullptr;
     std::wstring description;
+    std::string lastRenderedDisplayValue;
+    std::string lastRenderedCanonicalValue;
 };
 
 struct AppState
@@ -278,9 +503,19 @@ struct AppState
     HWND clearBinding = nullptr;
     std::vector<HWND> bindingEditorControls;
     HWND calibrationStatus = nullptr;
+    HWND calibrationShorter = nullptr;
+    HWND calibrationResetHeight = nullptr;
+    HWND calibrationTaller = nullptr;
     std::vector<HWND> calibrationControls;
     HWND hudStatus = nullptr;
     std::vector<HWND> hudControls;
+    HWND weaponStatus = nullptr;
+    std::vector<HWND> weaponControls;
+    HWND setupStatus = nullptr;
+    HWND setupDetails = nullptr;
+    HWND setupRecommendation = nullptr;
+    HWND setupApplyRecommended = nullptr;
+    std::vector<HWND> setupControls;
     HFONT font = nullptr;
     HFONT titleFont = nullptr;
     HBRUSH backgroundBrush = nullptr;
@@ -290,6 +525,11 @@ struct AppState
     std::filesystem::path defaultsPath;
     std::filesystem::path userPath;
     std::filesystem::path activePath;
+    std::filesystem::path weaponProfilesPath;
+    std::filesystem::path weaponCalibrationRequestPath;
+    std::filesystem::path weaponCalibrationStatusPath;
+    std::filesystem::path runtimeReceiptPath;
+    std::filesystem::path compatibilityReportPath;
     kc::SettingsMap values;
     std::vector<ControlBinding> bindings;
     std::vector<kc::ValidationMessage> validation;
@@ -305,6 +545,14 @@ struct AppState
     std::string pendingHudEditorRequestId;
     bool pendingHudEditorLaunched = false;
     ULONGLONG pendingHudEditorStartedAt = 0u;
+    vwp::Document weaponProfiles = vwp::DefaultDocument();
+    vwp::RuntimeStatus weaponRuntimeStatus;
+    std::string weaponProfilesLoadError;
+    std::string pendingWeaponRequestId;
+    ULONGLONG pendingWeaponRequestStartedAt = 0u;
+    vrc::Probe compatibilityProbe;
+    vrc::Report compatibilityReport;
+    std::string compatibilityReportError;
 };
 
 struct ChordEditorState
@@ -332,16 +580,50 @@ struct HudEditorState
     float resizeStartScale = 1.0f;
 };
 
+enum class WeaponEditorLayer
+{
+    WeaponHip,
+    WeaponShouldered,
+    Gunstock,
+};
+
+struct WeaponEditorState
+{
+    AppState* app = nullptr;
+    HWND window = nullptr;
+    HWND weaponCombo = nullptr;
+    HWND gunstockCombo = nullptr;
+    HWND layerCombo = nullptr;
+    HWND enabled = nullptr;
+    std::array<HWND, 6> valueEdits = {};
+    HWND status = nullptr;
+    vwp::Document document;
+    vwp::RuntimeStatus runtimeStatus;
+    std::string selectedWeaponId;
+    std::string selectedGunstockId;
+    WeaponEditorLayer layer = WeaponEditorLayer::WeaponHip;
+    bool accepted = false;
+    bool suppressEvents = false;
+};
+
 void UpdateControllerBindingEditor(AppState& state);
 void ShowControllerBindingEditor(AppState& state, bool show);
 void ShowCalibrationPanel(AppState& state, bool show);
 void ShowHudPanel(AppState& state, bool show);
+void ShowWeaponPanel(AppState& state, bool show);
+void ShowSetupPanel(AppState& state, bool show);
+void RefreshCompatibility(AppState& state, bool showWriteError);
 LRESULT CALLBACK ChordEditorWindowProc(
     HWND window,
     UINT message,
     WPARAM wParam,
     LPARAM lParam);
 LRESULT CALLBACK HudEditorWindowProc(
+    HWND window,
+    UINT message,
+    WPARAM wParam,
+    LPARAM lParam);
+LRESULT CALLBACK WeaponEditorWindowProc(
     HWND window,
     UINT message,
     WPARAM wParam,
@@ -405,8 +687,9 @@ void AddTooltip(AppState& state, HWND control, std::wstring* text)
 }
 
 void SetControlFromValue(
-    const ControlBinding& binding,
-    const std::string& value)
+    ControlBinding& binding,
+    const std::string& value,
+    const kc::MeasurementUnitSystem units)
 {
     const kc::SettingDefinition& definition = *binding.definition;
     if (definition.type == kc::SettingType::Choice ||
@@ -426,11 +709,23 @@ void SetControlFromValue(
     }
     else
     {
-        SetWindowTextW(binding.control, ToWide(value).c_str());
+        std::string displayValue = value;
+        kc::CanonicalValueToDisplay(
+            definition,
+            units,
+            value,
+            &displayValue);
+        binding.lastRenderedDisplayValue = displayValue;
+        binding.lastRenderedCanonicalValue = value;
+        SetWindowTextW(
+            binding.control,
+            ToWide(displayValue).c_str());
     }
 }
 
-std::string ValueFromControl(const ControlBinding& binding)
+std::string ValueFromControl(
+    const ControlBinding& binding,
+    const kc::MeasurementUnitSystem units)
 {
     const kc::SettingDefinition& definition = *binding.definition;
     if (definition.type == kc::SettingType::Choice ||
@@ -447,31 +742,105 @@ std::string ValueFromControl(const ControlBinding& binding)
         return definition.defaultValue;
     }
 
-    return ToUtf8(WindowText(binding.control));
+    const std::string displayValue =
+        ToUtf8(WindowText(binding.control));
+    if (definition.measurementKind == kc::MeasurementKind::None)
+    {
+        return displayValue;
+    }
+
+    if (displayValue == binding.lastRenderedDisplayValue)
+    {
+        return binding.lastRenderedCanonicalValue;
+    }
+
+    std::string canonicalValue;
+    return kc::DisplayValueToCanonical(
+               definition,
+               units,
+               displayValue,
+               &canonicalValue)
+        ? canonicalValue
+        : displayValue;
+}
+
+void UpdateMeasurementPresentation(AppState& state)
+{
+    const kc::MeasurementUnitSystem units =
+        ActiveMeasurementUnits(state.values);
+
+    for (ControlBinding& binding : state.bindings)
+    {
+        SetWindowTextW(
+            binding.label,
+            ToWide(kc::DisplaySettingLabel(
+                *binding.definition,
+                units)).c_str());
+    }
+
+    if (state.calibrationShorter != nullptr)
+    {
+        SetWindowTextW(
+            state.calibrationShorter,
+            units == kc::MeasurementUnitSystem::Metric
+                ? L"1 cm shorter"
+                : L"1 in shorter");
+    }
+    if (state.calibrationResetHeight != nullptr)
+    {
+        SetWindowTextW(
+            state.calibrationResetHeight,
+            units == kc::MeasurementUnitSystem::Metric
+                ? L"Reset current mode to 152.4 cm"
+                : L"Reset current mode to 60 in");
+    }
+    if (state.calibrationTaller != nullptr)
+    {
+        SetWindowTextW(
+            state.calibrationTaller,
+            units == kc::MeasurementUnitSystem::Metric
+                ? L"1 cm taller"
+                : L"1 in taller");
+    }
+
+    if (state.preview != nullptr)
+    {
+        InvalidateRect(state.preview, nullptr, TRUE);
+    }
 }
 
 void UpdateAllControls(AppState& state)
 {
     state.suppressEvents = true;
-    for (const ControlBinding& binding : state.bindings)
+    const kc::MeasurementUnitSystem units =
+        ActiveMeasurementUnits(state.values);
+    for (ControlBinding& binding : state.bindings)
     {
         const auto found = state.values.find(binding.definition->key);
         SetControlFromValue(
             binding,
             found == state.values.end()
                 ? binding.definition->defaultValue
-                : found->second);
+                : found->second,
+            units);
     }
     state.suppressEvents = false;
+    UpdateMeasurementPresentation(state);
     UpdateControllerBindingEditor(state);
-    InvalidateRect(state.preview, nullptr, TRUE);
+    if (state.preview != nullptr)
+    {
+        InvalidateRect(state.preview, nullptr, TRUE);
+    }
 }
 
 void ReadAllControls(AppState& state)
 {
+    const kc::MeasurementUnitSystem units =
+        ActiveMeasurementUnits(state.values);
     for (const ControlBinding& binding : state.bindings)
     {
-        state.values[binding.definition->key] = ValueFromControl(binding);
+        state.values[binding.definition->key] =
+            ValueFromControl(binding, units);
     }
 }
 
@@ -564,14 +933,296 @@ void UpdateValidation(AppState& state)
     InvalidateRect(state.preview, nullptr, TRUE);
 }
 
+std::wstring CompatibilityStatusLabel(const vrc::Status status)
+{
+    switch (status)
+    {
+        case vrc::Status::Ready:
+            return L"READY";
+        case vrc::Status::Warning:
+            return L"READY WITH WARNINGS";
+        case vrc::Status::Blocked:
+            return L"BLOCKED";
+        default:
+            return L"UNKNOWN";
+    }
+}
+
+std::wstring CompatibilityCheckPrefix(const vrc::Status status)
+{
+    switch (status)
+    {
+        case vrc::Status::Ready:
+            return L"[PASS] ";
+        case vrc::Status::Warning:
+            return L"[WARN] ";
+        case vrc::Status::Blocked:
+            return L"[BLOCK] ";
+        default:
+            return L"[?] ";
+    }
+}
+
+std::wstring CompatibilityDetailsText(const vrc::Report& report)
+{
+    std::wostringstream output;
+    for (const vrc::Check& check : report.checks)
+    {
+        output << CompatibilityCheckPrefix(check.status)
+               << ToWide(check.label) << L": "
+               << ToWide(check.detail);
+        if (!check.action.empty())
+        {
+            output << L"  Action: " << ToWide(check.action);
+        }
+        output << L"\r\n";
+    }
+    return output.str();
+}
+
+void RefreshCompatibility(
+    AppState& state,
+    const bool showWriteError)
+{
+    ReadAllControls(state);
+    state.compatibilityProbe = wc::ProbeSystem(
+        state.gameDirectory,
+        state.runtimeReceiptPath,
+        StringValue(state.values, "KISAK_VR_BACKEND", "auto"),
+        StringValue(state.values, "VR_CUSTOM_MODE", "6016x2688"),
+        StringValue(state.values, "KISAK_VR_OUTPUT_SCALE", "1.00"));
+    state.compatibilityReport = vrc::Evaluate(state.compatibilityProbe);
+
+    const std::string reportText = vrc::SerializeReport(
+        state.compatibilityProbe,
+        state.compatibilityReport,
+        wc::LocalTimestamp());
+    state.compatibilityReportError.clear();
+    const bool reportWritten = wc::WriteReportAtomic(
+        state.compatibilityReportPath,
+        reportText,
+        &state.compatibilityReportError);
+
+    if (state.setupStatus != nullptr)
+    {
+        std::wstring status = L"Compatibility: " +
+            CompatibilityStatusLabel(state.compatibilityReport.status);
+        status += state.compatibilityReport.headsetTestRequired
+            ? L"  |  Headset test still required"
+            : L"  |  Prior headset test recorded";
+        SetWindowTextW(state.setupStatus, status.c_str());
+    }
+    if (state.setupDetails != nullptr)
+    {
+        const std::wstring details =
+            CompatibilityDetailsText(state.compatibilityReport);
+        SetWindowTextW(state.setupDetails, details.c_str());
+    }
+    if (state.setupRecommendation != nullptr)
+    {
+        std::wstring recommendation = L"Recommended: " +
+            ToWide(state.compatibilityReport.recommendationSummary);
+        if (!reportWritten)
+        {
+            recommendation += L"  Report write failed: " +
+                ToWide(state.compatibilityReportError);
+        }
+        SetWindowTextW(
+            state.setupRecommendation,
+            recommendation.c_str());
+    }
+
+    const bool backendChange =
+        !state.compatibilityReport.recommendedBackend.empty() &&
+        state.compatibilityReport.recommendedBackend !=
+            StringValue(state.values, "KISAK_VR_BACKEND", "auto");
+    const bool graphicsChange =
+        (state.compatibilityReport.recommendedGraphicsProfile == "native" &&
+         StringValue(state.values, "VR_CUSTOM_MODE", "6016x2688") !=
+             "6016x2688") ||
+        (state.compatibilityReport.recommendedGraphicsProfile == "performance" &&
+         StringValue(state.values, "VR_CUSTOM_MODE", "6016x2688") !=
+             "4768x2016");
+    if (state.setupApplyRecommended != nullptr)
+    {
+        EnableWindow(
+            state.setupApplyRecommended,
+            backendChange || graphicsChange);
+    }
+
+    if (!reportWritten && showWriteError)
+    {
+        MessageBoxW(
+            state.window,
+            ToWide(state.compatibilityReportError).c_str(),
+            L"Compatibility report could not be saved",
+            MB_OK | MB_ICONWARNING);
+    }
+    if (state.preview != nullptr)
+    {
+        InvalidateRect(state.preview, nullptr, TRUE);
+    }
+}
+
+void ApplyRecommendedCompatibility(AppState& state)
+{
+    ReadAllControls(state);
+    const std::string currentBackend =
+        StringValue(state.values, "KISAK_VR_BACKEND", "auto");
+    const std::string currentMode =
+        StringValue(state.values, "VR_CUSTOM_MODE", "6016x2688");
+    const std::string recommendedBackend =
+        state.compatibilityReport.recommendedBackend;
+    const std::string recommendedGraphics =
+        state.compatibilityReport.recommendedGraphicsProfile;
+
+    std::wostringstream changes;
+    if (!recommendedBackend.empty() &&
+        recommendedBackend != currentBackend)
+    {
+        changes << L"Runtime backend: " << ToWide(currentBackend)
+                << L" -> " << ToWide(recommendedBackend) << L"\r\n";
+    }
+
+    const std::string recommendedMode =
+        recommendedGraphics == "performance"
+            ? "4768x2016"
+            : "6016x2688";
+    if (recommendedMode != currentMode)
+    {
+        changes << L"Graphics profile: "
+                << (currentMode == "4768x2016" ? L"Performance" : L"Native")
+                << L" -> "
+                << (recommendedGraphics == "performance" ? L"Performance" : L"Native")
+                << L"\r\n";
+    }
+
+    if (changes.str().empty())
+    {
+        MessageBoxW(
+            state.window,
+            L"The recommended backend and graphics profile are already active.",
+            L"Recommended setup",
+            MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    const std::wstring prompt =
+        L"Apply only these detected compatibility changes?\r\n\r\n" +
+        changes.str() +
+        L"\r\nHandedness, units, comfort, controls, HUD, weapon profiles, and calibration will not change.";
+    if (MessageBoxW(
+            state.window,
+            prompt.c_str(),
+            L"Apply recommended compatibility setup",
+            MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES)
+    {
+        return;
+    }
+
+    if (!recommendedBackend.empty())
+    {
+        state.values["KISAK_VR_BACKEND"] = recommendedBackend;
+    }
+    if (recommendedGraphics == "performance")
+    {
+        state.values["VR_CUSTOM_MODE"] = "4768x2016";
+        state.values["KISAK_VR_OUTPUT_SCALE"] = "0.75";
+        state.values["KISAK_VR_FSR"] = "1";
+        state.values["KISAK_VR_FSR_SHARPNESS"] = "0.60";
+        state.values["KISAK_VR_SCOPE_CAPTURE_SIZE"] = "768";
+    }
+    else if (recommendedGraphics == "native")
+    {
+        state.values["VR_CUSTOM_MODE"] = "6016x2688";
+        state.values["KISAK_VR_OUTPUT_SCALE"] = "1.00";
+        state.values["KISAK_VR_FSR"] = "0";
+        state.values["KISAK_VR_SCOPE_CAPTURE_SIZE"] = "1024";
+    }
+
+    MarkSettingsDirty(state, "Compatibility recommendation");
+    UpdateAllControls(state);
+    UpdateValidation(state);
+    RefreshCompatibility(state, true);
+}
+
+void CopyCompatibilityReport(AppState& state)
+{
+    const std::string report = vrc::SerializeReport(
+        state.compatibilityProbe,
+        state.compatibilityReport,
+        wc::LocalTimestamp());
+    const std::wstring wideReport = ToWide(report);
+    if (!OpenClipboard(state.window))
+    {
+        MessageBoxW(
+            state.window,
+            L"Windows could not open the clipboard.",
+            L"Copy compatibility report",
+            MB_OK | MB_ICONWARNING);
+        return;
+    }
+
+    EmptyClipboard();
+    const SIZE_T bytes =
+        (wideReport.size() + 1u) * sizeof(wchar_t);
+    HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, bytes);
+    if (memory != nullptr)
+    {
+        void* destination = GlobalLock(memory);
+        if (destination != nullptr)
+        {
+            std::memcpy(destination, wideReport.c_str(), bytes);
+            GlobalUnlock(memory);
+            if (SetClipboardData(CF_UNICODETEXT, memory) != nullptr)
+            {
+                memory = nullptr;
+            }
+        }
+    }
+    if (memory != nullptr)
+    {
+        GlobalFree(memory);
+    }
+    CloseClipboard();
+}
+
+void OpenCompatibilityReport(AppState& state)
+{
+    RefreshCompatibility(state, true);
+    if (!std::filesystem::is_regular_file(state.compatibilityReportPath))
+    {
+        return;
+    }
+    const HINSTANCE result = ShellExecuteW(
+        state.window,
+        L"open",
+        state.compatibilityReportPath.c_str(),
+        nullptr,
+        state.compatibilityReportPath.parent_path().c_str(),
+        SW_SHOWNORMAL);
+    if (reinterpret_cast<INT_PTR>(result) <= 32)
+    {
+        MessageBoxW(
+            state.window,
+            L"Windows could not open Compatibility-Report.txt.",
+            L"Open compatibility report",
+            MB_OK | MB_ICONWARNING);
+    }
+}
+
 void LayoutSettings(AppState& state)
 {
+    const bool setupPage =
+        state.selectedPage == PageIndex(kc::SettingPage::Quick);
     const bool controllerPage =
         state.selectedPage == PageIndex(kc::SettingPage::Controls);
     const bool calibrationPage =
         state.selectedPage == PageIndex(kc::SettingPage::Calibration);
     const bool hudPage =
         state.selectedPage == PageIndex(kc::SettingPage::Hud);
+    const bool weaponPage =
+        state.selectedPage == PageIndex(kc::SettingPage::Weapons);
 
     std::vector<ControlBinding*> visible;
     for (ControlBinding& binding : state.bindings)
@@ -593,18 +1244,27 @@ void LayoutSettings(AppState& state)
     ShowControllerBindingEditor(state, controllerPage);
     ShowCalibrationPanel(state, calibrationPage);
     ShowHudPanel(state, hudPage);
+    ShowWeaponPanel(state, weaponPage);
+    ShowSetupPanel(state, setupPage);
 
     const int pageX = kTabLeft + 18;
-    const int pageY = hudPage
-        ? kTabTop + 140
-        : kTabTop + 54;
+    const int pageY = setupPage
+        ? kTabTop + 330
+        : (hudPage
+            ? kTabTop + 140
+            : (weaponPage ? kTabTop + 170 : kTabTop + 54));
     const int count = static_cast<int>(visible.size());
-    const int columns = count > 8 ? 2 : 1;
-    const int rows = columns == 1 ? count : (count + 1) / 2;
-    const int columnWidth = columns == 1 ? 520 : 344;
-    const int rowHeight = hudPage && rows > 7
+    const int columns = setupPage
+        ? 3
+        : (count > 20 ? 3 : (count > 8 ? 2 : 1));
+    const int rows = (count + columns - 1) / columns;
+    const int columnWidth =
+        columns == 1 ? 520 : (columns == 2 ? 344 : 230);
+    const int rowHeight = setupPage
+        ? 55
+        : ((hudPage || weaponPage) && rows > 7
         ? 43
-        : (rows > 7 ? 54 : 62);
+        : (rows > 7 ? 54 : 62));
 
     for (int index = 0; index < count; ++index)
     {
@@ -612,7 +1272,8 @@ void LayoutSettings(AppState& state)
         const int row = columns == 1 ? index : index % rows;
         const int x = pageX + column * columnWidth;
         const int y = pageY + row * rowHeight;
-        const int controlWidth = columns == 1 ? 300 : 292;
+        const int controlWidth =
+            columns == 1 ? 300 : (columns == 2 ? 292 : 214);
 
         MoveWindow(visible[index]->label, x, y, controlWidth, 18, TRUE);
         MoveWindow(
@@ -649,8 +1310,12 @@ void UpdateHint(AppState& state, const int identifier)
     }
 
     const ControlBinding& binding = state.bindings[static_cast<std::size_t>(index)];
+    const kc::MeasurementUnitSystem units =
+        ActiveMeasurementUnits(state.values);
     const std::wstring hint =
-        ToWide(binding.definition->label) + L"\r\n" + binding.description;
+        ToWide(kc::DisplaySettingLabel(
+            *binding.definition,
+            units)) + L"\r\n" + binding.description;
     SetWindowTextW(state.hint, hint.c_str());
 }
 
@@ -707,10 +1372,32 @@ void OnSettingChanged(AppState& state, const int identifier)
     }
 
     ControlBinding& binding = state.bindings[static_cast<std::size_t>(index)];
-    state.values[binding.definition->key] = ValueFromControl(binding);
+    const kc::MeasurementUnitSystem units =
+        ActiveMeasurementUnits(state.values);
+    const std::string changedValue =
+        ValueFromControl(binding, units);
+    if (binding.definition->key == "KISAK_VR_DOMINANT_HAND")
+    {
+        kc::ApplyDominantHand(changedValue, &state.values);
+        UpdateAllControls(state);
+    }
+    else
+    {
+        state.values[binding.definition->key] = changedValue;
+    }
     MarkSettingsDirty(state, "Custom");
+    if (binding.definition->key == "KISAK_VR_UNIT_SYSTEM")
+    {
+        UpdateAllControls(state);
+    }
     SynchronizePackedMode(state, binding.definition->key);
     UpdateValidation(state);
+    if (binding.definition->key == "KISAK_VR_BACKEND" ||
+        binding.definition->key == "VR_CUSTOM_MODE" ||
+        binding.definition->key == "KISAK_VR_OUTPUT_SCALE")
+    {
+        RefreshCompatibility(state, false);
+    }
 }
 
 const vi::ActionDefinition* SelectedControllerAction(
@@ -2249,7 +2936,7 @@ void CaptureControllerBinding(
     {
         MessageBoxW(
             state.window,
-            L"KisakCOD-VR-Input-Mapper.exe is missing. Re-extract the complete beta.8 package, or select an input manually from the dropdown.",
+            L"KisakCOD-VR-Input-Mapper.exe is missing. Re-extract the complete package, or select an input manually from the dropdown.",
             L"Input mapper missing",
             MB_OK | MB_ICONERROR);
         return;
@@ -2481,6 +3168,25 @@ void ShowValidationError(AppState& state)
         MB_OK | MB_ICONWARNING);
 }
 
+bool ConfirmReplaceInvalidWeaponProfiles(AppState& state)
+{
+    if (state.weaponProfilesLoadError.empty())
+    {
+        return true;
+    }
+
+    const std::wstring message =
+        L"The existing per-weapon profile file was rejected and has not been changed.\r\n\r\n" +
+        ToWide(state.weaponProfilesLoadError) +
+        L"\r\n\r\nSaving now will replace it with the valid profiles currently shown. Continue?\r\n\r\nFile:\r\n" +
+        state.weaponProfilesPath.wstring();
+    return MessageBoxW(
+        state.window,
+        message.c_str(),
+        L"Replace invalid weapon profile file?",
+        MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) == IDYES;
+}
+
 bool SaveActiveSettings(AppState& state, const bool quiet)
 {
     UpdateValidation(state);
@@ -2489,6 +3195,27 @@ bool SaveActiveSettings(AppState& state, const bool quiet)
         ShowValidationError(state);
         return false;
     }
+
+    if (!ConfirmReplaceInvalidWeaponProfiles(state))
+    {
+        return false;
+    }
+
+    std::string weaponProfileError;
+    if (!SaveWeaponProfiles(
+            state.weaponProfilesPath,
+            state.weaponProfiles,
+            &weaponProfileError))
+    {
+        MessageBoxW(
+            state.window,
+            (L"The configurator could not save the per-weapon and gunstock profiles.\r\n\r\n" +
+             ToWide(weaponProfileError)).c_str(),
+            L"Weapon calibration save failed",
+            MB_OK | MB_ICONERROR);
+        return false;
+    }
+    state.weaponProfilesLoadError.clear();
 
     const kc::SaveResult result = kc::SaveUserSettingsAtomic(
         state.userPath,
@@ -2648,6 +3375,153 @@ bool IsProcessRunning(const wchar_t* const imageName)
     return found;
 }
 
+std::string NewWeaponCalibrationRequestId()
+{
+    std::ostringstream output;
+    output << "weapon-" << GetCurrentProcessId() << '-'
+           << GetTickCount64();
+    return output.str();
+}
+
+bool ReadWeaponRuntimeStatus(
+    AppState& state,
+    vwp::RuntimeStatus* const status)
+{
+    std::string parseError;
+    const std::string text = ReadTextFileLimited(
+        state.weaponCalibrationStatusPath,
+        16384u);
+    return !text.empty() &&
+        vwp::ParseRuntimeStatus(text, status, &parseError);
+}
+
+void UpdateWeaponStatusLabel(AppState& state)
+{
+    if (state.weaponStatus == nullptr)
+    {
+        return;
+    }
+
+    if (!state.weaponProfilesLoadError.empty())
+    {
+        SetWindowTextW(
+            state.weaponStatus,
+            L"The saved weapon profile file is invalid; global calibration remains active. Open the editor to review or replace it.");
+        return;
+    }
+
+    vwp::RuntimeStatus status;
+    std::wstring label;
+    if (ReadWeaponRuntimeStatus(state, &status) &&
+        !status.weaponId.empty())
+    {
+        state.weaponRuntimeStatus = status;
+        if (status.status == "invalid_profiles")
+        {
+            label = L"Runtime rejected the weapon profile file: " +
+                ToWide(status.message);
+        }
+        else
+        {
+            label = L"Current: " + ToWide(status.weaponId) + L" (#" +
+                std::to_wstring(status.weaponIndex) + L")  |  " +
+                (status.effective.shoulderedBlend >= 0.5f
+                    ? L"shouldered/ADS"
+                    : L"hip-fire") +
+                L"  |  gunstock: " + ToWide(status.activeGunstockId);
+        }
+    }
+    else if (IsProcessRunning(L"KisakCOD-sp.exe"))
+    {
+        label = L"COD4 is running; enter an active mission to publish the current weapon.";
+    }
+    else
+    {
+        label = L"Launch a mission, then Refresh to select the equipped weapon automatically.";
+    }
+    SetWindowTextW(state.weaponStatus, label.c_str());
+}
+
+bool SendWeaponCalibrationRequest(
+    AppState& state,
+    vwp::Request request,
+    vwp::RuntimeStatus* const response)
+{
+    if (!IsProcessRunning(L"KisakCOD-sp.exe"))
+    {
+        MessageBoxW(
+            state.window,
+            L"KisakCOD-sp.exe is not running. Launch the game, enter a mission, and retry the live calibration action.",
+            L"Live weapon calibration",
+            MB_OK | MB_ICONINFORMATION);
+        return false;
+    }
+
+    request.requestId = NewWeaponCalibrationRequestId();
+    std::error_code removeError;
+    std::filesystem::remove(state.weaponCalibrationStatusPath, removeError);
+    std::string writeError;
+    if (!WriteTextFileAtomic(
+            state.weaponCalibrationRequestPath,
+            vwp::SerializeRequest(request),
+            &writeError))
+    {
+        MessageBoxW(
+            state.window,
+            ToWide(writeError).c_str(),
+            L"Live weapon calibration request failed",
+            MB_OK | MB_ICONERROR);
+        return false;
+    }
+
+    const ULONGLONG deadline = GetTickCount64() + 6000u;
+    const BOOL mainWindowWasEnabled = IsWindowEnabled(state.window);
+    if (mainWindowWasEnabled)
+    {
+        EnableWindow(state.window, FALSE);
+    }
+    bool matched = false;
+    vwp::RuntimeStatus received;
+    while (GetTickCount64() < deadline)
+    {
+        if (ReadWeaponRuntimeStatus(state, &received) &&
+            received.requestId == request.requestId)
+        {
+            matched = true;
+            break;
+        }
+        MSG message = {};
+        while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE))
+        {
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+        Sleep(50u);
+    }
+    if (mainWindowWasEnabled)
+    {
+        EnableWindow(state.window, TRUE);
+        SetForegroundWindow(state.window);
+    }
+
+    if (!matched)
+    {
+        MessageBoxW(
+            state.window,
+            L"The running game did not acknowledge the request within six seconds. Make sure an actively rendering mission is open.",
+            L"Live weapon calibration timed out",
+            MB_OK | MB_ICONWARNING);
+        return false;
+    }
+    state.weaponRuntimeStatus = received;
+    if (response != nullptr)
+    {
+        *response = received;
+    }
+    UpdateWeaponStatusLabel(state);
+    return true;
+}
+
 void SetHudStatus(
     AppState& state,
     const std::wstring& text)
@@ -2705,7 +3579,7 @@ void PollHudEditorStatus(AppState& state)
             SetHudStatus(
                 state,
                 saved
-                    ? L"Headset layout imported and 125/125 settings read-back verified."
+                    ? L"Headset layout imported and 142/142 settings read-back verified."
                     : L"Headset layout imported, but the settings file could not be saved.");
             MessageBoxW(
                 state.window,
@@ -2779,7 +3653,7 @@ void StartHeadsetHudEditor(AppState& state)
         SetHudStatus(state, L"Could not write HUD-Editor-Request.txt.");
         MessageBoxW(
             state.window,
-            L"Beta.8 could not write HUD-Editor-Request.txt under your KisakCOD-VR settings folder.",
+            L"Beta.9 could not write HUD-Editor-Request.txt under your KisakCOD-VR settings folder.",
             L"Headset HUD editor failed",
             MB_OK | MB_ICONERROR);
         return;
@@ -2807,7 +3681,7 @@ void StartHeadsetHudEditor(AppState& state)
         L"In the headset:\r\n\r\n"
         L"• Point at a HUD group and hold the right trigger to drag it.\r\n"
         L"• Right-stick up/down resizes the selected group.\r\n"
-        L"• Hold the left grip to temporarily disable snapping.\r\n"
+        L"• Hold the off-hand grip to temporarily disable snapping.\r\n"
         L"• Point at SAVE or press A to keep the layout.\r\n"
         L"• Point at CANCEL or press B to restore the original layout.\r\n\r\n"
         L"Gameplay input is suppressed while the editor is active.",
@@ -3003,11 +3877,11 @@ std::string ActiveCalibrationHeightKey(
         : "KISAK_VR_STANDING_EYE_HEIGHT";
 }
 
-std::string OneDecimal(const double value)
+std::string CanonicalHeightValue(const double value)
 {
     std::ostringstream formatted;
     formatted.setf(std::ios::fixed, std::ios::floatfield);
-    formatted.precision(1);
+    formatted.precision(2);
     formatted << value;
     return formatted.str();
 }
@@ -3072,8 +3946,8 @@ bool SendCalibrationCommand(
         const int accepted = MessageBoxW(
             state.window,
             command == vc::Command::MeasureStanding
-                ? L"Stand naturally with the headset on, face the desired forward direction, and look level.\r\n\r\nAfter you press OK, beta.8 waits three seconds, measures your eye height from the runtime floor, and recenters the view."
-                : L"Put on the headset, assume your normal playing posture, face the desired forward direction, and look level.\r\n\r\nAfter you press OK, beta.8 waits three seconds and captures that pose as forward and level.",
+                ? L"Stand naturally with the headset on, face the desired forward direction, and look level.\r\n\r\nAfter you press OK, beta.9 waits three seconds, measures your eye height from the runtime floor, and recenters the view."
+                : L"Put on the headset, assume your normal playing posture, face the desired forward direction, and look level.\r\n\r\nAfter you press OK, beta.9 waits three seconds and captures that pose as forward and level.",
             L"Guided VR calibration",
             MB_OKCANCEL | MB_ICONINFORMATION);
 
@@ -3130,7 +4004,7 @@ bool SendCalibrationCommand(
             L"Could not write the live calibration request.");
         MessageBoxW(
             state.window,
-            L"Beta.8 could not write Calibration-Request.txt under your KisakCOD-VR settings folder.",
+            L"Beta.9 could not write Calibration-Request.txt under your KisakCOD-VR settings folder.",
             L"Calibration request failed",
             MB_OK | MB_ICONERROR);
         return false;
@@ -3195,7 +4069,7 @@ bool SendCalibrationCommand(
             SetCalibrationValue(
                 state,
                 "KISAK_VR_STANDING_EYE_HEIGHT",
-                OneDecimal(measured));
+                CanonicalHeightValue(measured));
             if (!SaveActiveSettings(state, true))
             {
                 SetCalibrationStatus(
@@ -3209,14 +4083,18 @@ bool SendCalibrationCommand(
     const std::wstring backend = response.count("BACKEND") != 0u
         ? ToWide(response.at("BACKEND"))
         : L"runtime";
-    const std::wstring applied =
+    const std::string appliedCanonical =
         response.count("APPLIED_EYE_HEIGHT_INCHES") != 0u
-            ? ToWide(response.at("APPLIED_EYE_HEIGHT_INCHES"))
-            : ToWide(OneDecimal(request.targetEyeHeightInches));
+            ? response.at("APPLIED_EYE_HEIGHT_INCHES")
+            : CanonicalHeightValue(request.targetEyeHeightInches);
+    const std::wstring applied = DisplayMeasurement(
+        state.values,
+        heightKey.c_str(),
+        appliedCanonical);
 
     std::wstring success =
         L"Applied by " + backend + L": " + applied +
-        L" in virtual eye height";
+        L" virtual eye height";
 
     if (command != vc::Command::ApplyHeight)
     {
@@ -3275,10 +4153,16 @@ void ApplySeatedCalibration(AppState& state)
 
 void AdjustCalibrationHeight(
     AppState& state,
-    const double delta,
+    const double displayDelta,
     const bool reset)
 {
     ReadAllControls(state);
+    const kc::MeasurementUnitSystem units =
+        ActiveMeasurementUnits(state.values);
+    const double deltaInches =
+        units == kc::MeasurementUnitSystem::Metric
+            ? displayDelta / 2.54
+            : displayDelta;
     const std::string key =
         ActiveCalibrationHeightKey(state);
     const double current = NumberValue(
@@ -3288,14 +4172,14 @@ void AdjustCalibrationHeight(
     const double requested = reset
         ? vc::kNativeStandingEyeHeightInches
         : std::clamp(
-              current + delta,
+              current + deltaInches,
               static_cast<double>(vc::kMinimumEyeHeightInches),
               static_cast<double>(vc::kMaximumEyeHeightInches));
 
     SetCalibrationValue(
         state,
         key,
-        OneDecimal(requested));
+        CanonicalHeightValue(requested));
     SendCalibrationCommand(
         state,
         vc::Command::ApplyHeight,
@@ -3418,6 +4302,7 @@ void ApplySelectedPreset(AppState& state)
         MarkSettingsDirty(state, name);
         UpdateAllControls(state);
         UpdateValidation(state);
+        RefreshCompatibility(state, false);
     }
 }
 
@@ -3436,6 +4321,7 @@ void RestoreDefaults(AppState& state)
     MarkSettingsDirty(state, "Tested Quest 3");
     UpdateAllControls(state);
     UpdateValidation(state);
+    RefreshCompatibility(state, false);
 }
 
 void DrawTextSimple(
@@ -3448,6 +4334,82 @@ void DrawTextSimple(
     SetTextColor(dc, color);
     SetBkMode(dc, TRANSPARENT);
     DrawTextW(dc, text.c_str(), -1, &rect, format);
+}
+
+void DrawCompatibilityPreview(
+    HDC dc,
+    const RECT& client,
+    const AppState& state)
+{
+    RECT title = {18, 14, client.right - 18, 44};
+    DrawTextSimple(
+        dc,
+        L"Launch readiness",
+        title,
+        DT_LEFT | DT_SINGLELINE,
+        RGB(30, 39, 55));
+
+    COLORREF statusColor = RGB(47, 121, 75);
+    if (state.compatibilityReport.status == vrc::Status::Warning)
+    {
+        statusColor = RGB(196, 119, 47);
+    }
+    else if (state.compatibilityReport.status == vrc::Status::Blocked)
+    {
+        statusColor = RGB(178, 78, 42);
+    }
+
+    RECT badge = {18, 54, client.right - 18, 102};
+    HBRUSH badgeBrush = CreateSolidBrush(statusColor);
+    FillRect(dc, &badge, badgeBrush);
+    DeleteObject(badgeBrush);
+    DrawTextSimple(
+        dc,
+        CompatibilityStatusLabel(state.compatibilityReport.status),
+        badge,
+        DT_CENTER | DT_VCENTER | DT_SINGLELINE,
+        RGB(255, 255, 255));
+
+    int y = 120;
+    for (const vrc::Check& check : state.compatibilityReport.checks)
+    {
+        COLORREF rowColor = RGB(47, 121, 75);
+        if (check.status == vrc::Status::Warning)
+        {
+            rowColor = RGB(196, 119, 47);
+        }
+        else if (check.status == vrc::Status::Blocked)
+        {
+            rowColor = RGB(178, 78, 42);
+        }
+
+        HBRUSH dot = CreateSolidBrush(rowColor);
+        HGDIOBJ oldBrush = SelectObject(dc, dot);
+        Ellipse(dc, 22, y + 2, 34, y + 14);
+        SelectObject(dc, oldBrush);
+        DeleteObject(dot);
+
+        RECT label = {42, y, client.right - 18, y + 20};
+        DrawTextSimple(
+            dc,
+            ToWide(check.label),
+            label,
+            DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS,
+            RGB(57, 68, 84));
+        y += 35;
+        if (y > 345)
+        {
+            break;
+        }
+    }
+
+    RECT recommendation = {18, 370, client.right - 18, 432};
+    DrawTextSimple(
+        dc,
+        ToWide(state.compatibilityReport.recommendationSummary),
+        recommendation,
+        DT_LEFT | DT_WORDBREAK,
+        RGB(104, 63, 20));
 }
 
 void DrawControllerPreview(HDC dc, const RECT& client, const AppState& state)
@@ -3746,6 +4708,18 @@ void DrawCalibrationPreview(
         vc::kNativeStandingEyeHeightInches);
     const double correction = targetHeight -
         vc::kNativeStandingEyeHeightInches;
+    const std::wstring targetDisplay = DisplayMeasurement(
+        state.values,
+        heightKey,
+        CanonicalHeightValue(targetHeight));
+    std::wstring correctionDisplay = DisplayMeasurement(
+        state.values,
+        heightKey,
+        CanonicalHeightValue(correction));
+    if (correction > 0.0)
+    {
+        correctionDisplay.insert(correctionDisplay.begin(), L'+');
+    }
 
     RECT title = {18, 14, client.right - 18, 42};
     DrawTextSimple(
@@ -3759,10 +4733,8 @@ void DrawCalibrationPreview(
     std::wostringstream summaryText;
     summaryText << (seated ? L"Seated" : L"Standing")
                 << L" mode\r\nTarget eye height: "
-                << std::fixed << std::setprecision(1)
-                << targetHeight << L" in  |  Correction: "
-                << std::showpos << correction << std::noshowpos
-                << L" in";
+                << targetDisplay << L"  |  Correction: "
+                << correctionDisplay;
     DrawTextSimple(
         dc,
         summaryText.str(),
@@ -3853,7 +4825,11 @@ LRESULT CALLBACK PreviewWindowProc(
         FrameRect(dc, &client, static_cast<HBRUSH>(GetStockObject(LTGRAY_BRUSH)));
         SelectObject(dc, state->font);
 
-        if (state->selectedPage == PageIndex(kc::SettingPage::Controls))
+        if (state->selectedPage == PageIndex(kc::SettingPage::Quick))
+        {
+            DrawCompatibilityPreview(dc, client, *state);
+        }
+        else if (state->selectedPage == PageIndex(kc::SettingPage::Controls))
         {
             DrawControllerPreview(dc, client, *state);
         }
@@ -3874,9 +4850,115 @@ LRESULT CALLBACK PreviewWindowProc(
     return DefWindowProcW(window, message, wParam, lParam);
 }
 
+void ShowSetupPanel(AppState& state, const bool show)
+{
+    for (HWND control : state.setupControls)
+    {
+        ShowWindow(control, show ? SW_SHOW : SW_HIDE);
+    }
+}
+
+void BuildSetupPanel(AppState& state)
+{
+    const auto add = [&](HWND control)
+    {
+        state.setupControls.push_back(control);
+        return control;
+    };
+
+    add(CreateControl(
+        state,
+        L"STATIC",
+        L"One read-only scan for installation, DirectX, GPU, 32/64-bit runtime registration, OpenVR fallback, headset history, and controllers",
+        SS_LEFT,
+        kTabLeft + 20,
+        kTabTop + 38,
+        kTabWidth - 40,
+        22));
+
+    state.setupStatus = add(CreateControl(
+        state,
+        L"STATIC",
+        L"Compatibility: scanning...",
+        SS_LEFT,
+        kTabLeft + 20,
+        kTabTop + 62,
+        kTabWidth - 40,
+        22));
+
+    add(CreateControl(
+        state,
+        L"BUTTON",
+        L"Rescan system",
+        BS_PUSHBUTTON | WS_TABSTOP,
+        kTabLeft + 20,
+        kTabTop + 86,
+        132,
+        30,
+        kIdSetupRescan));
+
+    state.setupApplyRecommended = add(CreateControl(
+        state,
+        L"BUTTON",
+        L"Apply recommended",
+        BS_DEFPUSHBUTTON | WS_TABSTOP,
+        kTabLeft + 160,
+        kTabTop + 86,
+        164,
+        30,
+        kIdSetupApplyRecommended));
+
+    add(CreateControl(
+        state,
+        L"BUTTON",
+        L"Copy support report",
+        BS_PUSHBUTTON | WS_TABSTOP,
+        kTabLeft + 332,
+        kTabTop + 86,
+        170,
+        30,
+        kIdSetupCopyReport));
+
+    add(CreateControl(
+        state,
+        L"BUTTON",
+        L"Open report",
+        BS_PUSHBUTTON | WS_TABSTOP,
+        kTabLeft + 510,
+        kTabTop + 86,
+        192,
+        30,
+        kIdSetupOpenReport));
+
+    state.setupRecommendation = add(CreateControl(
+        state,
+        L"STATIC",
+        L"Recommended setup: calculating...",
+        SS_LEFT,
+        kTabLeft + 20,
+        kTabTop + 122,
+        kTabWidth - 40,
+        42));
+
+    state.setupDetails = add(CreateControl(
+        state,
+        L"EDIT",
+        L"",
+        ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY |
+            WS_VSCROLL,
+        kTabLeft + 20,
+        kTabTop + 166,
+        kTabWidth - 40,
+        154,
+        0,
+        WS_EX_CLIENTEDGE));
+}
+
 void BuildSettingControls(AppState& state)
 {
     const auto& catalog = kc::SettingsCatalog();
+    const kc::MeasurementUnitSystem units =
+        ActiveMeasurementUnits(state.values);
     state.bindings.reserve(catalog.size());
 
     for (std::size_t index = 0; index < catalog.size(); ++index)
@@ -3895,7 +4977,9 @@ void BuildSettingControls(AppState& state)
         binding.label = CreateControl(
             state,
             L"STATIC",
-            ToWide(definition.label).c_str(),
+            ToWide(kc::DisplaySettingLabel(
+                definition,
+                units)).c_str(),
             SS_LEFT,
             0,
             0,
@@ -4118,7 +5202,7 @@ void BuildCalibrationPanel(AppState& state)
     add(CreateControl(
         state,
         L"STATIC",
-        L"For recentering, put on the headset, assume your normal posture, face the desired forward direction, and look level. After you confirm, beta.8 waits three seconds before capturing the pose.",
+        L"For recentering, put on the headset, assume your normal posture, face the desired forward direction, and look level. After you confirm, beta.9 waits three seconds before capturing the pose.",
         SS_LEFT,
         kTabLeft + 20,
         kTabTop + 338,
@@ -4168,10 +5252,10 @@ void BuildCalibrationPanel(AppState& state)
         kTabWidth - 40,
         22));
 
-    add(CreateControl(
+    state.calibrationShorter = add(CreateControl(
         state,
         L"BUTTON",
-        L"1 in shorter",
+        L"1 cm shorter",
         BS_PUSHBUTTON | WS_TABSTOP,
         kTabLeft + 20,
         kTabTop + 466,
@@ -4179,10 +5263,10 @@ void BuildCalibrationPanel(AppState& state)
         32,
         kIdCalibrationShorter));
 
-    add(CreateControl(
+    state.calibrationResetHeight = add(CreateControl(
         state,
         L"BUTTON",
-        L"Reset current mode to 60 in",
+        L"Reset current mode to 152.4 cm",
         BS_PUSHBUTTON | WS_TABSTOP,
         kTabLeft + 182,
         kTabTop + 466,
@@ -4190,10 +5274,10 @@ void BuildCalibrationPanel(AppState& state)
         32,
         kIdCalibrationResetHeight));
 
-    add(CreateControl(
+    state.calibrationTaller = add(CreateControl(
         state,
         L"BUTTON",
-        L"1 in taller",
+        L"1 cm taller",
         BS_PUSHBUTTON | WS_TABSTOP,
         kTabLeft + 454,
         kTabTop + 466,
@@ -4273,6 +5357,1134 @@ void BuildHudPanel(AppState& state)
         22));
 }
 
+HWND CreateWeaponEditorControl(
+    WeaponEditorState& state,
+    const wchar_t* const className,
+    const wchar_t* const text,
+    const DWORD style,
+    const int x,
+    const int y,
+    const int width,
+    const int height,
+    const int identifier = 0,
+    const DWORD extendedStyle = 0u)
+{
+    HWND control = CreateWindowExW(
+        extendedStyle,
+        className,
+        text,
+        WS_CHILD | WS_VISIBLE | style,
+        x,
+        y,
+        width,
+        height,
+        state.window,
+        reinterpret_cast<HMENU>(static_cast<INT_PTR>(identifier)),
+        state.app->instance,
+        nullptr);
+    if (control != nullptr)
+    {
+        SetFont(control, state.app->font);
+    }
+    return control;
+}
+
+vwp::WeaponProfile* SelectedWeaponProfile(WeaponEditorState& state)
+{
+    return state.selectedWeaponId.empty()
+        ? nullptr
+        : vwp::FindWeapon(state.document, state.selectedWeaponId);
+}
+
+vwp::GunstockProfile* SelectedGunstockProfile(WeaponEditorState& state)
+{
+    return vwp::FindGunstock(state.document, state.selectedGunstockId);
+}
+
+vwp::Pose* SelectedWeaponEditorPose(WeaponEditorState& state)
+{
+    if (state.layer == WeaponEditorLayer::Gunstock)
+    {
+        vwp::GunstockProfile* const stock = SelectedGunstockProfile(state);
+        return stock == nullptr ? nullptr : &stock->shouldered;
+    }
+    vwp::WeaponProfile* const weapon = SelectedWeaponProfile(state);
+    if (weapon == nullptr)
+    {
+        return nullptr;
+    }
+    return state.layer == WeaponEditorLayer::WeaponShouldered
+        ? &weapon->shouldered
+        : &weapon->hip;
+}
+
+void PopulateWeaponEditorCombos(WeaponEditorState& state)
+{
+    state.suppressEvents = true;
+    SendMessageW(state.weaponCombo, CB_RESETCONTENT, 0, 0);
+    int selectedWeapon = -1;
+    for (std::size_t index = 0u; index < state.document.weapons.size(); ++index)
+    {
+        const vwp::WeaponProfile& profile = state.document.weapons[index];
+        const std::wstring label = ToWide(profile.name + " [" + profile.id + "]");
+        const LRESULT item = SendMessageW(
+            state.weaponCombo,
+            CB_ADDSTRING,
+            0,
+            reinterpret_cast<LPARAM>(label.c_str()));
+        SendMessageW(
+            state.weaponCombo,
+            CB_SETITEMDATA,
+            item,
+            static_cast<LPARAM>(index));
+        if (profile.id == state.selectedWeaponId)
+        {
+            selectedWeapon = static_cast<int>(item);
+        }
+    }
+    if (selectedWeapon < 0 && !state.document.weapons.empty())
+    {
+        selectedWeapon = 0;
+        state.selectedWeaponId = state.document.weapons.front().id;
+    }
+    SendMessageW(state.weaponCombo, CB_SETCURSEL, selectedWeapon, 0);
+
+    SendMessageW(state.gunstockCombo, CB_RESETCONTENT, 0, 0);
+    int selectedStock = 0;
+    for (std::size_t index = 0u; index < state.document.gunstocks.size(); ++index)
+    {
+        const vwp::GunstockProfile& profile = state.document.gunstocks[index];
+        const std::wstring label = ToWide(profile.name + " [" + profile.id + "]");
+        const LRESULT item = SendMessageW(
+            state.gunstockCombo,
+            CB_ADDSTRING,
+            0,
+            reinterpret_cast<LPARAM>(label.c_str()));
+        SendMessageW(
+            state.gunstockCombo,
+            CB_SETITEMDATA,
+            item,
+            static_cast<LPARAM>(index));
+        if (profile.id == state.selectedGunstockId)
+        {
+            selectedStock = static_cast<int>(item);
+        }
+    }
+    SendMessageW(state.gunstockCombo, CB_SETCURSEL, selectedStock, 0);
+    if (!state.document.gunstocks.empty())
+    {
+        state.selectedGunstockId =
+            state.document.gunstocks[static_cast<std::size_t>(selectedStock)].id;
+        state.document.activeGunstockId = state.selectedGunstockId;
+    }
+    state.suppressEvents = false;
+}
+
+void LoadWeaponEditorLayer(WeaponEditorState& state)
+{
+    state.suppressEvents = true;
+    const vwp::Pose* const pose = SelectedWeaponEditorPose(state);
+    const kc::MeasurementUnitSystem units =
+        ActiveMeasurementUnits(state.app->values);
+    const bool metric = units == kc::MeasurementUnitSystem::Metric;
+    for (std::size_t index = 0u; index < state.valueEdits.size(); ++index)
+    {
+        float value = 0.0f;
+        if (pose != nullptr)
+        {
+            value = index < 3u
+                ? pose->offset[index]
+                : pose->angles[index - 3u];
+        }
+        if (index < 3u && metric)
+        {
+            value *= 2.54f;
+        }
+        std::wostringstream rendered;
+        rendered << std::fixed << std::setprecision(index < 3u ? 2 : 1)
+                 << value;
+        SetWindowTextW(state.valueEdits[index], rendered.str().c_str());
+        EnableWindow(state.valueEdits[index], pose != nullptr);
+    }
+
+    bool enabled = false;
+    std::string name;
+    if (state.layer == WeaponEditorLayer::Gunstock)
+    {
+        const vwp::GunstockProfile* const profile =
+            SelectedGunstockProfile(state);
+        enabled = profile != nullptr && profile->enabled;
+        name = profile != nullptr ? profile->name : "";
+    }
+    else
+    {
+        const vwp::WeaponProfile* const profile =
+            SelectedWeaponProfile(state);
+        enabled = profile != nullptr && profile->enabled;
+        name = profile != nullptr ? profile->name : "";
+    }
+    SendMessageW(
+        state.enabled,
+        BM_SETCHECK,
+        enabled ? BST_CHECKED : BST_UNCHECKED,
+        0);
+    SetWindowTextW(
+        GetDlgItem(state.window, kIdWeaponEditName),
+        ToWide(name).c_str());
+
+    std::wstring status = L"Layer: ";
+    if (state.layer == WeaponEditorLayer::Gunstock)
+    {
+        status += L"active physical gunstock mount correction";
+    }
+    else if (state.layer == WeaponEditorLayer::WeaponShouldered)
+    {
+        status += L"per-weapon shouldered/ADS delta";
+    }
+    else
+    {
+        status += L"per-weapon hip-fire delta";
+    }
+    status += metric
+        ? L". Position values are centimeters; rotation is degrees."
+        : L". Position values are inches; rotation is degrees.";
+    SetWindowTextW(state.status, status.c_str());
+    state.suppressEvents = false;
+}
+
+bool CommitWeaponEditorLayer(WeaponEditorState& state, const bool showError)
+{
+    vwp::Pose* const pose = SelectedWeaponEditorPose(state);
+    if (pose == nullptr)
+    {
+        return state.layer == WeaponEditorLayer::Gunstock
+            ? false
+            : state.selectedWeaponId.empty();
+    }
+
+    const bool metric = ActiveMeasurementUnits(state.app->values) ==
+        kc::MeasurementUnitSystem::Metric;
+    vwp::Pose parsed = *pose;
+    for (std::size_t index = 0u; index < state.valueEdits.size(); ++index)
+    {
+        const std::string text = ToUtf8(WindowText(state.valueEdits[index]));
+        char* end = nullptr;
+        float value = std::strtof(text.c_str(), &end);
+        if (end == text.c_str() || end == nullptr || end[0] != '\0' ||
+            !std::isfinite(value))
+        {
+            if (showError)
+            {
+                MessageBoxW(
+                    state.window,
+                    L"Every calibration value must be a finite number.",
+                    L"Invalid calibration",
+                    MB_OK | MB_ICONWARNING);
+            }
+            return false;
+        }
+        if (index < 3u)
+        {
+            if (metric)
+            {
+                value /= 2.54f;
+            }
+            if (std::abs(value) > vwp::kMaximumOffsetInches)
+            {
+                if (showError)
+                {
+                    MessageBoxW(
+                        state.window,
+                        metric
+                            ? L"Position corrections must stay between -30.48 and +30.48 cm."
+                            : L"Position corrections must stay between -12 and +12 inches.",
+                        L"Calibration outside safe range",
+                        MB_OK | MB_ICONWARNING);
+                }
+                return false;
+            }
+            parsed.offset[index] = value;
+        }
+        else
+        {
+            if (std::abs(value) > vwp::kMaximumAngleDegrees)
+            {
+                if (showError)
+                {
+                    MessageBoxW(
+                        state.window,
+                        L"Rotation corrections must stay between -90 and +90 degrees.",
+                        L"Calibration outside safe range",
+                        MB_OK | MB_ICONWARNING);
+                }
+                return false;
+            }
+            parsed.angles[index - 3u] = value;
+        }
+    }
+    *pose = parsed;
+
+    const std::string requestedName = ToUtf8(
+        WindowText(GetDlgItem(state.window, kIdWeaponEditName)));
+    if (requestedName.empty() || requestedName.size() > 96u)
+    {
+        if (showError)
+        {
+            MessageBoxW(
+                state.window,
+                L"Profile name must contain 1 through 96 characters.",
+                L"Invalid profile name",
+                MB_OK | MB_ICONWARNING);
+        }
+        return false;
+    }
+    const bool enabled = SendMessageW(
+        state.enabled,
+        BM_GETCHECK,
+        0,
+        0) == BST_CHECKED;
+    if (state.layer == WeaponEditorLayer::Gunstock)
+    {
+        vwp::GunstockProfile* const profile = SelectedGunstockProfile(state);
+        profile->name = requestedName;
+        profile->enabled = enabled;
+    }
+    else
+    {
+        vwp::WeaponProfile* const profile = SelectedWeaponProfile(state);
+        profile->name = requestedName;
+        profile->enabled = enabled;
+    }
+    return true;
+}
+
+bool SaveWeaponEditorDocument(WeaponEditorState& state)
+{
+    if (!CommitWeaponEditorLayer(state, true))
+    {
+        return false;
+    }
+    if (!ConfirmReplaceInvalidWeaponProfiles(*state.app))
+    {
+        return false;
+    }
+    std::string error;
+    if (!SaveWeaponProfiles(
+            state.app->weaponProfilesPath,
+            state.document,
+            &error))
+    {
+        MessageBoxW(
+            state.window,
+            ToWide(error).c_str(),
+            L"Weapon profile save failed",
+            MB_OK | MB_ICONERROR);
+        return false;
+    }
+    state.app->weaponProfiles = state.document;
+    state.app->weaponProfilesLoadError.clear();
+    return true;
+}
+
+void SelectWeaponFromCombo(WeaponEditorState& state)
+{
+    const LRESULT selected = SendMessageW(
+        state.weaponCombo,
+        CB_GETCURSEL,
+        0,
+        0);
+    const LRESULT index = selected >= 0
+        ? SendMessageW(state.weaponCombo, CB_GETITEMDATA, selected, 0)
+        : CB_ERR;
+    if (index != CB_ERR && index >= 0 &&
+        static_cast<std::size_t>(index) < state.document.weapons.size())
+    {
+        state.selectedWeaponId =
+            state.document.weapons[static_cast<std::size_t>(index)].id;
+    }
+}
+
+void SelectGunstockFromCombo(WeaponEditorState& state)
+{
+    const LRESULT selected = SendMessageW(
+        state.gunstockCombo,
+        CB_GETCURSEL,
+        0,
+        0);
+    const LRESULT index = selected >= 0
+        ? SendMessageW(state.gunstockCombo, CB_GETITEMDATA, selected, 0)
+        : CB_ERR;
+    if (index != CB_ERR && index >= 0 &&
+        static_cast<std::size_t>(index) < state.document.gunstocks.size())
+    {
+        state.selectedGunstockId =
+            state.document.gunstocks[static_cast<std::size_t>(index)].id;
+        state.document.activeGunstockId = state.selectedGunstockId;
+    }
+}
+
+void UseCurrentWeaponInEditor(WeaponEditorState& state)
+{
+    UpdateWeaponStatusLabel(*state.app);
+    const vwp::RuntimeStatus& runtime = state.app->weaponRuntimeStatus;
+    if (runtime.weaponId.empty())
+    {
+        MessageBoxW(
+            state.window,
+            L"No active weapon has been published yet. Enter a mission, equip the desired weapon, and retry.",
+            L"Current weapon unavailable",
+            MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    CommitWeaponEditorLayer(state, false);
+    state.selectedWeaponId = runtime.weaponId;
+    if (vwp::FindWeapon(state.document, runtime.weaponId) == nullptr)
+    {
+        if (state.document.weapons.size() >= vwp::kMaximumWeaponProfiles)
+        {
+            MessageBoxW(
+                state.window,
+                L"The guarded limit of 128 weapon profiles has been reached.",
+                L"Cannot add weapon",
+                MB_OK | MB_ICONWARNING);
+            return;
+        }
+        vwp::WeaponProfile profile;
+        profile.id = runtime.weaponId;
+        profile.name = runtime.weaponName.empty()
+            ? runtime.weaponId
+            : runtime.weaponName;
+        state.document.weapons.push_back(profile);
+    }
+    PopulateWeaponEditorCombos(state);
+    LoadWeaponEditorLayer(state);
+}
+
+std::string NewGunstockId(const vwp::Document& document)
+{
+    for (int index = 1; index <= 999; ++index)
+    {
+        const std::string id = "custom_stock_" + std::to_string(index);
+        if (vwp::FindGunstock(document, id) == nullptr)
+        {
+            return id;
+        }
+    }
+    return {};
+}
+
+void AddGunstockInEditor(WeaponEditorState& state)
+{
+    if (!CommitWeaponEditorLayer(state, false) ||
+        state.document.gunstocks.size() >= vwp::kMaximumGunstockProfiles)
+    {
+        MessageBoxW(
+            state.window,
+            L"The current values are invalid or the 32-profile gunstock limit has been reached.",
+            L"Cannot add gunstock",
+            MB_OK | MB_ICONWARNING);
+        return;
+    }
+    vwp::GunstockProfile profile;
+    profile.id = NewGunstockId(state.document);
+    profile.name = "Custom gunstock " +
+        std::to_string(state.document.gunstocks.size());
+    state.document.gunstocks.push_back(profile);
+    state.selectedGunstockId = profile.id;
+    state.document.activeGunstockId = profile.id;
+    state.layer = WeaponEditorLayer::Gunstock;
+    SendMessageW(state.layerCombo, CB_SETCURSEL, 2, 0);
+    PopulateWeaponEditorCombos(state);
+    LoadWeaponEditorLayer(state);
+}
+
+std::filesystem::path ChooseGunstockFile(
+    HWND owner,
+    const bool save,
+    const wchar_t* const title)
+{
+    std::array<wchar_t, 32768> path = {};
+    OPENFILENAMEW dialog = {};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = owner;
+    dialog.lpstrFilter =
+        L"KisakCOD VR gunstock profile (*.vrstock)\0*.vrstock\0All files (*.*)\0*.*\0\0";
+    dialog.lpstrFile = path.data();
+    dialog.nMaxFile = static_cast<DWORD>(path.size());
+    dialog.lpstrTitle = title;
+    dialog.lpstrDefExt = L"vrstock";
+    dialog.Flags = OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR |
+        (save ? OFN_OVERWRITEPROMPT : OFN_FILEMUSTEXIST);
+    const BOOL accepted = save
+        ? GetSaveFileNameW(&dialog)
+        : GetOpenFileNameW(&dialog);
+    return accepted
+        ? std::filesystem::path(path.data())
+        : std::filesystem::path();
+}
+
+void ImportGunstockInEditor(WeaponEditorState& state)
+{
+    if (!CommitWeaponEditorLayer(state, true))
+    {
+        return;
+    }
+    const std::filesystem::path selected = ChooseGunstockFile(
+        state.window,
+        false,
+        L"Import gunstock calibration");
+    if (selected.empty())
+    {
+        return;
+    }
+    vwp::GunstockProfile imported;
+    std::string error;
+    if (!vwp::ParseGunstock(ReadTextFile(selected), &imported, &error))
+    {
+        MessageBoxW(
+            state.window,
+            ToWide(error).c_str(),
+            L"Gunstock import failed",
+            MB_OK | MB_ICONWARNING);
+        return;
+    }
+    vwp::GunstockProfile* existing =
+        vwp::FindGunstock(state.document, imported.id);
+    if (existing != nullptr)
+    {
+        if (MessageBoxW(
+                state.window,
+                L"A gunstock with this id already exists. Replace it?",
+                L"Replace gunstock profile",
+                MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES)
+        {
+            return;
+        }
+        *existing = imported;
+    }
+    else
+    {
+        if (state.document.gunstocks.size() >=
+            vwp::kMaximumGunstockProfiles)
+        {
+            MessageBoxW(
+                state.window,
+                L"The guarded limit of 32 gunstock profiles has been reached. Delete an unused profile before importing another.",
+                L"Gunstock import limit reached",
+                MB_OK | MB_ICONWARNING);
+            return;
+        }
+        state.document.gunstocks.push_back(imported);
+    }
+    state.selectedGunstockId = imported.id;
+    state.document.activeGunstockId = imported.id;
+    state.layer = WeaponEditorLayer::Gunstock;
+    SendMessageW(state.layerCombo, CB_SETCURSEL, 2, 0);
+    PopulateWeaponEditorCombos(state);
+    LoadWeaponEditorLayer(state);
+}
+
+void ExportGunstockFromEditor(WeaponEditorState& state)
+{
+    if (!CommitWeaponEditorLayer(state, true))
+    {
+        return;
+    }
+    const vwp::GunstockProfile* const profile =
+        SelectedGunstockProfile(state);
+    if (profile == nullptr)
+    {
+        return;
+    }
+    const std::filesystem::path selected = ChooseGunstockFile(
+        state.window,
+        true,
+        L"Export shareable gunstock calibration");
+    if (selected.empty())
+    {
+        return;
+    }
+    std::string error;
+    if (!WriteTextFileAtomic(
+            selected,
+            vwp::SerializeGunstock(*profile),
+            &error))
+    {
+        MessageBoxW(
+            state.window,
+            ToWide(error).c_str(),
+            L"Gunstock export failed",
+            MB_OK | MB_ICONERROR);
+    }
+}
+
+bool ApplyWeaponEditorLive(WeaponEditorState& state)
+{
+    if (!SaveWeaponEditorDocument(state))
+    {
+        return false;
+    }
+    if (!IsProcessRunning(L"KisakCOD-sp.exe"))
+    {
+        SetWindowTextW(
+            state.status,
+            L"Saved for the next launch. Start a mission to use Apply live or guided capture.");
+        return true;
+    }
+    vwp::Request request;
+    request.command = vwp::Command::Reload;
+    request.weaponId = state.selectedWeaponId;
+    request.gunstockId = state.selectedGunstockId;
+    vwp::RuntimeStatus response;
+    if (!SendWeaponCalibrationRequest(*state.app, request, &response))
+    {
+        return false;
+    }
+    if (response.status != "reloaded")
+    {
+        MessageBoxW(
+            state.window,
+            ToWide(response.message.empty()
+                ? "The running game rejected the weapon profile reload."
+                : response.message).c_str(),
+            L"Live weapon calibration rejected",
+            MB_OK | MB_ICONWARNING);
+        return false;
+    }
+    state.runtimeStatus = response;
+    SetWindowTextW(
+        state.status,
+        L"Applied live. Move between hip fire and two-hand/ADS to verify the smooth blend.");
+    return true;
+}
+
+void CaptureWeaponEditorAim(WeaponEditorState& state)
+{
+    if (state.layer == WeaponEditorLayer::WeaponHip)
+    {
+        MessageBoxW(
+            state.window,
+            L"Guided aim capture belongs to the Gunstock or Per-weapon shouldered/ADS layer. Select one of those layers first.",
+            L"Choose a shouldered layer",
+            MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    if (state.selectedWeaponId.empty() ||
+        !SaveWeaponEditorDocument(state))
+    {
+        return;
+    }
+    UpdateWeaponStatusLabel(*state.app);
+    if (state.app->weaponRuntimeStatus.weaponId != state.selectedWeaponId)
+    {
+        MessageBoxW(
+            state.window,
+            L"The selected profile does not match the weapon currently equipped in COD4. Equip the selected weapon and retry.",
+            L"Equip the selected weapon",
+            MB_OK | MB_ICONWARNING);
+        return;
+    }
+    if (MessageBoxW(
+            state.window,
+            L"Shoulder the physical stock in your normal position and aim it at a fixed point directly ahead.\r\n\r\nAfter you press OK, the configurator gives you five seconds to put the headset on and hold perfectly still. It then captures the controller-to-bore rotation; position remains available for live fine adjustment.",
+            L"Guided gunstock aim capture",
+            MB_OKCANCEL | MB_ICONINFORMATION) != IDOK)
+    {
+        return;
+    }
+
+    ShowWindow(state.window, SW_MINIMIZE);
+    const ULONGLONG captureAt = GetTickCount64() + 5000u;
+    while (GetTickCount64() < captureAt)
+    {
+        Sleep(50u);
+    }
+
+    vwp::Request request;
+    request.command = vwp::Command::CaptureAim;
+    request.target = state.layer == WeaponEditorLayer::Gunstock
+        ? vwp::CaptureTarget::Gunstock
+        : vwp::CaptureTarget::WeaponShouldered;
+    request.weaponId = state.selectedWeaponId;
+    request.gunstockId = state.selectedGunstockId;
+    vwp::RuntimeStatus response;
+    const bool captured = SendWeaponCalibrationRequest(
+        *state.app,
+        request,
+        &response);
+    ShowWindow(state.window, SW_RESTORE);
+    SetForegroundWindow(state.window);
+    if (!captured || response.status != "captured" ||
+        !response.capturedAnglesValid)
+    {
+        MessageBoxW(
+            state.window,
+            ToWide(response.message.empty()
+                ? "The runtime could not capture a valid tracked weapon pose."
+                : response.message).c_str(),
+            L"Gunstock capture failed",
+            MB_OK | MB_ICONWARNING);
+        return;
+    }
+
+    const double globalAngles[3] = {
+        NumberValue(state.app->values, "KISAK_VR_WEAPON_PITCH", 0.0),
+        NumberValue(state.app->values, "KISAK_VR_WEAPON_YAW", 0.0),
+        NumberValue(state.app->values, "KISAK_VR_WEAPON_ROLL", 0.0),
+    };
+    vwp::WeaponProfile* const weapon = SelectedWeaponProfile(state);
+    vwp::GunstockProfile* const stock = SelectedGunstockProfile(state);
+    if (weapon == nullptr || stock == nullptr)
+    {
+        return;
+    }
+    for (std::size_t component = 0u; component < 3u; ++component)
+    {
+        const float capturedEffective =
+            response.capturedEffectiveAngles[component];
+        if (state.layer == WeaponEditorLayer::Gunstock)
+        {
+            stock->shouldered.angles[component] = capturedEffective -
+                static_cast<float>(globalAngles[component]) -
+                weapon->hip.angles[component] -
+                weapon->shouldered.angles[component];
+        }
+        else
+        {
+            weapon->shouldered.angles[component] = capturedEffective -
+                static_cast<float>(globalAngles[component]) -
+                weapon->hip.angles[component] -
+                stock->shouldered.angles[component];
+        }
+    }
+    LoadWeaponEditorLayer(state);
+    if (ApplyWeaponEditorLive(state))
+    {
+        MessageBoxW(
+            state.window,
+            L"The shouldered aim rotation was captured, saved, and applied live. Fine-tune Forward/Left/Up if the virtual sights need positional adjustment, then test both hip fire and two-hand/ADS.",
+            L"Gunstock calibration applied",
+            MB_OK | MB_ICONINFORMATION);
+    }
+}
+
+void DeleteWeaponInEditor(WeaponEditorState& state)
+{
+    if (state.selectedWeaponId.empty() ||
+        MessageBoxW(
+            state.window,
+            L"Delete this weapon-specific override? The global baseline will still apply.",
+            L"Delete weapon override",
+            MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES)
+    {
+        return;
+    }
+    std::erase_if(
+        state.document.weapons,
+        [&state](const vwp::WeaponProfile& profile)
+        {
+            return profile.id == state.selectedWeaponId;
+        });
+    state.selectedWeaponId.clear();
+    PopulateWeaponEditorCombos(state);
+    LoadWeaponEditorLayer(state);
+}
+
+void DeleteGunstockInEditor(WeaponEditorState& state)
+{
+    if (state.document.gunstocks.size() <= 1u)
+    {
+        MessageBoxW(
+            state.window,
+            L"At least one gunstock profile must remain.",
+            L"Cannot delete gunstock",
+            MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    if (MessageBoxW(
+            state.window,
+            L"Delete the selected gunstock profile?",
+            L"Delete gunstock",
+            MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES)
+    {
+        return;
+    }
+    std::erase_if(
+        state.document.gunstocks,
+        [&state](const vwp::GunstockProfile& profile)
+        {
+            return profile.id == state.selectedGunstockId;
+        });
+    state.selectedGunstockId = state.document.gunstocks.front().id;
+    state.document.activeGunstockId = state.selectedGunstockId;
+    PopulateWeaponEditorCombos(state);
+    LoadWeaponEditorLayer(state);
+}
+
+LRESULT CALLBACK WeaponEditorWindowProc(
+    HWND window,
+    const UINT message,
+    const WPARAM wParam,
+    const LPARAM lParam)
+{
+    WeaponEditorState* state = reinterpret_cast<WeaponEditorState*>(
+        GetWindowLongPtrW(window, GWLP_USERDATA));
+    if (message == WM_NCCREATE)
+    {
+        const auto* create = reinterpret_cast<CREATESTRUCTW*>(lParam);
+        state = static_cast<WeaponEditorState*>(create->lpCreateParams);
+        SetWindowLongPtrW(
+            window,
+            GWLP_USERDATA,
+            reinterpret_cast<LONG_PTR>(state));
+    }
+    if (state == nullptr)
+    {
+        return DefWindowProcW(window, message, wParam, lParam);
+    }
+    if (message == WM_COMMAND)
+    {
+        const int identifier = LOWORD(wParam);
+        const int notification = HIWORD(wParam);
+        if (state->suppressEvents)
+        {
+            return 0;
+        }
+        if (identifier == kIdWeaponEditWeapon &&
+            notification == CBN_SELCHANGE)
+        {
+            CommitWeaponEditorLayer(*state, false);
+            SelectWeaponFromCombo(*state);
+            LoadWeaponEditorLayer(*state);
+            return 0;
+        }
+        if (identifier == kIdWeaponEditGunstock &&
+            notification == CBN_SELCHANGE)
+        {
+            CommitWeaponEditorLayer(*state, false);
+            SelectGunstockFromCombo(*state);
+            LoadWeaponEditorLayer(*state);
+            return 0;
+        }
+        if (identifier == kIdWeaponEditLayer &&
+            notification == CBN_SELCHANGE)
+        {
+            CommitWeaponEditorLayer(*state, false);
+            const LRESULT selected = SendMessageW(
+                state->layerCombo,
+                CB_GETCURSEL,
+                0,
+                0);
+            state->layer = selected == 2
+                ? WeaponEditorLayer::Gunstock
+                : (selected == 1
+                    ? WeaponEditorLayer::WeaponShouldered
+                    : WeaponEditorLayer::WeaponHip);
+            LoadWeaponEditorLayer(*state);
+            return 0;
+        }
+        switch (identifier)
+        {
+        case kIdWeaponEditUseCurrent:
+            UseCurrentWeaponInEditor(*state);
+            return 0;
+        case kIdWeaponEditDeleteWeapon:
+            DeleteWeaponInEditor(*state);
+            return 0;
+        case kIdWeaponEditNewGunstock:
+            AddGunstockInEditor(*state);
+            return 0;
+        case kIdWeaponEditDeleteGunstock:
+            DeleteGunstockInEditor(*state);
+            return 0;
+        case kIdWeaponEditImportGunstock:
+            ImportGunstockInEditor(*state);
+            return 0;
+        case kIdWeaponEditExportGunstock:
+            ExportGunstockFromEditor(*state);
+            return 0;
+        case kIdWeaponEditReset:
+            if (vwp::Pose* const pose = SelectedWeaponEditorPose(*state))
+            {
+                *pose = {};
+                LoadWeaponEditorLayer(*state);
+            }
+            return 0;
+        case kIdWeaponEditApplyLive:
+            ApplyWeaponEditorLive(*state);
+            return 0;
+        case kIdWeaponEditCapture:
+            CaptureWeaponEditorAim(*state);
+            return 0;
+        case IDOK:
+            if (SaveWeaponEditorDocument(*state))
+            {
+                state->accepted = true;
+                DestroyWindow(window);
+            }
+            return 0;
+        case IDCANCEL:
+            DestroyWindow(window);
+            return 0;
+        default:
+            break;
+        }
+    }
+    else if (message == WM_CLOSE)
+    {
+        DestroyWindow(window);
+        return 0;
+    }
+    return DefWindowProcW(window, message, wParam, lParam);
+}
+
+void OpenWeaponCalibrationEditor(AppState& app)
+{
+    WeaponEditorState editor;
+    editor.app = &app;
+    editor.document = app.weaponProfiles;
+    editor.runtimeStatus = app.weaponRuntimeStatus;
+    editor.selectedGunstockId = editor.document.activeGunstockId;
+    if (!editor.runtimeStatus.weaponId.empty())
+    {
+        editor.selectedWeaponId = editor.runtimeStatus.weaponId;
+    }
+
+    editor.window = CreateWindowExW(
+        WS_EX_DLGMODALFRAME,
+        kWeaponEditorClass,
+        L"Per-Weapon & Physical Gunstock Calibration",
+        WS_POPUP | WS_CAPTION | WS_SYSMENU,
+        CW_USEDEFAULT,
+        CW_USEDEFAULT,
+        930,
+        660,
+        app.window,
+        nullptr,
+        app.instance,
+        &editor);
+    if (editor.window == nullptr)
+    {
+        MessageBoxW(
+            app.window,
+            L"Windows could not open the weapon calibration editor.",
+            L"Weapon editor failed",
+            MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    CreateWeaponEditorControl(
+        editor,
+        L"STATIC",
+        L"Global Weapons & Hands values remain the baseline. Add only the difference needed for each weapon and physical stock.",
+        SS_LEFT,
+        20,
+        16,
+        874,
+        38);
+    CreateWeaponEditorControl(editor, L"STATIC", L"Weapon override", SS_LEFT, 20, 64, 160, 20);
+    editor.weaponCombo = CreateWeaponEditorControl(
+        editor, WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_TABSTOP,
+        20, 86, 410, 260, kIdWeaponEditWeapon, WS_EX_CLIENTEDGE);
+    CreateWeaponEditorControl(
+        editor, L"BUTTON", L"Use equipped weapon", BS_PUSHBUTTON | WS_TABSTOP,
+        442, 86, 190, 30, kIdWeaponEditUseCurrent);
+    CreateWeaponEditorControl(
+        editor, L"BUTTON", L"Delete override", BS_PUSHBUTTON | WS_TABSTOP,
+        644, 86, 130, 30, kIdWeaponEditDeleteWeapon);
+
+    CreateWeaponEditorControl(editor, L"STATIC", L"Active gunstock profile", SS_LEFT, 20, 128, 180, 20);
+    editor.gunstockCombo = CreateWeaponEditorControl(
+        editor, WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_TABSTOP,
+        20, 150, 410, 260, kIdWeaponEditGunstock, WS_EX_CLIENTEDGE);
+    CreateWeaponEditorControl(
+        editor, L"BUTTON", L"New", BS_PUSHBUTTON | WS_TABSTOP,
+        442, 150, 74, 30, kIdWeaponEditNewGunstock);
+    CreateWeaponEditorControl(
+        editor, L"BUTTON", L"Delete", BS_PUSHBUTTON | WS_TABSTOP,
+        524, 150, 74, 30, kIdWeaponEditDeleteGunstock);
+    CreateWeaponEditorControl(
+        editor, L"BUTTON", L"Import .vrstock", BS_PUSHBUTTON | WS_TABSTOP,
+        606, 150, 134, 30, kIdWeaponEditImportGunstock);
+    CreateWeaponEditorControl(
+        editor, L"BUTTON", L"Export", BS_PUSHBUTTON | WS_TABSTOP,
+        748, 150, 92, 30, kIdWeaponEditExportGunstock);
+
+    CreateWeaponEditorControl(editor, L"STATIC", L"Calibration layer", SS_LEFT, 20, 196, 160, 20);
+    editor.layerCombo = CreateWeaponEditorControl(
+        editor, WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_TABSTOP,
+        20, 218, 410, 180, kIdWeaponEditLayer, WS_EX_CLIENTEDGE);
+    const wchar_t* const layers[] = {
+        L"Per-weapon hip-fire override",
+        L"Per-weapon shouldered / ADS override",
+        L"Active physical gunstock mount profile",
+    };
+    for (const wchar_t* const layer : layers)
+    {
+        SendMessageW(
+            editor.layerCombo,
+            CB_ADDSTRING,
+            0,
+            reinterpret_cast<LPARAM>(layer));
+    }
+    SendMessageW(editor.layerCombo, CB_SETCURSEL, 0, 0);
+    editor.enabled = CreateWeaponEditorControl(
+        editor, L"BUTTON", L"Enable selected profile", BS_AUTOCHECKBOX | WS_TABSTOP,
+        452, 220, 210, 24, kIdWeaponEditEnabled);
+
+    CreateWeaponEditorControl(editor, L"STATIC", L"Profile display name", SS_LEFT, 20, 260, 180, 20);
+    CreateWeaponEditorControl(
+        editor, L"EDIT", L"", ES_AUTOHSCROLL | WS_TABSTOP,
+        20, 282, 410, 28, kIdWeaponEditName, WS_EX_CLIENTEDGE);
+
+    const wchar_t* const labels[6] = {
+        L"Forward", L"Left", L"Up", L"Pitch (deg)", L"Yaw (deg)", L"Roll (deg)",
+    };
+    for (int index = 0; index < 6; ++index)
+    {
+        const int column = index % 3;
+        const int row = index / 3;
+        const int x = 20 + column * 288;
+        const int y = 334 + row * 76;
+        CreateWeaponEditorControl(editor, L"STATIC", labels[index], SS_LEFT, x, y, 260, 20);
+        editor.valueEdits[static_cast<std::size_t>(index)] =
+            CreateWeaponEditorControl(
+                editor, L"EDIT", L"0", ES_AUTOHSCROLL | WS_TABSTOP,
+                x, y + 22, 260, 28, kIdWeaponEditValueBase + index,
+                WS_EX_CLIENTEDGE);
+    }
+
+    editor.status = CreateWeaponEditorControl(
+        editor, L"STATIC", L"", SS_LEFT,
+        20, 492, 874, 44);
+    CreateWeaponEditorControl(
+        editor, L"BUTTON", L"Reset selected layer", BS_PUSHBUTTON | WS_TABSTOP,
+        20, 548, 180, 34, kIdWeaponEditReset);
+    CreateWeaponEditorControl(
+        editor, L"BUTTON", L"Apply live", BS_PUSHBUTTON | WS_TABSTOP,
+        212, 548, 150, 34, kIdWeaponEditApplyLive);
+    CreateWeaponEditorControl(
+        editor, L"BUTTON", L"Guided aim capture", BS_PUSHBUTTON | WS_TABSTOP,
+        374, 548, 190, 34, kIdWeaponEditCapture);
+    CreateWeaponEditorControl(
+        editor, L"BUTTON", L"Cancel", BS_PUSHBUTTON | WS_TABSTOP,
+        676, 548, 100, 34, IDCANCEL);
+    CreateWeaponEditorControl(
+        editor, L"BUTTON", L"Save && Close", BS_DEFPUSHBUTTON | WS_TABSTOP,
+        786, 548, 108, 34, IDOK);
+
+    PopulateWeaponEditorCombos(editor);
+    LoadWeaponEditorLayer(editor);
+
+    RECT parentRect = {};
+    GetWindowRect(app.window, &parentRect);
+    SetWindowPos(
+        editor.window,
+        HWND_TOP,
+        parentRect.left + ((parentRect.right - parentRect.left) - 930) / 2,
+        parentRect.top + ((parentRect.bottom - parentRect.top) - 660) / 2,
+        0,
+        0,
+        SWP_NOSIZE);
+    EnableWindow(app.window, FALSE);
+    ShowWindow(editor.window, SW_SHOW);
+    UpdateWindow(editor.window);
+
+    MSG message = {};
+    bool sawQuit = false;
+    WPARAM quitCode = 0;
+    while (IsWindow(editor.window))
+    {
+        const BOOL result = GetMessageW(&message, nullptr, 0, 0);
+        if (result <= 0)
+        {
+            sawQuit = result == 0;
+            quitCode = message.wParam;
+            break;
+        }
+        if (!IsDialogMessageW(editor.window, &message))
+        {
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+    }
+    EnableWindow(app.window, TRUE);
+    SetForegroundWindow(app.window);
+    if (sawQuit)
+    {
+        PostQuitMessage(static_cast<int>(quitCode));
+        return;
+    }
+    if (editor.accepted)
+    {
+        app.weaponProfiles = editor.document;
+        UpdateWeaponStatusLabel(app);
+    }
+}
+
+void ShowWeaponPanel(
+    AppState& state,
+    const bool show)
+{
+    for (HWND control : state.weaponControls)
+    {
+        ShowWindow(control, show ? SW_SHOW : SW_HIDE);
+    }
+}
+
+void OpenWeaponCalibrationEditor(AppState& state);
+
+void BuildWeaponPanel(AppState& state)
+{
+    const auto add = [&](HWND control)
+    {
+        state.weaponControls.push_back(control);
+        return control;
+    };
+
+    add(CreateControl(
+        state,
+        L"STATIC",
+        L"Per-weapon & physical gunstock calibration",
+        SS_LEFT,
+        kTabLeft + 20,
+        kTabTop + 48,
+        kTabWidth - 40,
+        22));
+
+    add(CreateControl(
+        state,
+        L"BUTTON",
+        L"Open calibration editor",
+        BS_DEFPUSHBUTTON | WS_TABSTOP,
+        kTabLeft + 20,
+        kTabTop + 74,
+        326,
+        34,
+        kIdWeaponEditor));
+
+    add(CreateControl(
+        state,
+        L"BUTTON",
+        L"Refresh equipped weapon",
+        BS_PUSHBUTTON | WS_TABSTOP,
+        kTabLeft + 358,
+        kTabTop + 74,
+        342,
+        34,
+        kIdWeaponRefresh));
+
+    state.weaponStatus = add(CreateControl(
+        state,
+        L"STATIC",
+        L"Launch a mission, then Refresh to select the equipped weapon automatically.",
+        SS_LEFT | SS_PATHELLIPSIS,
+        kTabLeft + 20,
+        kTabTop + 114,
+        kTabWidth - 40,
+        40));
+}
+
 bool BuildMainWindow(AppState& state)
 {
     state.font = CreateFontW(
@@ -4340,7 +6552,7 @@ bool BuildMainWindow(AppState& state)
     CreateControl(
         state,
         L"STATIC",
-        L"Beta.8 visual HUD editing, guided calibration, and verified settings",
+        L"Beta.9 unified setup, handed interactions, gunstock calibration, metric units, and visual HUD editing",
         SS_LEFT,
         22,
         52,
@@ -4437,9 +6649,11 @@ bool BuildMainWindow(AppState& state)
     SendMessageW(state.tooltip, TTM_SETDELAYTIME, TTDT_AUTOPOP, 15000);
 
     BuildSettingControls(state);
+    BuildSetupPanel(state);
     BuildControllerBindingEditor(state);
     BuildCalibrationPanel(state);
     BuildHudPanel(state);
+    BuildWeaponPanel(state);
 
     state.preview = CreateWindowExW(
         0,
@@ -4509,6 +6723,9 @@ bool BuildMainWindow(AppState& state)
         kIdDiagnostics);
 
     UpdateAllControls(state);
+    RefreshCompatibility(state, false);
+    UpdateWeaponStatusLabel(state);
+    SetTimer(state.window, kIdWeaponPollTimer, 1000u, nullptr);
     SelectPage(state, 0);
     UpdateValidation(state);
     return true;
@@ -4582,6 +6799,19 @@ LRESULT CALLBACK MainWindowProc(
 
         switch (identifier)
         {
+        case kIdSetupRescan:
+            RefreshCompatibility(*state, true);
+            return 0;
+        case kIdSetupApplyRecommended:
+            ApplyRecommendedCompatibility(*state);
+            return 0;
+        case kIdSetupCopyReport:
+            RefreshCompatibility(*state, true);
+            CopyCompatibilityReport(*state);
+            return 0;
+        case kIdSetupOpenReport:
+            OpenCompatibilityReport(*state);
+            return 0;
         case kIdApplyPreset:
             ApplySelectedPreset(*state);
             return 0;
@@ -4653,6 +6883,12 @@ LRESULT CALLBACK MainWindowProc(
         case kIdHudHeadsetEditor:
             StartHeadsetHudEditor(*state);
             return 0;
+        case kIdWeaponEditor:
+            OpenWeaponCalibrationEditor(*state);
+            return 0;
+        case kIdWeaponRefresh:
+            UpdateWeaponStatusLabel(*state);
+            return 0;
         default:
             break;
         }
@@ -4662,6 +6898,14 @@ LRESULT CALLBACK MainWindowProc(
         if (wParam == static_cast<WPARAM>(kIdHudPollTimer))
         {
             PollHudEditorStatus(*state);
+            return 0;
+        }
+        if (wParam == static_cast<WPARAM>(kIdWeaponPollTimer))
+        {
+            if (state->selectedPage == PageIndex(kc::SettingPage::Weapons))
+            {
+                UpdateWeaponStatusLabel(*state);
+            }
             return 0;
         }
         break;
@@ -4700,6 +6944,7 @@ LRESULT CALLBACK MainWindowProc(
         return 0;
     case WM_DESTROY:
         KillTimer(window, kIdHudPollTimer);
+        KillTimer(window, kIdWeaponPollTimer);
         PostQuitMessage(0);
         return 0;
     default:
@@ -4724,6 +6969,35 @@ int ValidateFromCommandLine(const std::filesystem::path& path)
     return error == result.messages.end() ? 0 : 2;
 }
 
+int CompatibilityReportFromCommandLine(
+    const std::filesystem::path& outputPath)
+{
+    const auto environmentValue = [](const char* const key, const char* fallback)
+    {
+        const char* const value = std::getenv(key);
+        return value != nullptr && value[0] != '\0'
+            ? std::string(value)
+            : std::string(fallback);
+    };
+
+    const vrc::Probe probe = wc::ProbeSystem(
+        ExecutableDirectory(),
+        UserRuntimeReceiptPath(),
+        environmentValue("KISAK_VR_BACKEND", "auto"),
+        environmentValue("VR_CUSTOM_MODE", "6016x2688"),
+        environmentValue("KISAK_VR_OUTPUT_SCALE", "1.00"));
+    const vrc::Report report = vrc::Evaluate(probe);
+    std::string error;
+    if (!wc::WriteReportAtomic(
+            outputPath,
+            vrc::SerializeReport(probe, report, wc::LocalTimestamp()),
+            &error))
+    {
+        return 3;
+    }
+    return report.readyForLaunch ? 0 : 2;
+}
+
 } // namespace
 
 int WINAPI wWinMain(
@@ -4742,6 +7016,13 @@ int WINAPI wWinMain(
         _wcsicmp(arguments[1], L"--validate") == 0)
     {
         const int result = ValidateFromCommandLine(arguments[2]);
+        LocalFree(arguments);
+        return result;
+    }
+    if (arguments != nullptr && argumentCount == 3 &&
+        _wcsicmp(arguments[1], L"--compatibility-report") == 0)
+    {
+        const int result = CompatibilityReportFromCommandLine(arguments[2]);
         LocalFree(arguments);
         return result;
     }
@@ -4795,6 +7076,20 @@ int WINAPI wWinMain(
         return 1;
     }
 
+    WNDCLASSEXW weaponEditorClass = {};
+    weaponEditorClass.cbSize = sizeof(weaponEditorClass);
+    weaponEditorClass.style = CS_HREDRAW | CS_VREDRAW;
+    weaponEditorClass.lpfnWndProc = WeaponEditorWindowProc;
+    weaponEditorClass.hInstance = instance;
+    weaponEditorClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    weaponEditorClass.hbrBackground =
+        reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    weaponEditorClass.lpszClassName = kWeaponEditorClass;
+    if (RegisterClassExW(&weaponEditorClass) == 0)
+    {
+        return 1;
+    }
+
     WNDCLASSEXW windowClass = {};
     windowClass.cbSize = sizeof(windowClass);
     windowClass.style = CS_HREDRAW | CS_VREDRAW;
@@ -4815,6 +7110,16 @@ int WINAPI wWinMain(
     state.gameDirectory = ExecutableDirectory();
     state.defaultsPath = state.gameDirectory / L"VR-Settings.bat";
     state.userPath = UserSettingsPath();
+    state.weaponProfilesPath = UserWeaponProfilesPath();
+    state.weaponCalibrationRequestPath =
+        UserWeaponCalibrationRequestPath();
+    state.weaponCalibrationStatusPath =
+        UserWeaponCalibrationStatusPath();
+    state.runtimeReceiptPath = UserRuntimeReceiptPath();
+    state.compatibilityReportPath = UserCompatibilityReportPath();
+    state.weaponProfiles = LoadWeaponProfiles(
+        state.weaponProfilesPath,
+        &state.weaponProfilesLoadError);
 
     const kc::LoadResult loaded = kc::LoadSettings(
         state.defaultsPath,

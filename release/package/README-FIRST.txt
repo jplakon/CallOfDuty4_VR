@@ -19,22 +19,36 @@ INSTALL
 2. Confirm that the folder contains iw3sp.exe.
 3. Extract every file from this ZIP into that folder, beside iw3sp.exe.
 4. Start your OpenXR runtime.
-5. Run KisakCOD-VR-Configurator.exe, choose a preset, and click Save & Launch.
+5. Run KisakCOD-VR-Configurator.exe. On Setup & Compatibility, rescan and
+   resolve every Blocked item; review any recommendation before applying it.
+6. Choose remaining personal settings and click Save & Launch. The launcher
+   reruns the same preflight before starting the game.
 
-The configurator covers comfort, graphics, visual HUD/text/compass placement, weapon
-and hand fit, belt/reload/grenade interactions, scope alignment, and
-controller-neutral action bindings. Its Height & Recenter page can capture a
-new forward pose and calibrate standing or seated eye height. Personal settings
-are stored separately and survive future updates.
+The configurator covers compatibility, comfort, graphics, visual
+HUD/text/compass placement, weapon and hand fit, belt/reload/grenade
+interactions, scope alignment, and controller-neutral action bindings.
+Physical measurements can be shown in Metric or Imperial units. Per-weapon
+hip/ADS fit and shareable physical-gunstock profiles layer over the global
+weapon fit. Right- and left-handed functional routing, mirrored bindings, and
+configurable grip, reload, belt, melee, haptic, and muzzle-obstruction behavior
+are included. The Height & Recenter page can capture a new forward pose and
+calibrate standing or seated eye height. Personal settings are stored
+separately and survive future updates. The setup scan and launcher preflight
+write a Compatibility-Report.txt support receipt.
 If you hand-edited VR-Settings.bat in an earlier beta, keep a copy and use the
 configurator's Import button after installing. You can still run
 Launch-KisakCOD-VR.bat directly with the last saved profile. Most settings need
-a full game restart; beta.8 recenter/height actions and its in-headset HUD editor
-can apply live to a running single-player game.
+a full game restart; recenter/height actions, the in-headset HUD editor, and
+weapon/gunstock Apply live or guided capture can update a running
+single-player mission.
 
 CONFIGURATOR
 ------------
 
+- One Setup & Compatibility page for installation, DirectX, GPU, 32/64-bit
+  OpenXR, OpenVR, and previous live headset/controller evidence.
+- Explicit backend/graphics recommendations that preserve every unrelated
+  personal setting, plus Copy/Open support-report actions.
 - Tested comfort/performance/seated/minimal-HUD presets plus full custom mode.
 - Snap or smooth turning, movement direction and stick deadzones.
 - A draggable desktop HUD canvas plus live in-headset placement for five real
@@ -44,30 +58,41 @@ CONFIGURATOR
   inputs per slot.
 - Press-to-bind capture through the configured OpenXR or SteamVR backend.
 - Guided live recenter, automatic standing measurement, seated calibration,
-  and safe 1-inch height adjustments.
+  and safe 1 cm Metric or 1 in Imperial height adjustments.
+- Per-weapon hip-fire and shouldered/ADS deltas over the global weapon fit.
+- Active gunstock profiles with explicit aim capture and .vrstock sharing.
+- Right- or left-handed weapon control with one-time binding mirroring.
+- Configurable physical support/object grip, reload, belt, melee, haptics, and
+  muzzle-obstruction behavior.
 - Safe validation, profile import/export, and automatic settings backups.
 - Save & Launch and one-run diagnostic launch buttons.
 
 PHYSICAL INTERACTIONS
 ---------------------
 
-- Left grip at the left hip draws a frag grenade.
-- Left grip at the right hip draws the equipped flashbang or smoke grenade.
+- In the handed belt layout, off-hand grip at the off-hand hip draws a frag.
+- Off-hand grip at the weapon-hand hip draws the equipped tactical grenade.
+- Supported magazines can eject by button or a guarded physical pull and
+  insert on release or contact.
 - Hold/cook normally, physically swing, and release the grip to throw.
 - Every standard campaign mission is unlocked in Mission Select.
 
 KNOWN LIMITATION
 ----------------
 
-Death From Above is not supported in this beta and must be skipped. Read
+Death From Above is not supported in this beta and must be skipped. Left-handed
+functional routing is implemented, but the authored glove/arm geometry is not
+anatomically mirrored. Read
 INSTALL.txt and KNOWN-ISSUES.txt before beginning that part of the campaign.
 
 TESTED CONFIGURATION
 --------------------
 
 Meta Quest 3, Virtual Desktop OpenXR, and NVIDIA RTX 3080 Ti.
-Additional OpenXR profiles and SteamVR controller compatibility are
-experimental until confirmed on their native hardware.
+Additional OpenXR profiles and SteamVR controller compatibility remain
+experimental on native hardware. A community PSVR2/OpenVR test reached
+gameplay but reported weapon-orientation, magazine-visual, and binding issues;
+see KNOWN-ISSUES.txt.
 
 SUPPORT AND SOURCE
 ------------------

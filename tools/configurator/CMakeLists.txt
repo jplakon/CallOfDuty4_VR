@@ -4,6 +4,8 @@ add_executable(
     KisakCOD-VR-Configurator
     WIN32
     configurator.cpp
+    compatibility_probe_win32.cpp
+    compatibility_probe_win32.h
     settings_core.cpp
     settings_core.h
     ../../src/vr/vr_calibration.h
@@ -11,8 +13,13 @@ add_executable(
     ../../src/vr/vr_hud_layout.h
     ../../src/vr/vr_input_bindings.cpp
     ../../src/vr/vr_input_bindings.h
+    ../../src/vr/vr_interactions.h
+    ../../src/vr/vr_compatibility.cpp
+    ../../src/vr/vr_compatibility.h
     ../../src/vr/vr_openxr_profiles.cpp
     ../../src/vr/vr_openxr_profiles.h
+    ../../src/vr/vr_weapon_profiles.cpp
+    ../../src/vr/vr_weapon_profiles.h
 )
 
 target_include_directories(
@@ -42,6 +49,8 @@ target_link_libraries(
     PRIVATE
         comctl32
         comdlg32
+        advapi32
+        dxgi
         shell32
 )
 
@@ -77,10 +86,15 @@ add_executable(
     ../../src/vr/vr_hud_layout.h
     ../../src/vr/vr_input_bindings.cpp
     ../../src/vr/vr_input_bindings.h
+    ../../src/vr/vr_interactions.h
+    ../../src/vr/vr_compatibility.cpp
+    ../../src/vr/vr_compatibility.h
     ../../src/vr/vr_openvr_input.cpp
     ../../src/vr/vr_openvr_input.h
     ../../src/vr/vr_openxr_profiles.cpp
     ../../src/vr/vr_openxr_profiles.h
+    ../../src/vr/vr_weapon_profiles.cpp
+    ../../src/vr/vr_weapon_profiles.h
 )
 
 target_include_directories(

@@ -14,46 +14,58 @@ copy of the original game.
 
 ## Current status
 
-The current public beta is `v0.10.0-beta.8`.
+The current public beta is `v0.10.0-beta.9`.
 
-Beta.8 is a major configurator, controller-input, calibration, and HUD update
-over beta.7. It retains the complete campaign, performance, tracked-hand,
-physical reload, manual grenade, scope, and Mission Select work from earlier
-betas.
+Beta.9 is a setup, calibration, handedness, and physical-interaction update
+over beta.8. It retains beta.8's visual HUD editor, guided height/recenter
+tools, controller-neutral bindings, verified settings, OpenVR controller
+support, and all earlier campaign, performance, tracked-hand, reload, grenade,
+scope, and Mission Select work.
 
-### Beta.8 improvements
+### Beta.9 improvements
 
-- Adds a genuinely visual HUD editor: drag, resize, and snap five real HUD
-  groups on a desktop canvas or edit them live inside the headset.
-- Adds guided forward/level recentering, automatic standing-height measurement,
-  seated calibration, and safe one-inch height adjustments.
-- Replaces Quest-specific control assumptions with controller-neutral primary
-  and alternate bindings, directional stick/trackpad inputs, multi-input
-  chords, and live press-to-bind capture.
-- Adds OpenXR mappings for Meta Touch, PICO, Valve Index, HTC Vive/Cosmos/Focus,
-  Windows Mixed Reality, HP, Samsung, and generic controller profiles.
-- Adds tracked-controller input and haptics to the experimental 32-bit
-  SteamVR/OpenVR compatibility backend.
-- Expands the portable configurator to 125 validated settings covering comfort,
-  rendering, HUD/text/compass placement, weapon and hand fit, belt/reload/grenade
-  behavior, scope alignment, calibration, and controls.
+- Adds one **Setup & Compatibility** page for the installed game/mod files,
+  DirectX June 2010, GPU, 32-bit and 64-bit OpenXR registration, OpenVR
+  fallback, and the last proven headset/controller session.
+- Classifies each check as Pass, Warning, or Blocked, recommends a backend and
+  Native/Performance graphics profile, and shows the exact changes before
+  applying them. Personal controls, comfort, HUD, handedness, units, height,
+  interactions, and calibration are preserved.
+- Runs the same compatibility evaluator before launch and writes a
+  support-ready `%LOCALAPPDATA%\KisakCOD-VR\Compatibility-Report.txt`.
+- Adds Metric or Imperial presentation for all 20 physical measurements while
+  preserving the exact game-compatible values underneath. Height refinement is
+  1 cm in Metric mode and 1 in in Imperial mode.
+- Adds persistent six-axis hip-fire and shouldered/ADS calibration for each
+  equipped weapon, smoothly layered over the global weapon fit.
+- Adds physical-gunstock profiles with explicit guided aim capture, live apply,
+  reset/delete controls, and portable `.vrstock` import/export.
+- Adds true right- or left-handed functional routing for the weapon, muzzle,
+  scope, support hand, reload, grenades, HUD pointer, and haptics, with one-time
+  mirroring of primary, alternate, directional, and chord bindings.
+- Adds hold/toggle/proximity support grip, hold/toggle object grip, button or
+  physical-pull magazine ejection, release/contact insertion, handed or fixed
+  belts, gesture/button melee, haptic strength, and muzzle-obstruction options.
+- Expands exact settings verification from 125 to 142 values and adds runtime
+  receipts for compatibility, units, handedness, interactions, equipped weapon,
+  gunstock, and effective weapon pose.
 
-### Beta.8 bug fixes
+### Beta.9 bug fixes
 
-- Verifies the exact saved bytes and all 125 parsed values before reporting a
-  successful save, then records launcher and runtime application receipts.
-- Fixes weapon forward/left/up offsets being canceled by final grip-tag
-  alignment, so positional calibration now changes the rendered weapon pose.
-- Restores the intended defaults: right-stick/trackpad up jumps or raises
-  stance, right-stick/trackpad down lowers stance, and left trigger remains an
-  alternate Jump binding.
-- Preserves the four right-thumbrest mission shortcut chords and leaves the
-  redundant right-grip action unbound by default.
-- Keeps the normal FPS counter and red performance-warning overlay off unless
-  their diagnostic controls are explicitly enabled.
-- Runs Windows CI on the repository's actual `main` branch and includes the
-  configurator, input mapper, and 125-setting regression suite in release
-  validation.
+- Caches the controller-independent native attachment separately for each
+  weapon, preventing one gun's model alignment from being reused by another.
+- Keeps per-weapon and gunstock translation through final grip-tag correction,
+  allowing MP5, pistol, rifle, and launcher alignment to be tuned independently.
+- Removes remaining hard-coded right-weapon/left-support assumptions from both
+  OpenXR and OpenVR pose, interaction, pointer, and haptic paths.
+- Prevents unit switching or unchanged saves from accumulating conversion
+  drift, including safe round trips at the minimum and maximum height limits.
+- Detects a missing or broken 32-bit runtime separately from a valid 64-bit
+  OpenXR registration, so an unusable forced backend is blocked before launch.
+- Uses one evaluator for the configurator, launcher, support report, and tests,
+  preventing their Ready/Warning/Blocked decisions from drifting apart.
+- Records actual runtime, headset, and controller evidence after a successful
+  session instead of presenting registry-level detection as hardware proof.
 
 Personal settings remain under LocalAppData so package updates preserve them.
 
@@ -88,8 +100,10 @@ other Call of Duty game data.
    `iw3sp.exe`.
 4. Start the OpenXR runtime you intend to use.
 5. Run `KisakCOD-VR-Configurator.exe`.
-6. Choose a preset or custom settings, then click **Save & Launch**. The batch
-   launcher remains available for starting with the last saved profile.
+6. On **Setup & Compatibility**, run the scan, resolve every Blocked item, and
+   review the exact delta before applying its recommendation.
+7. Choose any remaining comfort/input settings, then click **Save & Launch**.
+   The batch launcher reruns the same preflight before starting the game.
 
 Full instructions are in [INSTALL.md](INSTALL.md).
 

@@ -1,6 +1,29 @@
 # Known issues
 
-This list applies to `v0.10.0-beta.8`.
+This list applies to `v0.10.0-beta.9`.
+
+## Setup and compatibility
+
+- Registry/file detection is an offline preflight, not a synthetic VR session.
+  The first scan correctly warns that headset/controller proof is missing.
+  Connect and wake the headset, run **Save & Launch Diagnostics**, then rescan
+  to import the live backend/runtime/system/interaction-profile receipt.
+- KisakCOD and COD4 are 32-bit processes. A valid 64-bit OpenXR registration
+  does not prove that the 32-bit loader can start. Beta.9 reports both registry
+  views independently and blocks an OpenXR-only launch when the 32-bit manifest
+  is absent or missing on disk.
+- The automatic backend may continue through the experimental x86 OpenVR path
+  when no usable 32-bit OpenXR runtime exists. The report labels that as a
+  Warning; it does not present OpenVR as equivalent to the primary VDXR path.
+- GPU memory provides only a conservative Native/Performance starting point.
+  It is not a performance benchmark. Use the Performance profile if native
+  rendering cannot maintain headset cadence even when the scan passes.
+- **Apply recommended** changes only the runtime backend and the coupled
+  graphics profile. Runtime registration remains owned by the headset software;
+  Beta.9 never writes OpenXR registry values or silently starts SteamVR/VDXR.
+- `Compatibility-Report.txt` contains mod-relevant paths and hardware/runtime
+  identities for support. Review it before posting publicly if the Windows
+  installation path itself is sensitive.
 
 ## Unsupported mission
 
@@ -25,6 +48,12 @@ This list applies to `v0.10.0-beta.8`.
   face, menu, grip, and touch components, and grip/aim use one shared device
   pose. Remap conflicting controls and report the controller type/profile lines
   from `main\console.log`. OpenXR remains the preferred backend.
+- One community PSVR2 test confirmed that the manually selected OpenVR backend
+  reaches playable controller tracking and input. That setup also reported a
+  90-degree weapon orientation error, backward-looking magazine insertion,
+  Pause/weapon-switch overlap, and right-stick touch interfering with left-stick
+  movement. PSVR2/OpenVR remains experimental until those driver-specific pose
+  and default-binding problems are corrected.
 - The default `6016x2688` / output-scale `1.0` mode is demanding. The supported
   lower preset is `4768x2016` / output-scale `0.75`.
 - `3072x1536` is incompatible with the packed renderer because it cannot hold
@@ -50,20 +79,23 @@ This list applies to `v0.10.0-beta.8`.
   objective/status banners, and subtitles can move independently. The native
   crosshair remains locked to optical center by design.
 - Recenter and player-height actions on the calibration page apply to the
-  running SP game. Other setting changes still take effect on the next launch.
+  running SP game. The beta.9 weapon editor's **Apply live** and guided capture
+  also update a running SP mission; other settings take effect on next launch.
 - Automatic standing measurement requires an OpenXR `STAGE` space or OpenVR's
-  standing universe. If the runtime has no usable floor reference, beta.8 says so
+  standing universe. If the runtime has no usable floor reference, beta.9 says so
   and applies the saved manual height; it does not guess a floor.
-- Every beta.8 save performs an exact byte and 125-value read-back before it can
+- Every beta.9 save performs an exact byte and 142-value read-back before it can
   report success. The launcher then records the effective profile under
   `%LOCALAPPDATA%\KisakCOD-VR\Active-VR-Settings.txt`, and the game appends
   `STATUS=RUNTIME_ACCEPTED` after parsing the inherited settings. The runtime appends
   `STATUS=RUNTIME_WEAPON_POSE_APPLIED` after the rendered weapon reaches its
-  calibrated grip target, height and live-calibration receipts, and the accepted
-  and saved/canceled HUD layouts.
-- Legacy beta.7 and V57/V58/V59/V60 test profiles are accepted. Missing
+  calibrated grip target, height and live-calibration receipts, accepted and
+  saved/canceled HUD layouts, plus active weapon/profile and aim-capture
+  receipts.
+- Legacy beta.7 and V57/V58/V59/V60/V61 test profiles are accepted. Missing
   calibration or visual-HUD fields use tested defaults until the profile is
-  saved once by beta.8.
+  saved once by beta.9. Profiles without a unit selector open in Metric mode; the
+  underlying canonical calibration values are not rewritten unless edited.
 - Press-to-bind briefly starts a separate black VR scene. COD4 must be closed,
   and the configured runtime and controllers must already be active.
 - A controller profile may not expose every selectable component. Unsupported
@@ -76,10 +108,20 @@ This list applies to `v0.10.0-beta.8`.
   OpenXR runtime such as VDXR, before capturing.
 - The active profile is stored under `%LOCALAPPDATA%\KisakCOD-VR`; use Restore
   Defaults or a saved backup if manual edits make a profile invalid.
+- Guided gunstock capture solves rotation, not physical position. Fine-tune
+  Forward/Left/Up after capture and verify both hip fire and shouldering.
+- Only one gunstock profile is active at a time. Its correction is shared by
+  every shouldered weapon; keep unusual weapon geometry in that weapon's own
+  shouldered/ADS delta.
 
-## Tracked hands and physical reloading
+## Handedness, tracked hands, and physical reloading
 
-- The left hand uses authored free, rifle-grip, and magazine-grip poses.
+- Beta.9 swaps the functional weapon/off-hand roles, actual tracked weapon pose,
+  muzzle, scope, reload/grenade interactions, pointer, and haptics. COD4's
+  viewmodel glove/arm geometry was authored for the original right-handed
+  layout and is not anatomically mirrored, so left-handed visuals remain
+  experimental even when interaction sides are correct.
+- The off hand uses authored free, rifle-grip, and magazine-grip poses.
   Continuous touch-driven finger curling is not implemented.
 - Physical reloading applies only to supported rifles, SMGs, and pistols with
   a usable detachable clip model. Other weapons retain COD4's native reload.
@@ -93,7 +135,7 @@ This list applies to `v0.10.0-beta.8`.
   alignment or strength tuning.
 - A completely still grip release is intentionally treated as a drop rather
   than a throw.
-- Manual reload owns the left grip after a magazine has been ejected. Finish
+- Manual reload owns the off-hand grip after a magazine has been ejected. Finish
   or cancel that interaction before drawing a grenade.
 
 ## Campaign scripting
