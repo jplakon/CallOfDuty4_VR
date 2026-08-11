@@ -136,7 +136,7 @@ rem process creation.
 "%~dp0KisakCOD-VR-Configurator.exe" --compatibility-report "%KISAK_VR_COMPATIBILITY_REPORT_PATH%"
 set "KISAK_VR_COMPATIBILITY_EXIT=%ERRORLEVEL%"
 if "%KISAK_VR_COMPATIBILITY_EXIT%"=="2" (
-  echo ERROR: The beta.9 compatibility preflight found a launch blocker.
+  echo ERROR: The beta.10 compatibility preflight found a launch blocker.
   echo Open KisakCOD-VR-Configurator.exe and review Setup ^& Compatibility.
   echo Support-ready report:
   echo   "%KISAK_VR_COMPATIBILITY_REPORT_PATH%"
@@ -144,7 +144,7 @@ if "%KISAK_VR_COMPATIBILITY_EXIT%"=="2" (
   exit /b 1
 )
 if not "%KISAK_VR_COMPATIBILITY_EXIT%"=="0" (
-  echo ERROR: The beta.9 compatibility report could not be written.
+  echo ERROR: The beta.10 compatibility report could not be written.
   echo   "%KISAK_VR_COMPATIBILITY_REPORT_PATH%"
   pause
   exit /b 1
@@ -153,7 +153,7 @@ if not "%KISAK_VR_COMPATIBILITY_EXIT%"=="0" (
 del /q "%KISAK_VR_CALIBRATION_REQUEST_PATH%" "%KISAK_VR_CALIBRATION_STATUS_PATH%" >nul 2>&1
 del /q "%KISAK_VR_WEAPON_CALIBRATION_REQUEST_PATH%" "%KISAK_VR_WEAPON_CALIBRATION_STATUS_PATH%" >nul 2>&1
 set "KISAK_VR_SETTINGS_STATUS=LAUNCHER_VERIFIED"
->"%KISAK_VR_SETTINGS_RECEIPT_PATH%" echo KisakCOD VR beta.9 effective settings receipt
+>"%KISAK_VR_SETTINGS_RECEIPT_PATH%" echo KisakCOD VR beta.10 effective settings receipt
 >>"%KISAK_VR_SETTINGS_RECEIPT_PATH%" echo STATUS=LAUNCHER_VERIFIED
 >>"%KISAK_VR_SETTINGS_RECEIPT_PATH%" echo DATE=%DATE% %TIME%
 >>"%KISAK_VR_SETTINGS_RECEIPT_PATH%" set KISAK_VR_

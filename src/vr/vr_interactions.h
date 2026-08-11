@@ -66,6 +66,44 @@ enum class MeleeMode
 constexpr std::uint32_t kLeftControllerIndex = 0u;
 constexpr std::uint32_t kRightControllerIndex = 1u;
 
+// COD4's C4-style weapons do not need a muzzle or a rendered aim pose. Their
+// native weapon state machine consumes BUTTON_ATTACK separately and then emits
+// EV_DETONATE. Keep that exceptional routing semantic instead of matching a
+// weapon name, so every campaign detonator receives the same repair.
+inline constexpr bool WeaponRequiresPoseIndependentAttack(
+    const bool isGrenade,
+    const bool hasDetonator)
+{
+    return isGrenade && hasDetonator;
+}
+
+// Keep automatic proximity stable at the boundary: enter at the configured
+// wrist radius, but do not release until the hand moves this much farther
+// away. COD4 world units are inches for these hand-interaction distances.
+constexpr float kSupportGripProximityReleaseHysteresis = 4.0f;
+
+inline bool SupportGripProximityQualifies(
+    const float controllerToSupportDistance,
+    const float attachRadius,
+    const bool currentlyLatched)
+{
+    if (!std::isfinite(controllerToSupportDistance) ||
+        !std::isfinite(attachRadius) ||
+        controllerToSupportDistance < 0.0f ||
+        attachRadius < 0.0f)
+    {
+        return false;
+    }
+
+    const float activeRadius =
+        attachRadius +
+        (currentlyLatched
+             ? kSupportGripProximityReleaseHysteresis
+             : 0.0f);
+
+    return controllerToSupportDistance <= activeRadius;
+}
+
 inline constexpr const char* DominantHandId(const DominantHand hand)
 {
     return hand == DominantHand::Left ? "left" : "right";

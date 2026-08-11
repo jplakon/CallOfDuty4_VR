@@ -230,6 +230,18 @@ bool VR_TrackedHandDiagnosticsEnabled();
 bool VR_GetLeftControllerSupportGripPressed(
     bool* supportGripPressed);
 
+// Automatic proximity keeps its logical support action held without a
+// physical squeeze. The renderer uses this mode bit to apply a finite
+// enter/exit radius while leaving Hold and Toggle behavior unchanged.
+bool VR_SupportGripUsesAutomaticProximity();
+
+// Returns the configured Attack action without requiring a rendered weapon
+// aim pose. This is reserved for native pose-independent interactions such as
+// C4 detonators; ordinary firearms must continue using the weapon command
+// below so muzzle obstruction and visible-gun alignment remain authoritative.
+bool VR_GetConfiguredAttackButton(
+    bool* attackPressed);
+
 // Returns the final rendered weapon-hand direction as CoD pitch/yaw
 // and the configured Attack state. The direction is taken from
 // the transformed viewmodel axis, keeping shots aligned with the visible gun.

@@ -82,6 +82,26 @@ std::string Read(const std::filesystem::path& path)
         std::istreambuf_iterator<char>());
 }
 
+std::size_t CountOccurrences(
+    const std::string& text,
+    const std::string& needle)
+{
+    if (needle.empty())
+    {
+        return 0u;
+    }
+
+    std::size_t count = 0u;
+    std::size_t position = 0u;
+    while ((position = text.find(needle, position)) !=
+           std::string::npos)
+    {
+        ++count;
+        position += needle.size();
+    }
+    return count;
+}
+
 } // namespace
 
 int main(const int argumentCount, char** arguments)
@@ -143,6 +163,42 @@ int main(const int argumentCount, char** arguments)
                     vint::EffectiveHapticAmplitude(false, 0.8f, 1.0f),
                     0.0f),
             "V64 haptic scaling should clamp safely and honor the accessibility disable switch");
+        Check(
+            vint::SupportGripProximityQualifies(
+                14.0f,
+                14.0f,
+                false) &&
+                !vint::SupportGripProximityQualifies(
+                    14.01f,
+                    14.0f,
+                    false) &&
+                vint::SupportGripProximityQualifies(
+                    18.0f,
+                    14.0f,
+                    true) &&
+                !vint::SupportGripProximityQualifies(
+                    18.01f,
+                    14.0f,
+                    true) &&
+                !vint::SupportGripProximityQualifies(
+                    -1.0f,
+                    14.0f,
+                    true),
+            "issue #26 V67 automatic proximity should enter at the configured radius and release four units farther out");
+        Check(
+            vint::WeaponRequiresPoseIndependentAttack(
+                true,
+                true) &&
+                !vint::WeaponRequiresPoseIndependentAttack(
+                    true,
+                    false) &&
+                !vint::WeaponRequiresPoseIndependentAttack(
+                    false,
+                    true) &&
+                !vint::WeaponRequiresPoseIndependentAttack(
+                    false,
+                    false),
+            "issue #18 V68 must bypass weapon-pose gating only for grenade-class weapons with hasDetonator");
     }
 
     {
@@ -945,7 +1001,7 @@ int main(const int argumentCount, char** arguments)
         Check(packaged.values == values, "packaged release defaults should match the configurator catalog");
         Check(
             packaged.profileName == "Tested Quest 3" &&
-                packaged.revision == "beta9-unified-calibration-interactions-defaults",
+                packaged.revision == "beta10-two-hand-proximity-detonator-defaults",
             "packaged defaults should identify their active profile and revision");
         Check(
             packaged.activePath == releaseDefaults,
@@ -976,7 +1032,7 @@ int main(const int argumentCount, char** arguments)
                 launcher.find("compatibility preflight found a launch blocker") !=
                     std::string::npos &&
                 launcher.find("--validate") != std::string::npos,
-            "the launcher should validate overrides, run beta.9 preflight, and publish every guarded state path");
+            "the launcher should validate overrides, run beta.10 preflight, and publish every guarded state path");
         Check(
             runtime.find("STATUS=RUNTIME_ACCEPTED") != std::string::npos &&
                 runtime.find("RUNTIME_MEASUREMENT_UNITS") !=
@@ -1054,6 +1110,33 @@ int main(const int argumentCount, char** arguments)
                 runtime.find("RUNTIME_COMPATIBILITY_LEFT_CONTROLLER") !=
                     std::string::npos,
             "the game should acknowledge settings, calibration, compatibility, live HUD editing, and per-weapon/gunstock lifecycle receipts");
+        const std::size_t openVrControllerUpdate =
+            runtime.find("bool VR_UpdateOpenVrControllerActions()");
+        const std::size_t openVrTwoHandUpdate =
+            runtime.find(
+                "VR_UpdateTwoHandWeaponTargetFromPublishedPoses();",
+                openVrControllerUpdate);
+        const std::size_t openVrFocusUpdate =
+            runtime.find(
+                "VR_UpdatePoseFocusAimFromControllers();",
+                openVrTwoHandUpdate);
+        Check(
+            runtime.find(
+                "void VR_UpdateTwoHandWeaponTargetFromPublishedPoses()") !=
+                    std::string::npos &&
+                CountOccurrences(
+                    runtime,
+                    "VR_UpdateTwoHandWeaponTargetFromPublishedPoses();") ==
+                    2u &&
+                openVrControllerUpdate != std::string::npos &&
+                openVrTwoHandUpdate != std::string::npos &&
+                openVrFocusUpdate != std::string::npos &&
+                runtime.find(
+                    "V66 backend-shared two-hand weapon") !=
+                    std::string::npos &&
+                openVrControllerUpdate < openVrTwoHandUpdate &&
+                openVrTwoHandUpdate < openVrFocusUpdate,
+            "issue #26: OpenXR and OpenVR must both update the shared two-hand weapon target after publishing controller poses");
         const std::size_t lostPoseStatus =
             runtime.find("\"NO_TRACKED_POSE\"");
         const std::size_t heightCommit =
@@ -1081,6 +1164,54 @@ int main(const int argumentCount, char** arguments)
             root / "src/cgame/cg_draw_debug.cpp");
         const std::string weapons = Read(
             root / "src/cgame/cg_weapons.cpp");
+        const std::string clientInput = Read(
+            root / "src/client/cl_input.cpp");
+        const std::size_t rawAttackGetter =
+            runtime.find(
+                "bool VR_GetConfiguredAttackButton(");
+        const std::size_t normalWeaponGetter =
+            runtime.find(
+                "bool VR_GetRightControllerWeaponCommand(");
+        Check(
+            rawAttackGetter != std::string::npos &&
+                normalWeaponGetter != std::string::npos &&
+                rawAttackGetter < normalWeaponGetter &&
+                runtime.find(
+                    "g_vrRightControllerAttackPressed;",
+                    rawAttackGetter) != std::string::npos &&
+                clientInput.find(
+                    "KISAK_SP_VR_SCRIPTED_DETONATOR_TRIGGER_REPAIR_V68") !=
+                    std::string::npos &&
+                clientInput.find(
+                    "WeaponRequiresPoseIndependentAttack") !=
+                    std::string::npos &&
+                clientInput.find(
+                    "activeWeaponDef->hasDetonator != 0") !=
+                    std::string::npos &&
+                clientInput.find(
+                    "[VR][DETONATOR] Routed configured Attack") !=
+                    std::string::npos &&
+                clientInput.find(
+                    "else if (VR_GetRightControllerWeaponCommand(") !=
+                    std::string::npos,
+            "issue #18 V68 must route raw Attack only for semantic detonators before preserving the normal aimed-weapon path");
+        Check(
+            runtime.find(
+                "bool VR_SupportGripUsesAutomaticProximity()") !=
+                    std::string::npos &&
+                runtime.find(
+                    "VrInteractions::SupportGripMode::Proximity") !=
+                    std::string::npos &&
+                weapons.find(
+                    "automaticProximity &&") !=
+                    std::string::npos &&
+                weapons.find(
+                    "SupportGripProximityQualifies") !=
+                    std::string::npos &&
+                weapons.find(
+                    "automaticProximity\n            ? insideGripRadius") !=
+                    std::string::npos,
+            "issue #26 V67: only automatic proximity must re-evaluate the finite support-hand release radius every frame");
         Check(
             screenPlacement.find("layout.ammoOffsetX") !=
                     std::string::npos &&
@@ -1125,7 +1256,7 @@ int main(const int argumentCount, char** arguments)
         Check(
             configurator.find("Setup & Compatibility") !=
                     std::string::npos &&
-                configurator.find("v0.10.0-beta.9") !=
+                configurator.find("v0.10.0-beta.10") !=
                     std::string::npos &&
                 configurator.find("Rescan system") !=
                     std::string::npos &&
@@ -1138,7 +1269,7 @@ int main(const int argumentCount, char** arguments)
                 configurator.find("Handedness, units, comfort, controls, HUD, weapon profiles, and calibration will not change") !=
                     std::string::npos &&
                 configurator.find("Height & Recenter") != std::string::npos &&
-                configurator.find("Beta.9 unified setup") !=
+                configurator.find("Beta.10 two-hand, proximity, and detonator fixes") !=
                     std::string::npos &&
                 configurator.find("Recenter now") != std::string::npos &&
                 configurator.find("Measure standing height") !=
@@ -1175,7 +1306,7 @@ int main(const int argumentCount, char** arguments)
                     std::string::npos &&
                 configurator.find("*.vrstock") !=
                     std::string::npos,
-            "the beta.9 menu should unify compatibility with handed interactions, weapon/gunstock, metric, calibration, and both visual HUD workflows");
+            "the beta.10 menu should retain compatibility, handed interactions, weapon/gunstock, metric, calibration, and both visual HUD workflows");
     }
 
     const std::string mixed =
@@ -1690,9 +1821,9 @@ int main(const int argumentCount, char** arguments)
     Check(saved.backupPath.empty(), "first save should not create a backup");
     Check(Read(userFile).find("\r\n") != std::string::npos, "saved batch file should use CRLF");
     Check(
-        Read(userFile).find("generated by beta.9 Configurator (Unified Setup/Compatibility)") !=
+        Read(userFile).find("generated by beta.10 Configurator (Unified Setup/Compatibility)") !=
             std::string::npos,
-        "saved settings should identify the beta.9 unified-compatibility schema");
+        "saved settings should identify the beta.10 unified-compatibility schema");
     Check(
         Read(userFile).find("KISAK_VR_SETTINGS_REVISION=" + saved.revision) !=
             std::string::npos,

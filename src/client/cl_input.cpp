@@ -4,6 +4,7 @@
 
 #include "cl_input.h"
 #include "vr/vr_openxr.h"
+#include "vr/vr_interactions.h"
 
 void __cdecl CG_NextWeapon_f();
 #include <qcommon/mem_track.h>
@@ -2123,7 +2124,70 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
         float vrGunYaw = 0.0f;
         bool vrAttackPressed = false;
 
-        if (VR_GetRightControllerWeaponCommand(
+        cg_s* cgameGlob =
+            CG_GetLocalClientGlobals(0);
+
+        const unsigned int activeWeaponIndex =
+            cgameGlob->predictedPlayerState.weapon;
+
+        WeaponDef* activeWeaponDef =
+            activeWeaponIndex != 0u
+                ? BG_GetWeaponDef(activeWeaponIndex)
+                : nullptr;
+
+        const bool poseIndependentDetonator =
+            activeWeaponDef != nullptr &&
+            kisak::vr::interactions::
+                WeaponRequiresPoseIndependentAttack(
+                    activeWeaponDef->weapType ==
+                        WEAPTYPE_GRENADE,
+                    activeWeaponDef->hasDetonator != 0);
+
+        bool configuredAttackPressed = false;
+
+        const bool configuredAttackAvailable =
+            VR_GetConfiguredAttackButton(
+                &configuredAttackPressed);
+
+        // KISAK_SP_VR_SCRIPTED_DETONATOR_TRIGGER_REPAIR_V68
+        // C4 detonators consume BUTTON_ATTACK in PM_Weapon_CheckForDetonation,
+        // but they do not require the rendered firearm pose used by normal VR
+        // shooting. Auto-equipped detonators can therefore have no valid aim
+        // snapshot. Route only the engine's semantic hasDetonator class from
+        // the raw configured Attack action and leave every firearm on the
+        // existing aim/muzzle-obstruction path below.
+        if (poseIndependentDetonator &&
+            configuredAttackAvailable)
+        {
+            VR_SetRightControllerWeaponMuzzleBlocked(
+                false);
+
+            if (configuredAttackPressed)
+            {
+                result->buttons |=
+                    BUTTON_ATTACK;
+
+                static bool
+                    loggedSpVrDetonatorAttackInjection =
+                        false;
+
+                if (!loggedSpVrDetonatorAttackInjection)
+                {
+                    Com_Printf(
+                        0,
+                        "[VR][DETONATOR] Routed configured Attack "
+                        "directly to BUTTON_ATTACK for pose-independent "
+                        "weapon %s.\n",
+                        activeWeaponDef->szInternalName != nullptr
+                            ? activeWeaponDef->szInternalName
+                            : "<unnamed>");
+
+                    loggedSpVrDetonatorAttackInjection =
+                        true;
+                }
+            }
+        }
+        else if (VR_GetRightControllerWeaponCommand(
                 &vrGunPitch,
                 &vrGunYaw,
                 &vrAttackPressed))
@@ -2142,9 +2206,6 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
                 if (VR_GetRightControllerWeaponMuzzleWorld(
                         vrMuzzleWorld))
                 {
-                    cg_s* cgameGlob =
-                        CG_GetLocalClientGlobals(0);
-
                     float vrViewOrigin[3] = {
                         cgameGlob->refdef.vieworg[0],
                         cgameGlob->refdef.vieworg[1],

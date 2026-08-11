@@ -54,7 +54,7 @@ constexpr wchar_t kHudEditorClass[] =
 constexpr wchar_t kWeaponEditorClass[] =
     L"KisakCODVrWeaponCalibrationEditorV65";
 constexpr wchar_t kWindowTitle[] =
-    L"KisakCOD VR Configurator - v0.10.0-beta.9";
+    L"KisakCOD VR Configurator - v0.10.0-beta.10";
 
 constexpr int kWindowWidth = 1160;
 constexpr int kWindowHeight = 790;
@@ -3653,7 +3653,7 @@ void StartHeadsetHudEditor(AppState& state)
         SetHudStatus(state, L"Could not write HUD-Editor-Request.txt.");
         MessageBoxW(
             state.window,
-            L"Beta.9 could not write HUD-Editor-Request.txt under your KisakCOD-VR settings folder.",
+            L"Beta.10 could not write HUD-Editor-Request.txt under your KisakCOD-VR settings folder.",
             L"Headset HUD editor failed",
             MB_OK | MB_ICONERROR);
         return;
@@ -3946,8 +3946,8 @@ bool SendCalibrationCommand(
         const int accepted = MessageBoxW(
             state.window,
             command == vc::Command::MeasureStanding
-                ? L"Stand naturally with the headset on, face the desired forward direction, and look level.\r\n\r\nAfter you press OK, beta.9 waits three seconds, measures your eye height from the runtime floor, and recenters the view."
-                : L"Put on the headset, assume your normal playing posture, face the desired forward direction, and look level.\r\n\r\nAfter you press OK, beta.9 waits three seconds and captures that pose as forward and level.",
+                ? L"Stand naturally with the headset on, face the desired forward direction, and look level.\r\n\r\nAfter you press OK, beta.10 waits three seconds, measures your eye height from the runtime floor, and recenters the view."
+                : L"Put on the headset, assume your normal playing posture, face the desired forward direction, and look level.\r\n\r\nAfter you press OK, beta.10 waits three seconds and captures that pose as forward and level.",
             L"Guided VR calibration",
             MB_OKCANCEL | MB_ICONINFORMATION);
 
@@ -4004,7 +4004,7 @@ bool SendCalibrationCommand(
             L"Could not write the live calibration request.");
         MessageBoxW(
             state.window,
-            L"Beta.9 could not write Calibration-Request.txt under your KisakCOD-VR settings folder.",
+            L"Beta.10 could not write Calibration-Request.txt under your KisakCOD-VR settings folder.",
             L"Calibration request failed",
             MB_OK | MB_ICONERROR);
         return false;
@@ -5202,7 +5202,7 @@ void BuildCalibrationPanel(AppState& state)
     add(CreateControl(
         state,
         L"STATIC",
-        L"For recentering, put on the headset, assume your normal posture, face the desired forward direction, and look level. After you confirm, beta.9 waits three seconds before capturing the pose.",
+        L"For recentering, put on the headset, assume your normal posture, face the desired forward direction, and look level. After you confirm, beta.10 waits three seconds before capturing the pose.",
         SS_LEFT,
         kTabLeft + 20,
         kTabTop + 338,
@@ -6552,7 +6552,7 @@ bool BuildMainWindow(AppState& state)
     CreateControl(
         state,
         L"STATIC",
-        L"Beta.9 unified setup, handed interactions, gunstock calibration, metric units, and visual HUD editing",
+        L"Beta.10 two-hand, proximity, and detonator fixes with beta.9 setup and calibration",
         SS_LEFT,
         22,
         52,

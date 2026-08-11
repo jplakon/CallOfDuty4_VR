@@ -1,6 +1,7 @@
 #include <qcommon/qcommon.h>
 #include <universal/com_memory.h>
 #include "vr/vr_openxr.h"
+#include "vr/vr_interactions.h"
 
 #include <algorithm>
 #include <cmath>
@@ -56,6 +57,8 @@ int32_t removeMeWhenMPStopsCrashingInHere;
 // Keep this temporary trace deliberately limited to the Bog Javelin index
 // reported by CG_SelectWeaponIndex so normal weapons do not flood console.log.
 static uint32_t s_vrJavelinDiagnosticSequence = 0;
+
+namespace VrInteractions = kisak::vr::interactions;
 
 static void VR_JavelinDiagnostic(
     const char *stage,
@@ -4129,19 +4132,35 @@ static bool VR_AddFloatingLeftHandToScene(
     const bool previousSupportGripLatched =
         asset->supportGripLatched;
 
+    const bool automaticProximity =
+        VR_SupportGripUsesAutomaticProximity();
+
     const bool insideGripRadius =
         supportWristAvailable &&
         s_vrLeftHandGripRadius != nullptr &&
-        controllerToSupportDistance <=
-            s_vrLeftHandGripRadius->current.value;
+        VrInteractions::SupportGripProximityQualifies(
+            controllerToSupportDistance,
+            s_vrLeftHandGripRadius->current.value,
+            automaticProximity &&
+                previousSupportGripLatched);
+
+    // Hold and Toggle intentionally retain their existing latch semantics:
+    // once squeeze/toggle attaches inside the radius, their explicit input
+    // release detaches the hand. Automatic proximity has no physical release
+    // edge, so it must re-evaluate distance every frame. Its larger exit
+    // radius prevents attach/detach chatter at the configured boundary.
+    const bool gripDistanceAllowsAttachment =
+        automaticProximity
+            ? insideGripRadius
+            : (previousSupportGripLatched ||
+               insideGripRadius);
 
     asset->supportGripLatched =
         !asset->magazineGripLatched &&
         supportGripStateAvailable &&
         leftSupportGripPressed &&
         supportWristAvailable &&
-        (previousSupportGripLatched ||
-         insideGripRadius);
+        gripDistanceAllowsAttachment;
 
     if (asset->supportGripLatched !=
         previousSupportGripLatched)

@@ -1,5 +1,49 @@
 # Changelog
 
+## v0.10.0-beta.10
+
+Focused OpenVR two-hand, Automatic-proximity, and campaign detonator repair
+over `v0.10.0-beta.9`.
+
+### OpenVR two-hand stabilization
+
+- Moves the two-hand weapon target/blend update into a backend-shared step that
+  runs after both OpenXR and OpenVR publish semantic weapon-hand and off-hand
+  poses.
+- Makes Hold and Automatic proximity rotate the weapon from the line between
+  both controllers on OpenVR instead of attaching only the support-hand model.
+- Preserves one-handed aiming, normal firearm input, handedness, haptics,
+  calibration, and the existing OpenXR route.
+
+### Automatic-proximity release
+
+- Replaces the rendered support hand's permanent proximity latch with a
+  hysteresis policy: attach at the configured grip radius and release four game
+  units farther out.
+- Keeps the rendered hand and two-hand weapon solver synchronized while
+  avoiding rapid attach/release flicker at the boundary.
+- Leaves Hold and Toggle behavior unchanged and preserves reload/grenade
+  ownership of the off hand.
+
+### Scripted C4 detonators
+
+- Routes the configured Attack action directly to COD4's native detonation
+  state machine only for grenade-class weapons whose definition has
+  `hasDetonator` enabled.
+- Fixes The Bog's ZPU anti-aircraft C4 charge without requiring a mouse click
+  or the previous rifle-first weapon-cycle workaround.
+- Keeps ordinary firearms on the tracked weapon-pose and muzzle-obstruction
+  route and keeps ordinary grenades on their existing interaction path.
+
+### Validation
+
+- Retains the exact 142-setting compatibility/configurator suite and adds
+  source and boundary guards for all three repairs.
+- Verified on Meta Quest 3 through Virtual Desktop VDXR for Automatic
+  proximity, the Bog detonator, firing, reloading, grenades, and two-hand aim.
+- OpenVR two-hand motion was independently confirmed by a PICO 4 tester in both
+  Hold and Automatic-proximity modes.
+
 ## v0.10.0-beta.9
 
 Unified setup, per-weapon/gunstock calibration, Metric/Imperial presentation,

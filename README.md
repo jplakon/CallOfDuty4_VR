@@ -14,15 +14,31 @@ copy of the original game.
 
 ## Current status
 
-The current public beta is `v0.10.0-beta.9`.
+The current public beta is `v0.10.0-beta.10`.
 
-Beta.9 is a setup, calibration, handedness, and physical-interaction update
-over beta.8. It retains beta.8's visual HUD editor, guided height/recenter
-tools, controller-neutral bindings, verified settings, OpenVR controller
-support, and all earlier campaign, performance, tracked-hand, reload, grenade,
-scope, and Mission Select work.
+Beta.10 is a focused controller-interaction and campaign-scripting repair over
+beta.9. It retains beta.9's unified compatibility scan, per-weapon and gunstock
+calibration, Metric/Imperial presentation, handed physical interactions, and
+all earlier campaign, performance, HUD, tracked-hand, reload, grenade, scope,
+and Mission Select work.
 
-### Beta.9 improvements
+### Beta.10 fixes
+
+- Runs the same two-hand weapon target update after either OpenXR or OpenVR
+  publishes controller poses. On OpenVR, the weapon now follows the support
+  hand instead of remaining driven only by the weapon hand.
+- Makes Automatic proximity release the rendered support hand after it leaves
+  a slightly larger exit radius. The separate enter/exit thresholds prevent
+  flicker and keep the hand model synchronized with the two-hand weapon solver.
+- Routes the configured Fire action to COD4's native detonation state machine
+  for grenade-class `hasDetonator` weapons even when a scripted auto-equip has
+  no rendered firearm aim pose. This fixes the C4 detonator at The Bog's ZPU
+  anti-aircraft objective without changing ordinary firearm or grenade input.
+- Retains all 142 exact settings checks and adds regression guards for the
+  OpenVR two-hand path, Automatic-proximity hysteresis, and semantic detonator
+  routing.
+
+### Beta.9 features retained
 
 - Adds one **Setup & Compatibility** page for the installed game/mod files,
   DirectX June 2010, GPU, 32-bit and 64-bit OpenXR registration, OpenVR
@@ -50,7 +66,7 @@ scope, and Mission Select work.
   receipts for compatibility, units, handedness, interactions, equipped weapon,
   gunstock, and effective weapon pose.
 
-### Beta.9 bug fixes
+### Beta.9 fixes retained
 
 - Caches the controller-independent native attachment separately for each
   weapon, preventing one gun's model alignment from being reused by another.

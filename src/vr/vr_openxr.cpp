@@ -1623,7 +1623,7 @@ const VrConfiguratorSettings& VR_GetConfiguratorSettings()
 
         Com_Printf(
             0,
-            "[VR][CONFIG] beta.9 customization loaded: snap %.0f, turn "
+            "[VR][CONFIG] beta.10 customization loaded: snap %.0f, turn "
             "deadzone %.2f, movement deadzone %.2f, two-hand %.2f; "
             "belt forward %.1f, height %.1f, hip %.1f +/- %.1f %s.\n",
             loaded.snapTurnAngleDegrees,
@@ -1704,7 +1704,7 @@ const VrConfiguratorSettings& VR_GetConfiguratorSettings()
 
         Com_Printf(
             0,
-            "[VR][CALIBRATION] beta.9 posture %s; target eye height %.1f "
+            "[VR][CALIBRATION] beta.10 posture %s; target eye height %.1f "
             "%s; first-gameplay recenter %s.\n",
             VrCalibration::PlayModeId(loaded.playMode),
             VR_DisplayInches(
@@ -11667,6 +11667,124 @@ void VR_ResolveOffhandGripModes(
     g_vrObjectGripBindingWasHeld = bindingHeld;
 }
 
+// Both runtime backends publish the semantic weapon-hand and off-hand poses
+// into the same guarded state. Keep the two-hand qualification and blend in a
+// backend-neutral step so OpenXR and the legacy OpenVR fallback cannot drift.
+void VR_UpdateTwoHandWeaponTargetFromPublishedPoses()
+{
+    bool logTwoHandEngaged = false;
+    bool logTwoHandReleased = false;
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrWeaponControllerPoseMutex);
+
+        bool targetActive = false;
+
+        if (g_vrLeftControllerForegripPoseValid &&
+            g_vrLeftControllerForegripPressed &&
+            g_vrRightControllerWeaponPoseValid)
+        {
+            const float handDelta[3] = {
+                g_vrLeftControllerForegripPosition[0] -
+                    g_vrRightControllerWeaponPosition[0],
+                g_vrLeftControllerForegripPosition[1] -
+                    g_vrRightControllerWeaponPosition[1],
+                g_vrLeftControllerForegripPosition[2] -
+                    g_vrRightControllerWeaponPosition[2],
+            };
+
+            const float handDistance =
+                std::sqrt(
+                    handDelta[0] * handDelta[0] +
+                    handDelta[1] * handDelta[1] +
+                    handDelta[2] * handDelta[2]);
+
+            const float forwardDistance =
+                handDelta[0] *
+                    g_vrRightControllerWeaponAxis[0][0] +
+                handDelta[1] *
+                    g_vrRightControllerWeaponAxis[0][1] +
+                handDelta[2] *
+                    g_vrRightControllerWeaponAxis[0][2];
+
+            const float minimumDistance =
+                g_vrTwoHandWeaponTargetActive
+                    ? 3.0f
+                    : 4.0f;
+
+            const float maximumDistance =
+                g_vrTwoHandWeaponTargetActive
+                    ? 36.0f
+                    : 32.0f;
+
+            const float minimumForwardDistance =
+                g_vrTwoHandWeaponTargetActive
+                    ? -1.0f
+                    : 1.0f;
+
+            targetActive =
+                handDistance >= minimumDistance &&
+                handDistance <= maximumDistance &&
+                forwardDistance >=
+                    minimumForwardDistance;
+        }
+
+        logTwoHandEngaged =
+            targetActive &&
+            !g_vrTwoHandWeaponTargetActive;
+
+        logTwoHandReleased =
+            !targetActive &&
+            g_vrTwoHandWeaponTargetActive;
+
+        g_vrTwoHandWeaponTargetActive =
+            targetActive;
+
+        const float targetBlend =
+            targetActive
+                ? VR_GetConfiguratorSettings().twoHandStrength
+                : 0.0f;
+
+        const float blendRate =
+            targetActive
+                ? 0.22f
+                : 0.18f;
+
+        g_vrTwoHandWeaponBlend +=
+            (targetBlend -
+             g_vrTwoHandWeaponBlend) *
+            blendRate;
+
+        if (g_vrTwoHandWeaponBlend < 0.001f)
+        {
+            g_vrTwoHandWeaponBlend = 0.0f;
+        }
+        else if (g_vrTwoHandWeaponBlend > 0.999f)
+        {
+            g_vrTwoHandWeaponBlend = 1.0f;
+        }
+    }
+
+    if (VR_VerboseDiagnosticsEnabled() &&
+        logTwoHandEngaged)
+    {
+        Com_Printf(
+            0,
+            "[VR] Off-hand controller engaged optional "
+            "two-hand weapon stabilization.\n");
+    }
+
+    if (VR_VerboseDiagnosticsEnabled() &&
+        logTwoHandReleased)
+    {
+        Com_Printf(
+            0,
+            "[VR] Off-hand controller released optional "
+            "two-hand weapon stabilization.\n");
+    }
+}
+
 void VR_UpdateControllerActions(
     const XrTime displayTime)
 {
@@ -12130,119 +12248,9 @@ void VR_UpdateControllerActions(
         }
     }
 
-    bool logTwoHandEngaged = false;
-    bool logTwoHandReleased = false;
-
-    {
-        std::lock_guard<std::mutex> lock(
-            g_vrWeaponControllerPoseMutex);
-
-        bool targetActive = false;
-
-        if (g_vrLeftControllerForegripPoseValid &&
-            g_vrLeftControllerForegripPressed &&
-            g_vrRightControllerWeaponPoseValid)
-        {
-            const float handDelta[3] = {
-                g_vrLeftControllerForegripPosition[0] -
-                    g_vrRightControllerWeaponPosition[0],
-                g_vrLeftControllerForegripPosition[1] -
-                    g_vrRightControllerWeaponPosition[1],
-                g_vrLeftControllerForegripPosition[2] -
-                    g_vrRightControllerWeaponPosition[2],
-            };
-
-            const float handDistance =
-                std::sqrt(
-                    handDelta[0] * handDelta[0] +
-                    handDelta[1] * handDelta[1] +
-                    handDelta[2] * handDelta[2]);
-
-            const float forwardDistance =
-                handDelta[0] *
-                    g_vrRightControllerWeaponAxis[0][0] +
-                handDelta[1] *
-                    g_vrRightControllerWeaponAxis[0][1] +
-                handDelta[2] *
-                    g_vrRightControllerWeaponAxis[0][2];
-
-            const float minimumDistance =
-                g_vrTwoHandWeaponTargetActive
-                    ? 3.0f
-                    : 4.0f;
-
-            const float maximumDistance =
-                g_vrTwoHandWeaponTargetActive
-                    ? 36.0f
-                    : 32.0f;
-
-            const float minimumForwardDistance =
-                g_vrTwoHandWeaponTargetActive
-                    ? -1.0f
-                    : 1.0f;
-
-            targetActive =
-                handDistance >= minimumDistance &&
-                handDistance <= maximumDistance &&
-                forwardDistance >=
-                    minimumForwardDistance;
-        }
-
-        logTwoHandEngaged =
-            targetActive &&
-            !g_vrTwoHandWeaponTargetActive;
-
-        logTwoHandReleased =
-            !targetActive &&
-            g_vrTwoHandWeaponTargetActive;
-
-        g_vrTwoHandWeaponTargetActive =
-            targetActive;
-
-        const float targetBlend =
-            targetActive
-                ? VR_GetConfiguratorSettings().twoHandStrength
-                : 0.0f;
-
-        const float blendRate =
-            targetActive
-                ? 0.22f
-                : 0.18f;
-
-        g_vrTwoHandWeaponBlend +=
-            (targetBlend -
-             g_vrTwoHandWeaponBlend) *
-            blendRate;
-
-        if (g_vrTwoHandWeaponBlend < 0.001f)
-        {
-            g_vrTwoHandWeaponBlend = 0.0f;
-        }
-        else if (g_vrTwoHandWeaponBlend > 0.999f)
-        {
-            g_vrTwoHandWeaponBlend = 1.0f;
-        }
-    }
+    VR_UpdateTwoHandWeaponTargetFromPublishedPoses();
 
     VR_UpdatePoseFocusAimFromControllers();
-
-    if (VR_VerboseDiagnosticsEnabled() &&
-        logTwoHandEngaged)
-    {
-        Com_Printf(
-            0,
-            "[VR] Off-hand controller engaged optional "
-            "two-hand weapon stabilization.\n");
-    }
-
-    if (VR_VerboseDiagnosticsEnabled() &&
-        logTwoHandReleased)
-    {
-        Com_Printf(
-            0,
-            "[VR] Off-hand controller released optional "
-            "two-hand weapon stabilization.\n");
-    }
 }
 
 bool VR_CreateSession()
@@ -15024,6 +15032,14 @@ bool VR_GetLeftControllerSupportGripPressed(
 }
 
 
+bool VR_SupportGripUsesAutomaticProximity()
+{
+    return
+        VR_GetConfiguratorSettings().supportGripMode ==
+        VrInteractions::SupportGripMode::Proximity;
+}
+
+
 void VR_UpdateManualMagazineReload(
     const int weaponIndex,
     const bool supported,
@@ -16383,7 +16399,7 @@ bool VR_UpdateManualGrenadeInput(
     {
         Com_Printf(
             0,
-            "[VR][GRENADE] beta.9 handed manual hip grenades are %s. "
+            "[VR][GRENADE] beta.10 handed manual hip grenades are %s. "
             "Belt layout %s; release/toggle the off-hand grip to throw.\n",
             *manualModeEnabled
                 ? "enabled"
@@ -16721,7 +16737,7 @@ void VR_EnsureWeaponProfilesLoaded()
     {
         Com_Printf(
             0,
-            "[VR][WEAPON PROFILE] beta.9 loaded revision %s; %u weapon "
+            "[VR][WEAPON PROFILE] beta.10 loaded revision %s; %u weapon "
             "override(s), %u gunstock profile(s), active '%s'.\n",
             g_vrWeaponProfilesRevision.c_str(),
             static_cast<unsigned int>(g_vrWeaponProfiles.weapons.size()),
@@ -18805,6 +18821,25 @@ bool VR_GetRightControllerMountedWeaponAim(
 
     return true;
 }
+
+// KISAK_SP_VR_SCRIPTED_DETONATOR_TRIGGER_REPAIR_V68
+bool VR_GetConfiguredAttackButton(
+    bool* attackPressed)
+{
+    if (attackPressed == nullptr)
+    {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(
+        g_vrWeaponControllerPoseMutex);
+
+    *attackPressed =
+        g_vrRightControllerAttackPressed;
+
+    return g_vrInitialized;
+}
+
 
 // KISAK_SP_VR_MOUNTED_WEAPON_TRIGGER_BOOTSTRAP_V1
 bool VR_GetRightControllerMountedWeaponTrigger(
@@ -21555,9 +21590,19 @@ bool VR_UpdateOpenVrControllerActions()
         }
     }
 
-    // OpenXR updates this after locating both controller action spaces. The
+    // OpenXR updates these after locating both controller action spaces. The
     // legacy SteamVR adapter publishes equivalent device poses above, so run
-    // the same physical-ADS detector here as well.
+    // the same two-hand weapon blend and physical-ADS detector here as well.
+    static bool loggedOpenVrTwoHandRepair = false;
+    if (!loggedOpenVrTwoHandRepair)
+    {
+        Com_Printf(
+            0,
+            "[VR][OPENVR] V66 backend-shared two-hand weapon "
+            "target update is active.\n");
+        loggedOpenVrTwoHandRepair = true;
+    }
+    VR_UpdateTwoHandWeaponTargetFromPublishedPoses();
     VR_UpdatePoseFocusAimFromControllers();
 
     return anyController;

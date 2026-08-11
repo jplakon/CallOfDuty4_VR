@@ -1,6 +1,6 @@
 # Release checklist
 
-This checklist is for `v0.10.0-beta.9` over `v0.10.0-beta.8`.
+This checklist is for `v0.10.0-beta.10` over `v0.10.0-beta.9`.
 
 ## Documentation blockers
 
@@ -41,7 +41,7 @@ This checklist is for `v0.10.0-beta.9` over `v0.10.0-beta.8`.
   `KisakCOD-VR-Input-Mapper`, and `KisakCOD-VR-Configurator-Tests` in Win32
   Release configuration from the committed source.
 - Run the settings tests against `release/package/VR-Settings.bat` and require
-  all 142 catalog settings plus beta.9 compatibility, launcher, runtime, and
+  all 142 catalog settings plus beta.10 compatibility, launcher, runtime, and
   configurator receipts to pass.
 - Confirm `git status --porcelain --untracked-files=no` remains empty.
 - Copy nothing from `bin/Debug` into the player package.
@@ -51,7 +51,7 @@ This checklist is for `v0.10.0-beta.9` over `v0.10.0-beta.8`.
 
 - Open **Setup & Compatibility** on the primary VDXR/Quest 3/RTX 3080 Ti
   system. Require file, DirectX, OS, GPU, and 32-bit OpenXR checks to pass;
-  before the first beta.9 run, require honest headset/controller warnings.
+  before the first beta.10 run, require honest headset/controller warnings.
 - Apply the recommendation only after verifying its confirmation lists the
   exact backend/graphics delta. Snapshot all other settings before/after and
   require handedness, units, comfort, input, HUD, height, interactions, and
@@ -100,6 +100,18 @@ This checklist is for `v0.10.0-beta.9` over `v0.10.0-beta.8`.
   Mixed Reality profile mappings; record the active interaction-profile log.
 - Force `KISAK_VR_BACKEND=openvr` and test movement, turning, fire, ADS,
   reload, use, support grip, menu input, controller poses, and haptics.
+- In OpenVR, test two-hand stabilization with Hold and Automatic proximity.
+  Require the weapon to follow both controllers, then return cleanly to
+  one-handed aim when the support action or distance no longer qualifies.
+- With Automatic proximity, repeatedly cross the configured pickup radius.
+  Require attachment on entry, no boundary flicker, and rendered-hand plus
+  weapon-solver release only after crossing the four-unit larger exit radius.
+- In The Bog, plant the ZPU anti-aircraft charge and use the mission-presented
+  detonator with the configured Fire action. Do not click the mouse or cycle a
+  rifle first. Require the native detonation sequence and the
+  `[VR][DETONATOR]` route marker.
+- After the detonator test, recheck rifle/pistol fire, muzzle obstruction,
+  ordinary grenades, manual reload, Hold-mode two-hand aim, and OpenXR.
 - Test first-gameplay recenter both enabled and disabled. In a running mission,
   verify **Recenter now** captures position and forward/level after its
   countdown without changing the OpenXR or SteamVR system origin.
@@ -159,10 +171,10 @@ This checklist is for `v0.10.0-beta.9` over `v0.10.0-beta.8`.
 
 ## Tag and package
 
-- Create annotated tag `v0.10.0-beta.9` only after the compatibility,
+- Create annotated tag `v0.10.0-beta.10` only after the compatibility,
   Metric/Imperial, per-weapon/gunstock, handed-interaction, controller, menu,
-  rendering, crash-diagnostic, tracked-hand, reload, grenade, and campaign
-  state is validated.
+  rendering, crash-diagnostic, tracked-hand, reload, grenade, OpenVR two-hand,
+  Automatic-proximity release, detonator, and campaign state is validated.
 - Run `tools/package_release.py`.
 - The packager must refuse to run if any documentation placeholder or
   controller-map `VERIFY` marker remains.

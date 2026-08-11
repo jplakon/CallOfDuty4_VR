@@ -76,7 +76,7 @@ remains:
 ## Per-weapon and gunstock calibration
 
 Open **Weapons & Hands** and choose **Open calibration editor**. Keep the six
-global weapon-hand values as the baseline that works for most weapons. Beta.9
+global weapon-hand values as the baseline that works for most weapons. The mod
 then resolves the rendered pose in this order:
 
 1. global Forward/Left/Up and Pitch/Yaw/Roll baseline;
@@ -139,7 +139,7 @@ the configurator's conflict warnings and test the result in-game.
 
 ## Physical interactions
 
-Beta.9's **Dominant hand** setting assigns semantic weapon-hand and off-hand roles
+The **Dominant hand** setting assigns semantic weapon-hand and off-hand roles
 to the physical controllers. Changing it in the configurator also mirrors all
 controller bindings once. Switching back restores the original sides, including
 custom multi-input chords. The default is right-handed.

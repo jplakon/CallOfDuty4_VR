@@ -1,12 +1,12 @@
 @echo off
-rem KisakCOD VR beta.9 defaults (setup, calibration, and interactions).
+rem KisakCOD VR beta.10 defaults (setup, calibration, and interactions).
 rem Do not put personal changes here: KisakCOD-VR-Configurator.exe writes a
 rem separate VR-User-Settings.bat under LocalAppData so upgrades preserve them.
 rem Profile: Tested Quest 3
-rem Revision: beta9-unified-calibration-interactions-defaults
+rem Revision: beta10-two-hand-proximity-detonator-defaults
 
 set "KISAK_VR_SETTINGS_PROFILE=Tested Quest 3"
-set "KISAK_VR_SETTINGS_REVISION=beta9-unified-calibration-interactions-defaults"
+set "KISAK_VR_SETTINGS_REVISION=beta10-two-hand-proximity-detonator-defaults"
 
 rem Runtime backend: auto, openxr, or the experimental openvr fallback.
 set "KISAK_VR_BACKEND=auto"
