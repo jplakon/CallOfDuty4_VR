@@ -1717,17 +1717,15 @@ void __cdecl CG_CalcViewValues(int localClientNum)
     static bool vrSpGameplayRecenterEvaluated = false;
 
     if (!vrSpGameplayRecenterEvaluated &&
-        (!VR_RecenterOnStartEnabled() ||
-         VR_RecenterHeadPose()))
+        VR_RecenterAtFirstGameplayCamera())
     {
         vrSpGameplayRecenterEvaluated = true;
 
         Com_Printf(
             0,
-            VR_RecenterOnStartEnabled()
-                ? "[VR][CALIBRATION] Recentered SP position and "
-                  "forward/level orientation at the first gameplay camera.\n"
-                : "[VR][CALIBRATION] First-gameplay recenter is disabled.\n");
+            "[VR][CALIBRATION] First-gameplay recenter mode '%s' "
+            "completed at the SP gameplay camera.\n",
+            VR_GetFirstGameplayRecenterModeName());
     }
 
     const bool vrHeadPositionApplied =

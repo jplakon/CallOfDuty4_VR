@@ -6,6 +6,7 @@
 #include "vr/vr_compatibility.h"
 #include "vr/vr_openvr_input.h"
 #include "vr/vr_openxr_profiles.h"
+#include "vr/vr_prompt_labels.h"
 #include "vr/vr_weapon_calibration.h"
 #include "vr/vr_weapon_profiles.h"
 
@@ -23,6 +24,7 @@ namespace vint = kisak::vr::interactions;
 namespace vc = kisak::vr::calibration;
 namespace vrc = kisak::vr::compatibility;
 namespace vh = kisak::vr::hud;
+namespace vp = kisak::vr::prompts;
 namespace vwp = kisak::vr::weapon_profiles;
 
 namespace
@@ -106,6 +108,197 @@ std::size_t CountOccurrences(
 
 int main(const int argumentCount, char** arguments)
 {
+    {
+        const vi::ActionDefinition* useAction =
+            vp::FindPromptAction("  +ACTIVATE  ");
+        Check(
+            useAction != nullptr &&
+                useAction->action == vi::Action::Use &&
+                vp::FindPromptAction("+reload")->action ==
+                    vi::Action::Reload &&
+                vp::FindPromptAction("+gostand")->action ==
+                    vi::Action::Jump &&
+                vp::FindPromptAction("+moveup")->action ==
+                    vi::Action::Jump &&
+                vp::FindPromptAction("+melee")->action ==
+                    vi::Action::Melee &&
+                vp::FindPromptAction("+forward")->action ==
+                    vi::Action::Move &&
+                vp::FindPromptAction("+right")->action ==
+                    vi::Action::Turn,
+            "V71 should map common COD4 prompt commands to semantic VR actions");
+        Check(
+            vp::FindPromptAction("+usereload") == nullptr &&
+                vp::FindPromptAction("+melee_breath") == nullptr &&
+                vp::FindPromptAction("weapprev") == nullptr &&
+                vp::FindPromptAction("totally_unknown") == nullptr,
+            "V71 should leave ambiguous and unknown commands on COD4's keyboard fallback");
+
+        const std::array<std::string_view, 2> touchProfiles = {{
+            "/interaction_profiles/meta/touch_controller_plus",
+            "/interaction_profiles/meta/touch_controller_plus",
+        }};
+
+        std::array<vi::Binding, 2> useBindings = {};
+        Check(
+            vi::ParseBinding(
+                vi::Action::Use,
+                "left.primary",
+                &useBindings[0]) &&
+                vi::ParseBinding(
+                    vi::Action::Use,
+                    "left.trigger",
+                    &useBindings[1]),
+            "V71 prompt fixtures should parse normal primary/alternate bindings");
+        vp::BindingLabels labels = vp::BuildBindingLabels(
+            useBindings,
+            touchProfiles,
+            vp::Backend::OpenXr);
+        Check(
+            labels.count == 2u &&
+                labels.values[0] == "X" &&
+                labels.values[1] == "Left trigger",
+            "V71 should display both actual Touch bindings instead of the PC key");
+
+        std::array<vi::Binding, 2> remappedUse = {};
+        Check(
+            vi::ParseBinding(
+                vi::Action::Use,
+                "right.secondary",
+                &remappedUse[0]),
+            "V71 prompt fixtures should accept a remapped Use action");
+        labels = vp::BuildBindingLabels(
+            remappedUse,
+            touchProfiles,
+            vp::Backend::OpenXr);
+        Check(
+            labels.count == 1u && labels.values[0] == "B",
+            "V71 should read the user's configured VR binding instead of assuming Quest X");
+
+        std::array<vi::Binding, 2> jumpBindings = {};
+        Check(
+            vi::ParseBinding(
+                vi::Action::Jump,
+                "right.primary_axis.up",
+                &jumpBindings[0]) &&
+                vi::ParseBinding(
+                    vi::Action::Jump,
+                    "left.trigger",
+                    &jumpBindings[1]),
+            "V71 prompt fixtures should parse directional Jump alternatives");
+        labels = vp::BuildBindingLabels(
+            jumpBindings,
+            touchProfiles,
+            vp::Backend::OpenXr);
+        Check(
+            labels.count == 2u &&
+                labels.values[0] == "Right stick up" &&
+                labels.values[1] == "Left trigger",
+            "V71 mantle prompts should expose both configured Jump bindings");
+
+        std::array<vi::Binding, 2> moveBindings = {};
+        Check(
+            vi::ParseBinding(
+                vi::Action::Move,
+                "left.primary_axis",
+                &moveBindings[0]),
+            "V71 prompt fixtures should parse the configured movement axis");
+        labels = vp::BuildBindingLabels(
+            moveBindings,
+            touchProfiles,
+            vp::Backend::OpenXr,
+            "+forward");
+        Check(
+            labels.count == 1u &&
+                labels.values[0] == "Left stick up",
+            "V71 should turn keyboard movement prompts into directional VR-axis text");
+
+        std::array<vi::Binding, 2> duplicateBindings = {};
+        Check(
+            vi::ParseBinding(
+                vi::Action::Use,
+                "left.primary",
+                &duplicateBindings[0]) &&
+                vi::ParseBinding(
+                    vi::Action::Use,
+                    "left.primary",
+                    &duplicateBindings[1]),
+            "V71 prompt fixtures should permit intentional duplicate slots");
+        labels = vp::BuildBindingLabels(
+            duplicateBindings,
+            touchProfiles,
+            vp::Backend::OpenXr);
+        Check(
+            labels.count == 1u && labels.values[0] == "X",
+            "V71 should collapse duplicate primary and alternate prompt text");
+
+        Check(
+            vp::SourcePromptLabel(
+                vi::Source::RightPrimary,
+                "/interaction_profiles/valve/index_controller",
+                vp::Backend::OpenXr) == "Right A" &&
+                vp::SourcePromptLabel(
+                    vi::Source::RightPrimary,
+                    "right knuckles [/input/knuckles_profile.json]",
+                    vp::Backend::OpenVr) == "Right grip",
+            "V71 should describe the different OpenXR and legacy OpenVR Index primary routes accurately");
+        Check(
+            vp::SourcePromptLabel(
+                vi::Source::LeftPrimary,
+                "/interaction_profiles/htc/vive_controller",
+                vp::Backend::OpenXr) == "Left trackpad press" &&
+                vp::SourcePromptLabel(
+                    vi::Source::LeftSecondary,
+                    "/interaction_profiles/microsoft/motion_controller",
+                    vp::Backend::OpenXr) == "Left stick click",
+            "V71 should provide profile-aware Vive and Mixed Reality text labels");
+        Check(
+            vp::SourcePromptLabel(
+                vi::Source::LeftPrimary,
+                "/interaction_profiles/hp/mixed_reality_controller",
+                vp::Backend::OpenXr) == "X",
+            "V71 should match the HP profile's Touch-family OpenXR component mapping");
+
+        std::array<vi::Binding, 2> chordBindings = {};
+        Check(
+            vi::ParseBinding(
+                vi::Action::NightVision,
+                "right.thumbrest_touch+left.primary_axis.down",
+                &chordBindings[0]),
+            "V71 prompt fixtures should parse cross-hand input chords");
+        labels = vp::BuildBindingLabels(
+            chordBindings,
+            touchProfiles,
+            vp::Backend::OpenXr);
+        Check(
+            labels.count == 1u &&
+                labels.values[0] ==
+                    "Right thumbrest + Left stick down",
+            "V71 should preserve every term of a configured prompt chord");
+
+        const std::array<std::string_view, 2> unknownProfiles = {{
+            "",
+            "unknown experimental controller",
+        }};
+        labels = vp::BuildBindingLabels(
+            remappedUse,
+            unknownProfiles,
+            vp::Backend::OpenXr);
+        Check(
+            labels.count == 1u &&
+                labels.values[0] == "Right secondary",
+            "V71 should fall back to controller-neutral text when identity is uncertain");
+
+        const std::array<vi::Binding, 2> unboundBindings = {};
+        labels = vp::BuildBindingLabels(
+            unboundBindings,
+            touchProfiles,
+            vp::Backend::OpenXr);
+        Check(
+            labels.count == 0u,
+            "V71 should let unbound VR actions fall back to keyboard labels");
+    }
+
     {
         Check(
             vint::WeaponControllerIndex(vint::DominantHand::Right) == 1u &&
@@ -264,6 +457,57 @@ int main(const int argumentCount, char** arguments)
                 parsed.playMode == requested.playMode &&
                 parsed.targetEyeHeightInches == 67.5f,
             "V60 calibration requests should round-trip through the shared protocol");
+
+        for (const vc::Command command : {
+                 vc::Command::RecenterPosition,
+                 vc::Command::RecenterDirectionLevel,
+                 vc::Command::RecenterFull})
+        {
+            requested.command = command;
+            Check(
+                vc::ParseRequest(
+                    vc::SerializeRequest(requested),
+                    &parsed,
+                    &parseError) &&
+                    parsed.command == command,
+                "V70 separated recenter commands should round-trip without changing meaning");
+        }
+        Check(
+            vc::ParseRequest(
+                "VERSION=1\nREQUEST_ID=legacy-full\nCOMMAND=recenter\n"
+                "PLAY_MODE=standing\nTARGET_EYE_HEIGHT_INCHES=60\n",
+                &parsed,
+                &parseError) &&
+                parsed.command == vc::Command::RecenterFull,
+            "V70 should treat beta.8-beta.10 recenter requests as full recenter requests");
+
+        vc::RecenterMode mode = vc::RecenterMode::Disabled;
+        Check(
+            vc::ParseRecenterMode("position_only", &mode) &&
+                mode == vc::RecenterMode::PositionOnly &&
+                vc::CommandRecenterMode(
+                    vc::Command::RecenterPosition) == mode &&
+                std::string(vc::RecenterModeId(mode)) ==
+                    "position_only",
+            "V70 position-only recenter should have one stable settings/protocol identity");
+        Check(
+            vc::ParseRecenterMode("direction_level_only", &mode) &&
+                mode == vc::RecenterMode::DirectionLevelOnly &&
+                vc::CommandRecenterMode(
+                    vc::Command::RecenterDirectionLevel) == mode,
+            "V70 direction/level-only recenter should preserve the positional origin");
+        Check(
+            vc::ParseRecenterMode("1", &mode) &&
+                mode == vc::RecenterMode::Full &&
+                vc::ParseRecenterMode("0", &mode) &&
+                mode == vc::RecenterMode::Disabled &&
+                vc::CommandRecenterMode(
+                    vc::Command::MeasureStanding) ==
+                    vc::RecenterMode::Disabled &&
+                vc::CommandRecenterMode(
+                    vc::Command::ApplyHeight) ==
+                    vc::RecenterMode::Disabled,
+            "V70 should preserve beta.10 first-gameplay 0/1 profile behavior");
         Check(
             !vc::ParseRequest(
                 "VERSION=1\nREQUEST_ID=bad&id\nCOMMAND=recenter\n"
@@ -509,6 +753,59 @@ int main(const int argumentCount, char** arguments)
                 &hit) &&
                 hit == vh::Element::Subtitles,
             "the visual canvas should select HUD groups by their real bounds");
+
+        Check(
+            vh::CycleElement(vh::Element::AmmoEquipment, -1) ==
+                    vh::Element::Subtitles &&
+                vh::CycleElement(vh::Element::Subtitles, 1) ==
+                    vh::Element::AmmoEquipment &&
+                vh::CycleElement(vh::Element::AmmoEquipment, 1) ==
+                    vh::Element::Compass,
+            "V69 selection cycling should reach every HUD group without hit-testing its rectangle");
+
+        vh::Layout recovery = vh::DefaultLayout();
+        recovery.compassScale = 2.0f;
+        recovery.compassInsetX = 600.0f;
+        recovery.compassInsetY = 440.0f;
+        recovery.notificationOffsetX = 123.0f;
+        vh::ClampLayout(&recovery);
+        const vh::Point unreachableCompass = vh::ElementCenter(
+            recovery,
+            vh::Element::Compass);
+        Check(
+            unreachableCompass.x < 0.0f &&
+                unreachableCompass.y < 0.0f,
+            "the regression fixture should reproduce an off-canvas compass group");
+
+        vh::CenterElement(&recovery, vh::Element::Compass);
+        const vh::Point centeredCompass = vh::ElementCenter(
+            recovery,
+            vh::Element::Compass);
+        Check(
+            NearlyEqual(centeredCompass.x, 320.0f) &&
+                NearlyEqual(centeredCompass.y, 240.0f) &&
+                NearlyEqual(recovery.compassScale, 2.0f) &&
+                NearlyEqual(recovery.notificationOffsetX, 123.0f),
+            "V69 center-selected should recover an off-screen group without changing its scale or another group");
+
+        recovery.compassEnabled = false;
+        vh::ResetElement(&recovery, vh::Element::Compass);
+        const vh::Layout defaults = vh::DefaultLayout();
+        const vh::Point resetCompass = vh::ElementCenter(
+            recovery,
+            vh::Element::Compass);
+        const vh::Point defaultCompass = vh::ElementCenter(
+            defaults,
+            vh::Element::Compass);
+        Check(
+            NearlyEqual(resetCompass.x, defaultCompass.x) &&
+                NearlyEqual(resetCompass.y, defaultCompass.y) &&
+                NearlyEqual(
+                    recovery.compassScale,
+                    defaults.compassScale) &&
+                recovery.compassEnabled &&
+                NearlyEqual(recovery.notificationOffsetX, 123.0f),
+            "V69 reset-selected should restore only the selected group to tested defaults");
 
         vh::Request requested;
         requested.requestId = "hud-test-123";
@@ -945,8 +1242,21 @@ int main(const int argumentCount, char** arguments)
         values["KISAK_VR_PLAY_MODE"] == "standing" &&
             values["KISAK_VR_STANDING_EYE_HEIGHT"] == "60.0" &&
             values["KISAK_VR_SEATED_EYE_HEIGHT"] == "60.0" &&
-            values["KISAK_VR_RECENTER_ON_START"] == "1",
-        "V60 calibration defaults should preserve COD4's native height and recenter at gameplay start");
+            values["KISAK_VR_RECENTER_ON_START"] == "full",
+        "V70 calibration defaults should preserve COD4's native height and make beta.10 full startup recenter behavior explicit");
+
+    const kc::SettingsMap legacyRecenterEnabled =
+        kc::ParseBatchSettings(
+            "set \"KISAK_VR_RECENTER_ON_START=1\"\n");
+    const kc::SettingsMap legacyRecenterDisabled =
+        kc::ParseBatchSettings(
+            "set \"KISAK_VR_RECENTER_ON_START=0\"\n");
+    Check(
+        legacyRecenterEnabled.at("KISAK_VR_RECENTER_ON_START") ==
+                "full" &&
+            legacyRecenterDisabled.at("KISAK_VR_RECENTER_ON_START") ==
+                "off",
+        "V70 should migrate legacy startup recenter toggles without changing behavior");
 
     vi::Binding jumpDefault;
     vi::Binding lowerStanceDefault;
@@ -1001,7 +1311,7 @@ int main(const int argumentCount, char** arguments)
         Check(packaged.values == values, "packaged release defaults should match the configurator catalog");
         Check(
             packaged.profileName == "Tested Quest 3" &&
-                packaged.revision == "beta10-two-hand-proximity-detonator-defaults",
+                packaged.revision == "beta11-hud-recenter-prompts-fng-defaults",
             "packaged defaults should identify their active profile and revision");
         Check(
             packaged.activePath == releaseDefaults,
@@ -1032,7 +1342,7 @@ int main(const int argumentCount, char** arguments)
                 launcher.find("compatibility preflight found a launch blocker") !=
                     std::string::npos &&
                 launcher.find("--validate") != std::string::npos,
-            "the launcher should validate overrides, run beta.10 preflight, and publish every guarded state path");
+            "the launcher should validate overrides, run beta.11 preflight, and publish every guarded state path");
         Check(
             runtime.find("STATUS=RUNTIME_ACCEPTED") != std::string::npos &&
                 runtime.find("RUNTIME_MEASUREMENT_UNITS") !=
@@ -1077,7 +1387,23 @@ int main(const int argumentCount, char** arguments)
                     std::string::npos &&
                 runtime.find("RUNTIME_CALIBRATION_DISPLAY_UNITS") !=
                     std::string::npos &&
+                runtime.find("RUNTIME_CALIBRATION_RECENTER_MODE") !=
+                    std::string::npos &&
+                runtime.find("RUNTIME_RECENTER_ON_START_MODE") !=
+                    std::string::npos &&
+                runtime.find("VR_RecenterHeadPosition") !=
+                    std::string::npos &&
+                runtime.find("VR_RecenterHeadDirectionLevel") !=
+                    std::string::npos &&
                 runtime.find("VR_RecenterHeadPose") !=
+                    std::string::npos &&
+                runtime.find("g_vrHeadPositionBodyYawDegrees") !=
+                    std::string::npos &&
+                runtime.find("Full recenter clears both histories") !=
+                    std::string::npos &&
+                runtime.find("VR_RecenterAtFirstGameplayCamera") !=
+                    std::string::npos &&
+                runtime.find("[VR][CALIBRATION][RECENTER]") !=
                     std::string::npos &&
                 runtime.find("XR_REFERENCE_SPACE_TYPE_STAGE") !=
                     std::string::npos &&
@@ -1146,6 +1472,21 @@ int main(const int argumentCount, char** arguments)
                 heightCommit != std::string::npos &&
                 lostPoseStatus < heightCommit,
             "a failed tracked-pose recenter must be rejected before live height is committed");
+        Check(
+            runtime.find("const bool needsPosition") !=
+                    std::string::npos &&
+                runtime.find("const bool needsDirectionLevel") !=
+                    std::string::npos &&
+                runtime.find(
+                    "mode == VrCalibration::RecenterMode::PositionOnly") !=
+                    std::string::npos &&
+                runtime.find(
+                    "mode == VrCalibration::RecenterMode::DirectionLevelOnly") !=
+                    std::string::npos &&
+                runtime.find(
+                    "VR_RecenterHeadForMode(recenterMode)") !=
+                    std::string::npos,
+            "issue #29 V70 must route OpenXR and OpenVR through one component-selective recenter transaction");
 
         const std::filesystem::path runtimePath = arguments[3];
         const std::filesystem::path root =
@@ -1160,12 +1501,217 @@ int main(const int argumentCount, char** arguments)
             root / "src/cgame/cg_draw.cpp");
         const std::string cgameMain = Read(
             root / "src/cgame/cg_main.cpp");
+        const std::string cgameView = Read(
+            root / "src/cgame/cg_view.cpp");
+        Check(
+            cgameView.find("VR_RecenterAtFirstGameplayCamera()") !=
+                    std::string::npos &&
+                cgameView.find(
+                    "VR_GetFirstGameplayRecenterModeName()") !=
+                    std::string::npos,
+            "V70 first-gameplay capture should execute and report the explicit selected recenter mode");
         const std::string debugDraw = Read(
             root / "src/cgame/cg_draw_debug.cpp");
         const std::string weapons = Read(
             root / "src/cgame/cg_weapons.cpp");
         const std::string clientInput = Read(
             root / "src/client/cl_input.cpp");
+        const std::string clientScreen = Read(
+            root / "src/client/cl_scrn.cpp");
+        const std::string promptLabels = Read(
+            root / "src/vr/vr_prompt_labels.cpp");
+        const std::string uiExpressions = Read(
+            root / "src/ui/ui_expressions.cpp");
+        const std::string gameScript = Read(
+            root / "src/game/g_scr_main.cpp");
+        const std::string gameClientScript = Read(
+            root / "src/game/g_client_script_cmd.cpp");
+        const std::string qcommonCommandHeader = Read(
+            root / "src/qcommon/cmd.h");
+        const std::string qcommonCommands = Read(
+            root / "src/qcommon/cmd.cpp");
+        const std::string runtimeHeader = Read(
+            root / "src/vr/vr_openxr.h");
+        const std::string configuratorBuild = Read(
+            root / "tools/configurator/CMakeLists.txt");
+        Check(
+            runtime.find(
+                "int VR_GetPromptBindingLabels(") !=
+                    std::string::npos &&
+                runtime.find(
+                    "VrPrompts::BuildBindingLabels(") !=
+                    std::string::npos &&
+                runtime.find("[VR][PROMPTS] V71") !=
+                    std::string::npos &&
+                promptLabels.find(
+                    "{\"+activate\", VrInput::Action::Use}") !=
+                    std::string::npos &&
+                promptLabels.find(
+                    "{\"+reload\", VrInput::Action::Reload}") !=
+                    std::string::npos &&
+                promptLabels.find(
+                    "{\"+gostand\", VrInput::Action::Jump}") !=
+                    std::string::npos &&
+                promptLabels.find(
+                    "{\"+melee\", VrInput::Action::Melee}") !=
+                    std::string::npos &&
+                uiExpressions.find(
+                    "VR_GetPromptBindingLabels(command, bindings)") !=
+                    std::string::npos &&
+                uiExpressions.find(
+                    "bindCount = CL_GetKeyBinding(localClientNum, command, bindings)") !=
+                    std::string::npos &&
+                gameScript.find(
+                    "bindCount = VR_GetPromptBindingLabels(command, bindings)") !=
+                    std::string::npos &&
+                gameScript.find(
+                    "bindCount = CL_GetKeyBinding(0, command, bindings)") !=
+                    std::string::npos,
+            "V71 must route both HUD and script prompt lookups through configured VR labels while preserving keyboard fallback");
+        Check(
+            CountOccurrences(
+                configuratorBuild,
+                "../../src/vr/vr_prompt_labels.cpp") == 2u &&
+                CountOccurrences(
+                    configuratorBuild,
+                    "../../src/vr/vr_prompt_labels.h") == 2u,
+            "V71 must link the prompt resolver into both the configurator and its settings-test target");
+        Check(
+            runtime.find(
+                "bool VR_GetCampaignAdsHeld(") !=
+                    std::string::npos &&
+                runtime.find(
+                    "g_vrPoseFocusAimHeld;") !=
+                    std::string::npos &&
+                gameClientScript.find(
+                    "KISAK_SP_VR_FNG_CAMPAIGN_INPUT_BRIDGE_V72") !=
+                    std::string::npos &&
+                gameClientScript.find(
+                    "VR_GetCampaignAdsHeld(&vrAdsHeld)") !=
+                    std::string::npos &&
+                gameClientScript.find(
+                    "scriptAdsFraction <= 0.5f") !=
+                    std::string::npos &&
+                gameClientScript.find(
+                    "scriptAdsFraction = 1.0f") !=
+                    std::string::npos &&
+                clientInput.find(
+                    "KISAK_SP_VR_FNG_CAMPAIGN_INPUT_BRIDGE_V72") !=
+                    std::string::npos &&
+                clientInput.find(
+                    "KISAK_SP_VR_FNG_NATIVE_ADS_COMMAND_BRIDGE_V73") !=
+                    std::string::npos &&
+                clientInput.find(
+                    "vrAdsNativeCommandHeld") !=
+                    std::string::npos &&
+                clientInput.find(
+                    "+speed 253 0") !=
+                    std::string::npos &&
+                clientInput.find(
+                    "-speed 253 0") !=
+                    std::string::npos &&
+                clientInput.find(
+                    "[VR][CAMPAIGN] V73 native +speed DOWN") !=
+                    std::string::npos &&
+                clientInput.find(
+                    "vrSprintNativeCommandHeld") !=
+                    std::string::npos &&
+                clientInput.find(
+                    "+sprint 254 0") !=
+                    std::string::npos &&
+                clientInput.find(
+                    "-sprint 254 0") !=
+                    std::string::npos &&
+                clientInput.find(
+                    "!Key_IsCatcherActive(0, 0x33)") !=
+                    std::string::npos &&
+                clientInput.find(
+                    "[VR][CAMPAIGN] V72") !=
+                    std::string::npos,
+            "V73 must mirror physical/configured ADS and Sprint through their native held command paths while retaining the V72 playerADS bridge");
+        const std::size_t acceptedVrShot =
+            clientInput.find("if (!vrMuzzleBlocked)");
+        const std::size_t virtualAttackNotify =
+            clientInput.find(
+                "Cmd_NotifyVirtualCommand(\"+attack\")");
+        Check(
+            qcommonCommandHeader.find(
+                "int Cmd_NotifyVirtualCommand(") !=
+                    std::string::npos &&
+                qcommonCommands.find(
+                    "int Cmd_NotifyVirtualCommand(") !=
+                    std::string::npos &&
+                qcommonCommands.find(
+                    "G_AddCommandNotify(cmd_notify[i].notify)") !=
+                    std::string::npos &&
+                qcommonCommands.find(
+                    "return matchedNotifications;") !=
+                    std::string::npos &&
+                qcommonCommands.find(
+                    "Cmd_NotifyVirtualCommand(Cmd_Argv(0))") !=
+                    std::string::npos &&
+                clientInput.find(
+                    "KISAK_SP_VR_FNG_SCRIPT_ACTION_NOTIFY_BRIDGE_V74") !=
+                    std::string::npos &&
+                acceptedVrShot != std::string::npos &&
+                virtualAttackNotify != std::string::npos &&
+                acceptedVrShot < virtualAttackNotify &&
+                clientInput.find(
+                    "!kb[KEY_ATTACK].active") !=
+                    std::string::npos &&
+                clientInput.find(
+                    "[VR][CAMPAIGN] V74 VR +attack notification") !=
+                    std::string::npos,
+            "V74 must release F.N.G.'s blocking pc_hip_attack keyHint through the registered +attack script-notify path without mutating mouse kbutton state or bypassing muzzle acceptance");
+        Check(
+            runtimeHeader.find(
+                "bool VR_IsCenteredMonoscopicMenuActive();") !=
+                    std::string::npos &&
+                runtime.find(
+                    "bool VR_IsCenteredMonoscopicMenuActive()") !=
+                    std::string::npos &&
+                runtime.find(
+                    "KISAK_SP_VR_FNG_DIFFICULTY_MODAL_V75") !=
+                    std::string::npos &&
+                runtime.find("\"select_difficulty\"") !=
+                    std::string::npos &&
+                runtime.find("\"diff_con_easy\"") !=
+                    std::string::npos &&
+                runtime.find("\"diff_con_regular\"") !=
+                    std::string::npos &&
+                runtime.find("\"diff_con_hardened\"") !=
+                    std::string::npos &&
+                runtime.find("\"diff_con_veteran\"") !=
+                    std::string::npos &&
+                clientScreen.find(
+                    "!VR_IsCenteredMonoscopicMenuActive()") !=
+                    std::string::npos &&
+                runtime.find(
+                    "g_vrCenteredModalBlitVertexBuffer") !=
+                    std::string::npos &&
+                CountOccurrences(
+                    runtime,
+                    "VR_IsCenteredMonoscopicMenuActive();") == 3u,
+            "V75 must classify F.N.G.'s recommendation and confirmation menus as one-pass centered modals in the stereo command-list, OpenXR, and OpenVR paths");
+        Check(
+            runtime.find(
+                "const bool centeredModalMenu") !=
+                    std::string::npos &&
+                runtime.find(
+                    "const bool rightEyeGameplayMenu") !=
+                    std::string::npos &&
+                runtime.find("!centeredModalMenu;") !=
+                    std::string::npos &&
+                runtime.find(
+                    "const bool cursorCoordinateModeChanged") !=
+                    std::string::npos &&
+                runtime.find(
+                    "rightEyeMenuWasActive") !=
+                    std::string::npos &&
+                runtime.find(
+                    "V75 centered modal cursor uses the full") !=
+                    std::string::npos,
+            "V75 centered modals must use full-canvas hit testing and reset the VR cursor when transitioning from the right-eye pause coordinate space");
         const std::size_t rawAttackGetter =
             runtime.find(
                 "bool VR_GetConfiguredAttackButton(");
@@ -1226,7 +1772,31 @@ int main(const int argumentCount, char** arguments)
                 draw.find("VR_DrawHudEditorOverlay") !=
                     std::string::npos &&
                 draw.find("CANCEL (B)") != std::string::npos &&
-                draw.find("SAVE (A)") != std::string::npos,
+                draw.find("SAVE (A)") != std::string::npos &&
+                runtime.find(
+                    "KISAK_SP_VR_HUD_EDITOR_RECOVERY_V69") !=
+                    std::string::npos &&
+                runtime.find("VrInput::Action::Use") !=
+                    std::string::npos &&
+                runtime.find("VrInput::Action::NextWeapon") !=
+                    std::string::npos &&
+                runtime.find("VrHud::CycleElement") !=
+                    std::string::npos &&
+                runtime.find("VrHud::CenterElement") !=
+                    std::string::npos &&
+                runtime.find("VrHud::ResetElement") !=
+                    std::string::npos &&
+                runtime.find("GetAsyncKeyState(VK_TAB)") !=
+                    std::string::npos &&
+                runtime.find("GetAsyncKeyState(VK_HOME)") !=
+                    std::string::npos &&
+                runtime.find("GetAsyncKeyState(VK_END)") !=
+                    std::string::npos &&
+                draw.find("SELECTED HUD GROUP") !=
+                    std::string::npos &&
+                draw.find("Home centers") != std::string::npos &&
+                draw.find("End resets selected only") !=
+                    std::string::npos,
             "all five visual boxes should drive the corresponding live mission HUD paths");
         Check(
             cgameMain.find(
@@ -1256,7 +1826,7 @@ int main(const int argumentCount, char** arguments)
         Check(
             configurator.find("Setup & Compatibility") !=
                     std::string::npos &&
-                configurator.find("v0.10.0-beta.10") !=
+                configurator.find("v0.10.0-beta.11") !=
                     std::string::npos &&
                 configurator.find("Rescan system") !=
                     std::string::npos &&
@@ -1269,12 +1839,23 @@ int main(const int argumentCount, char** arguments)
                 configurator.find("Handedness, units, comfort, controls, HUD, weapon profiles, and calibration will not change") !=
                     std::string::npos &&
                 configurator.find("Height & Recenter") != std::string::npos &&
-                configurator.find("Beta.10 two-hand, proximity, and detonator fixes") !=
+                configurator.find("Beta.11 HUD recovery") !=
                     std::string::npos &&
-                configurator.find("Recenter now") != std::string::npos &&
+                configurator.find("recenter, VR prompts, and F.N.G. repair") !=
+                    std::string::npos &&
+                configurator.find("Recenter position only") !=
+                    std::string::npos &&
+                configurator.find("Recenter direction / level only") !=
+                    std::string::npos &&
+                configurator.find("Full recenter") !=
+                    std::string::npos &&
                 configurator.find("Measure standing height") !=
                     std::string::npos &&
-                configurator.find("Apply seated calibration") !=
+                configurator.find("Apply seated + recenter position") !=
+                    std::string::npos &&
+                configurator.find("direction and level were preserved") !=
+                    std::string::npos &&
+                configurator.find("the positional origin was preserved") !=
                     std::string::npos &&
                 configurator.find("1 cm shorter") != std::string::npos &&
                 configurator.find("1 cm taller") != std::string::npos &&
@@ -1292,6 +1873,12 @@ int main(const int argumentCount, char** arguments)
                     std::string::npos &&
                 configurator.find("Apply layout") !=
                     std::string::npos &&
+                configurator.find("Center selected element") !=
+                    std::string::npos &&
+                configurator.find("Previous") !=
+                    std::string::npos &&
+                configurator.find("Next") !=
+                    std::string::npos &&
                 configurator.find("Snap anchors: ON") !=
                     std::string::npos &&
                 configurator.find("Open calibration editor") !=
@@ -1306,7 +1893,7 @@ int main(const int argumentCount, char** arguments)
                     std::string::npos &&
                 configurator.find("*.vrstock") !=
                     std::string::npos,
-            "the beta.10 menu should retain compatibility, handed interactions, weapon/gunstock, metric, calibration, and both visual HUD workflows");
+            "the beta.11 menu should retain compatibility, handed interactions, weapon/gunstock, metric, calibration, and both visual HUD workflows");
     }
 
     const std::string mixed =
@@ -1821,9 +2408,9 @@ int main(const int argumentCount, char** arguments)
     Check(saved.backupPath.empty(), "first save should not create a backup");
     Check(Read(userFile).find("\r\n") != std::string::npos, "saved batch file should use CRLF");
     Check(
-        Read(userFile).find("generated by beta.10 Configurator (Unified Setup/Compatibility)") !=
+        Read(userFile).find("generated by beta.11 Configurator (Unified Setup/Compatibility)") !=
             std::string::npos,
-        "saved settings should identify the beta.10 unified-compatibility schema");
+        "saved settings should identify the beta.11 unified-compatibility schema");
     Check(
         Read(userFile).find("KISAK_VR_SETTINGS_REVISION=" + saved.revision) !=
             std::string::npos,

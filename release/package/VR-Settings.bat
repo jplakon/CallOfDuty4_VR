@@ -1,12 +1,12 @@
 @echo off
-rem KisakCOD VR beta.10 defaults (setup, calibration, and interactions).
+rem KisakCOD VR beta.11 defaults (setup, calibration, and interactions).
 rem Do not put personal changes here: KisakCOD-VR-Configurator.exe writes a
 rem separate VR-User-Settings.bat under LocalAppData so upgrades preserve them.
 rem Profile: Tested Quest 3
-rem Revision: beta10-two-hand-proximity-detonator-defaults
+rem Revision: beta11-hud-recenter-prompts-fng-defaults
 
 set "KISAK_VR_SETTINGS_PROFILE=Tested Quest 3"
-set "KISAK_VR_SETTINGS_REVISION=beta10-two-hand-proximity-detonator-defaults"
+set "KISAK_VR_SETTINGS_REVISION=beta11-hud-recenter-prompts-fng-defaults"
 
 rem Runtime backend: auto, openxr, or the experimental openvr fallback.
 set "KISAK_VR_BACKEND=auto"
@@ -35,11 +35,12 @@ set "KISAK_VR_MOVEMENT_DIRECTION=head"
 set "KISAK_VR_MOVEMENT_DEADZONE=0.18"
 
 rem Guided recenter and player-height calibration. COD4's native standing
-rem camera is 60 game inches; both defaults therefore preserve beta.7 scale.
+rem camera is 60 game inches. The explicit Full startup mode preserves the
+rem beta.10 behavior; choose off, position_only, direction_level_only, or full.
 set "KISAK_VR_PLAY_MODE=standing"
 set "KISAK_VR_STANDING_EYE_HEIGHT=60.0"
 set "KISAK_VR_SEATED_EYE_HEIGHT=60.0"
-set "KISAK_VR_RECENTER_ON_START=1"
+set "KISAK_VR_RECENTER_ON_START=full"
 
 rem HUD, compass, and mission text placement.
 set "KISAK_VR_HUD_SAFE_X=0.50"

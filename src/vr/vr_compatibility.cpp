@@ -400,7 +400,7 @@ std::string SerializeReport(
     const std::string& generatedAt)
 {
     std::ostringstream output;
-    output << "KisakCOD VR beta.10 unified setup and compatibility report\r\n";
+    output << "KisakCOD VR beta.11 unified setup and compatibility report\r\n";
     output << "STATUS=" << StatusId(report.status) << "\r\n";
     output << "READY_FOR_LAUNCH=" << (report.readyForLaunch ? 1 : 0) << "\r\n";
     output << "HEADSET_TEST_REQUIRED=" << (report.headsetTestRequired ? 1 : 0) << "\r\n";

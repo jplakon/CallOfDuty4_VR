@@ -1402,25 +1402,38 @@ void Cmd_RegisterNotification(const char *commandString, const char *notifyStrin
     ++cmd_notifyCount;
 }
 
-void Cmd_CheckNotify()
+int Cmd_NotifyVirtualCommand(const char *commandString)
 {
     iassert(Sys_IsMainThread());
 
+    if (!commandString || !*commandString)
+        return 0;
     if (cmd_notifyCount == 0)
-        return;
+        return 0;
     if (cl_paused->current.integer)
-        return;
+        return 0;
 
-    uint32_t commandID = SL_FindLowercaseString(Cmd_Argv(0));
+    uint32_t commandID = SL_FindLowercaseString(commandString);
 
     if (!commandID)
-        return;
+        return 0;
 
+    int matchedNotifications = 0;
     for (int i = 0; i < cmd_notifyCount; ++i)
     {
         if (cmd_notify[i].command == commandID)
+        {
             G_AddCommandNotify(cmd_notify[i].notify);
+            ++matchedNotifications;
+        }
     }
+
+    return matchedNotifications;
+}
+
+void Cmd_CheckNotify()
+{
+    Cmd_NotifyVirtualCommand(Cmd_Argv(0));
 }
 
 void Cmd_LoadNotifications(MemoryFile *memFile)

@@ -42,6 +42,34 @@ same action. **Lower stance** remains right primary axis down. The Turn
 action consumes horizontally dominant motion, so these default vertical
 gestures do not also turn.
 
+## Dynamic VR prompt labels
+
+While VR gameplay is active, COD4's normal key prompts use the saved Controller
+Input V4 bindings instead of displaying PC keys such as F, R, Space, Shift, or
+Ctrl. The resolver reads the actual primary and alternate slots, including
+remaps and chords. With the tested Quest defaults, examples include X for Use,
+A for Reload, Right stick up or Left trigger for Jump/mantle, L3 for Sprint, B
+for Stance, Right stick down for Lower stance, and R3 for Melee.
+
+Button names come from the active controller profile for each hand. Touch
+profiles use X/Y/A/B; other known profiles use their real mapped component
+names. If a controller identity is uncertain, the prompt uses safe text such as
+**Left primary** rather than guessing a glyph. Movement and turn tutorials add
+the requested direction to the configured stick or trackpad label.
+
+Full-screen COD4 keyboard menus still show keyboard bindings. If VR is not
+initialized, a command has no unambiguous VR equivalent, or its semantic VR
+action is unbound, the original keyboard label is preserved. Beta.11 uses text
+labels; controller artwork is a separate future phase.
+
+F.N.G.'s scripted training gates receive the same command semantics as the
+equivalent PC controls. A VR shot that passes the physical-muzzle check
+notifies registered `+attack` script listeners without changing mouse state;
+entering physical/configured VR ADS mirrors a held `+speed` command; and the
+configured Sprint action mirrors `+sprint`. The held bridges use private
+synthetic key identifiers, so real mouse and keyboard buttons remain
+independent.
+
 ## Remapping in the configurator
 
 Open the **Controls** page in `KisakCOD-VR-Configurator.exe`, select an action,
@@ -72,6 +100,44 @@ remains:
 | Down | Night vision |
 | Left | Airstrike / mission slot 6 |
 | Right | C4 / mission slot 7 |
+
+## Live HUD editor recovery controls
+
+While **Edit live in headset** is active, gameplay input is suppressed and a
+fixed banner names the selected HUD group. These context-specific controls do
+not change the saved controller bindings:
+
+| Editor action | Controller action | Quest default | Keyboard |
+|---|---|---|---|
+| Previous HUD group | Use / interact | X | Shift+Tab |
+| Next HUD group | Next weapon | Y | Tab |
+| Center selected group | Sprint | Left-stick click | Home |
+| Reset selected group only | Melee | Right-stick click | End |
+
+Centering preserves the selected group's current scale. Resetting restores
+only its tested position and scale (and re-enables the compass when it is the
+selected group). A / Menu confirm saves the complete edited layout; B / Menu
+back cancels and restores the complete layout that was present when the editor
+opened.
+
+## Separated recenter controls
+
+Open **Height & Recenter** while COD4 is running in a mission:
+
+| Action | Changes | Preserves |
+|---|---|---|
+| Recenter position only | Physical translation origin | Direction and level |
+| Recenter direction / level only | Forward and level orientation baseline | Positional origin |
+| Full recenter | Both components | — |
+
+The **First-gameplay recenter** setting exposes the same four explicit choices:
+Off, Position only, Direction / level only, and Full. Full remains the default
+so the legacy combined behavior is preserved. Old profiles containing `0` or `1`
+are migrated to Off or Full when the configurator loads them.
+
+**Measure standing height** changes height only and leaves both recenter
+components alone. **Apply seated + recenter position** changes posture/height
+and recenters translation without changing the direction/level baseline.
 
 ## Per-weapon and gunstock calibration
 

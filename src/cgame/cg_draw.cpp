@@ -1157,6 +1157,7 @@ void VR_DrawHudEditorOverlay(const int localClientNum)
     const float muted[4] = {0.76f, 0.82f, 0.90f, 0.95f};
     const float saveColor[4] = {0.10f, 0.62f, 0.35f, 0.92f};
     const float cancelColor[4] = {0.58f, 0.18f, 0.20f, 0.92f};
+    const float controlBackdrop[4] = {0.01f, 0.02f, 0.04f, 0.78f};
     const float elementColors[kisak::vr::hud::kElementCount][4] = {
         {0.18f, 0.72f, 0.42f, 0.62f},
         {0.90f, 0.58f, 0.15f, 0.62f},
@@ -1254,6 +1255,43 @@ void VR_DrawHudEditorOverlay(const int localClientNum)
             3);
     }
 
+    // KISAK_SP_VR_HUD_EDITOR_RECOVERY_V69
+    // Keep the selected group name on-screen even when its editable rectangle
+    // is covered or entirely outside the 640x480 canvas.
+    UI_FillRect(
+        placement,
+        12.0f,
+        12.0f,
+        340.0f,
+        48.0f,
+        0,
+        0,
+        controlBackdrop);
+    UI_DrawText(
+        placement,
+        "SELECTED HUD GROUP",
+        0x7FFFFFFF,
+        font,
+        22.0f,
+        31.0f,
+        0,
+        0,
+        0.17f,
+        muted,
+        3);
+    UI_DrawText(
+        placement,
+        kisak::vr::hud::ElementLabel(editor.selected),
+        0x7FFFFFFF,
+        font,
+        22.0f,
+        53.0f,
+        0,
+        0,
+        0.24f,
+        selectedColor,
+        3);
+
     UI_FillRect(placement, 366.0f, 18.0f, 124.0f, 40.0f, 0, 0, cancelColor);
     UI_FillRect(placement, 500.0f, 18.0f, 124.0f, 40.0f, 0, 0, saveColor);
     UI_DrawText(
@@ -1297,18 +1335,51 @@ void VR_DrawHudEditorOverlay(const int localClientNum)
         muted,
         3);
 
+    UI_FillRect(
+        placement,
+        12.0f,
+        414.0f,
+        616.0f,
+        62.0f,
+        0,
+        0,
+        controlBackdrop);
     UI_DrawText(
         placement,
-        editor.snapEnabled
-            ? "Point + hold trigger: drag   Right stick up/down: resize   Hold left grip: free move"
-            : "FREE MOVE (left grip held)   Release grip to restore snap anchors",
+        "Use / Next weapon (Quest X/Y): previous / next   Sprint / Melee (L3/R3): center / reset",
         0x7FFFFFFF,
         font,
         22.0f,
-        470.0f,
+        433.0f,
         0,
         0,
-        0.20f,
+        0.17f,
+        white,
+        3);
+    UI_DrawText(
+        placement,
+        "Keyboard: Shift+Tab / Tab selects   Home centers   End resets selected only",
+        0x7FFFFFFF,
+        font,
+        22.0f,
+        452.0f,
+        0,
+        0,
+        0.17f,
+        muted,
+        3);
+    UI_DrawText(
+        placement,
+        editor.snapEnabled
+            ? "Trigger: drag   Right stick: resize   Hold left grip: free move   A: save   B: cancel"
+            : "FREE MOVE (left grip held)   Release grip to restore snap anchors   A: save   B: cancel",
+        0x7FFFFFFF,
+        font,
+        22.0f,
+        471.0f,
+        0,
+        0,
+        0.17f,
         muted,
         3);
 

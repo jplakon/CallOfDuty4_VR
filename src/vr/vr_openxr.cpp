@@ -5,6 +5,7 @@
 #include "vr/vr_interactions.h"
 #include "vr/vr_openvr_input.h"
 #include "vr/vr_openxr_profiles.h"
+#include "vr/vr_prompt_labels.h"
 #include "vr/vr_weapon_calibration.h"
 #include "vr/vr_weapon_profiles.h"
 #include "client/client.h"
@@ -53,6 +54,7 @@ namespace VrInput = kisak::vr::input;
 namespace VrCalibration = kisak::vr::calibration;
 namespace VrHud = kisak::vr::hud;
 namespace VrInteractions = kisak::vr::interactions;
+namespace VrPrompts = kisak::vr::prompts;
 namespace VrWeaponProfiles = kisak::vr::weapon_profiles;
 
 constexpr XrViewConfigurationType kViewConfiguration =
@@ -455,7 +457,7 @@ ComPtr<ID3D11Buffer> g_vrPauseMenuBlitVertexBuffer;
 // V45 paints the nested confirmation once across the complete main stereo
 // canvas. A centered, one-eye-wide crop contains that single shared dialog
 // without also squeezing both gameplay eyes into each headset eye.
-ComPtr<ID3D11Buffer> g_vrQuitConfirmationBlitVertexBuffer;
+ComPtr<ID3D11Buffer> g_vrCenteredModalBlitVertexBuffer;
 
 ComPtr<ID3D11SamplerState> g_vrBlitSampler;
 bool g_vrLoggedMenuComfortScreen = false;
@@ -626,6 +628,17 @@ bool g_vrHudEditorTriggerWasHeld = false;
 bool g_vrHudEditorConfirmWasHeld = false;
 bool g_vrHudEditorBackWasHeld = false;
 bool g_vrHudEditorScaleArmed = true;
+// KISAK_SP_VR_HUD_EDITOR_RECOVERY_V69
+// These semantic actions retain user remapping and work through both the
+// OpenXR and OpenVR adapters. Keyboard latches provide the same recovery
+// operations when a controller binding is unavailable.
+bool g_vrHudEditorPreviousWasHeld = false;
+bool g_vrHudEditorNextWasHeld = false;
+bool g_vrHudEditorCenterWasHeld = false;
+bool g_vrHudEditorResetWasHeld = false;
+bool g_vrHudEditorKeyboardTabWasHeld = false;
+bool g_vrHudEditorKeyboardCenterWasHeld = false;
+bool g_vrHudEditorKeyboardResetWasHeld = false;
 VrHud::Point g_vrHudEditorPointer = {};
 VrHud::Element g_vrHudEditorSelected =
     VrHud::Element::AmmoEquipment;
@@ -697,6 +710,12 @@ bool g_vrLoggedFirstCameraApply = false;
 // body yaw. Future HMD publications remove this amount from the
 // camera-local pose so body alignment does not rotate the visible view.
 float g_vrTransferredBodyYawDegrees = 0.0f;
+
+// Translation needs its own yaw history. A direction/level-only recenter
+// clears the rotational baseline, but preserving this value keeps the
+// existing room-scale offset in the same world position after body-yaw
+// transfer. Full recenter clears both histories for beta.10 compatibility.
+float g_vrHeadPositionBodyYawDegrees = 0.0f;
 
 float g_vrLeftThumbstick[2] = {};
 bool g_vrLeftThumbstickValid = false;
@@ -798,7 +817,8 @@ struct VrConfiguratorSettings
         VrCalibration::kNativeStandingEyeHeightInches;
     float seatedEyeHeightInches =
         VrCalibration::kNativeStandingEyeHeightInches;
-    bool recenterOnStart = true;
+    VrCalibration::RecenterMode firstGameplayRecenterMode =
+        VrCalibration::RecenterMode::Full;
 
     VrHud::Layout hudLayout = {};
 
@@ -906,6 +926,44 @@ bool VR_ReadConfiguratorToggle(
     return defaultValue;
 }
 
+VrCalibration::RecenterMode VR_ReadFirstGameplayRecenterMode()
+{
+    const char* const requestedValue =
+        std::getenv("KISAK_VR_RECENTER_ON_START");
+    if (requestedValue == nullptr || requestedValue[0] == '\0')
+    {
+        return VrCalibration::RecenterMode::Full;
+    }
+
+    if (_stricmp(requestedValue, "off") == 0 ||
+        std::strcmp(requestedValue, "0") == 0)
+    {
+        return VrCalibration::RecenterMode::Disabled;
+    }
+    if (_stricmp(requestedValue, "position_only") == 0)
+    {
+        return VrCalibration::RecenterMode::PositionOnly;
+    }
+    if (_stricmp(requestedValue, "direction_level_only") == 0)
+    {
+        return VrCalibration::RecenterMode::DirectionLevelOnly;
+    }
+    if (_stricmp(requestedValue, "full") == 0 ||
+        std::strcmp(requestedValue, "1") == 0)
+    {
+        return VrCalibration::RecenterMode::Full;
+    }
+
+    Com_PrintWarning(
+        0,
+        "[VR][CALIBRATION] Ignoring invalid "
+        "KISAK_VR_RECENTER_ON_START='%s'; using full. "
+        "Valid values are off, position_only, "
+        "direction_level_only, and full.\n",
+        requestedValue);
+    return VrCalibration::RecenterMode::Full;
+}
+
 void VR_WriteConfiguratorRuntimeReceipt(
     const VrConfiguratorSettings& loaded)
 {
@@ -960,6 +1018,7 @@ void VR_WriteConfiguratorRuntimeReceipt(
         "RUNTIME_ACTIVE_EYE_HEIGHT=%.1f\r\n"
         "RUNTIME_ACTIVE_EYE_HEIGHT_DISPLAY=%.1f %s\r\n"
         "RUNTIME_RECENTER_ON_START=%d\r\n"
+        "RUNTIME_RECENTER_ON_START_MODE=%s\r\n"
         "RUNTIME_HUD_AMMO=%.0f %.0f %.2f\r\n"
         "RUNTIME_HUD_COMPASS=%.0f %.0f %.2f\r\n"
         "RUNTIME_HUD_NOTIFICATIONS=%.0f %.0f %.2f\r\n"
@@ -986,7 +1045,12 @@ void VR_WriteConfiguratorRuntimeReceipt(
         activeEyeHeight,
         VR_DisplayInches(activeEyeHeight, loaded.measurementUnits),
         VR_DisplayLengthUnit(loaded.measurementUnits),
-        loaded.recenterOnStart ? 1 : 0,
+        loaded.firstGameplayRecenterMode !=
+                VrCalibration::RecenterMode::Disabled
+            ? 1
+            : 0,
+        VrCalibration::RecenterModeId(
+            loaded.firstGameplayRecenterMode),
         loaded.hudLayout.ammoOffsetX,
         loaded.hudLayout.ammoOffsetY,
         loaded.hudLayout.ammoScale,
@@ -1287,10 +1351,8 @@ const VrConfiguratorSettings& VR_GetConfiguratorSettings()
                 VrCalibration::kNativeStandingEyeHeightInches,
                 VrCalibration::kMinimumEyeHeightInches,
                 VrCalibration::kMaximumEyeHeightInches);
-        loaded.recenterOnStart =
-            VR_ReadConfiguratorToggle(
-                "KISAK_VR_RECENTER_ON_START",
-                true);
+        loaded.firstGameplayRecenterMode =
+            VR_ReadFirstGameplayRecenterMode();
 
         loaded.hudLayout.safeX =
             VR_ReadConfiguratorFloat(
@@ -1623,7 +1685,7 @@ const VrConfiguratorSettings& VR_GetConfiguratorSettings()
 
         Com_Printf(
             0,
-            "[VR][CONFIG] beta.10 customization loaded: snap %.0f, turn "
+            "[VR][CONFIG] beta.11 customization loaded: snap %.0f, turn "
             "deadzone %.2f, movement deadzone %.2f, two-hand %.2f; "
             "belt forward %.1f, height %.1f, hip %.1f +/- %.1f %s.\n",
             loaded.snapTurnAngleDegrees,
@@ -1704,14 +1766,15 @@ const VrConfiguratorSettings& VR_GetConfiguratorSettings()
 
         Com_Printf(
             0,
-            "[VR][CALIBRATION] beta.10 posture %s; target eye height %.1f "
+            "[VR][CALIBRATION] V70 posture %s; target eye height %.1f "
             "%s; first-gameplay recenter %s.\n",
             VrCalibration::PlayModeId(loaded.playMode),
             VR_DisplayInches(
                 activeEyeHeight,
                 loaded.measurementUnits),
             VR_DisplayLengthUnit(loaded.measurementUnits),
-            loaded.recenterOnStart ? "enabled" : "disabled");
+            VrCalibration::RecenterModeId(
+                loaded.firstGameplayRecenterMode));
 
         Com_Printf(
             0,
@@ -1884,6 +1947,13 @@ void VR_FinishHudEditor(const bool save)
         g_vrHudEditorActive = false;
         g_vrHudEditorDragging = false;
         g_vrHudEditorPointerValid = false;
+        g_vrHudEditorPreviousWasHeld = false;
+        g_vrHudEditorNextWasHeld = false;
+        g_vrHudEditorCenterWasHeld = false;
+        g_vrHudEditorResetWasHeld = false;
+        g_vrHudEditorKeyboardTabWasHeld = false;
+        g_vrHudEditorKeyboardCenterWasHeld = false;
+        g_vrHudEditorKeyboardResetWasHeld = false;
         ++g_vrHudLayoutRevision;
     }
 
@@ -4495,28 +4565,28 @@ float4 PSScope(PixelInput input) : SV_TARGET
         return false;
     }
 
-    static const VrBlitVertex quitConfirmationVertices[4] = {
+    static const VrBlitVertex centeredModalVertices[4] = {
         {{-1.0f,  1.0f}, {0.25f, 0.0f}},
         {{ 1.0f,  1.0f}, {0.75f, 0.0f}},
         {{-1.0f, -1.0f}, {0.25f, 1.0f}},
         {{ 1.0f, -1.0f}, {0.75f, 1.0f}},
     };
 
-    D3D11_SUBRESOURCE_DATA quitConfirmationVertexData = {};
-    quitConfirmationVertexData.pSysMem =
-        quitConfirmationVertices;
+    D3D11_SUBRESOURCE_DATA centeredModalVertexData = {};
+    centeredModalVertexData.pSysMem =
+        centeredModalVertices;
 
     hr =
         g_vrD3dDevice->CreateBuffer(
             &vertexDescription,
-            &quitConfirmationVertexData,
-            g_vrQuitConfirmationBlitVertexBuffer
+            &centeredModalVertexData,
+            g_vrCenteredModalBlitVertexBuffer
                 .GetAddressOf());
 
     if (FAILED(hr))
     {
         VR_LogHrFailure(
-            "CreateBuffer(quit confirmation centered mono blit)",
+            "CreateBuffer(centered modal mono blit)",
             hr);
 
         return false;
@@ -6217,6 +6287,7 @@ void VR_ResetHeadOrientation()
     g_vrHeadBaseOrientationValid = false;
     g_vrHeadOrientationValid = false;
     g_vrTransferredBodyYawDegrees = 0.0f;
+    g_vrHeadPositionBodyYawDegrees = 0.0f;
     g_vrLoggedFirstHeadPose = false;
     g_vrLoggedFirstCameraApply = false;
 
@@ -6256,6 +6327,13 @@ void VR_ResetHeadOrientation()
         g_vrHudEditorActive = false;
         g_vrHudEditorDragging = false;
         g_vrHudEditorPointerValid = false;
+        g_vrHudEditorPreviousWasHeld = false;
+        g_vrHudEditorNextWasHeld = false;
+        g_vrHudEditorCenterWasHeld = false;
+        g_vrHudEditorResetWasHeld = false;
+        g_vrHudEditorKeyboardTabWasHeld = false;
+        g_vrHudEditorKeyboardCenterWasHeld = false;
+        g_vrHudEditorKeyboardResetWasHeld = false;
         g_vrHudEditorRequestId.clear();
         g_vrLastHudEditorRequestId.clear();
         g_vrLastHudEditorPollMilliseconds = 0u;
@@ -6437,16 +6515,26 @@ void VR_PublishHeadOrientation(
             -openXrDeltaX *
             kVrGameUnitsPerMeter;
 
+        const float positionBodyYawRadians =
+            g_vrHeadPositionBodyYawDegrees *
+            degreesToRadians;
+
+        const float positionBodyYawCos =
+            std::cos(positionBodyYawRadians);
+
+        const float positionBodyYawSin =
+            std::sin(positionBodyYawRadians);
+
         g_vrHeadPositionLocal[0] =
-            transferredYawCos *
+            positionBodyYawCos *
                 rawPositionForward +
-            transferredYawSin *
+            positionBodyYawSin *
                 rawPositionLeft;
 
         g_vrHeadPositionLocal[1] =
-            -transferredYawSin *
+            -positionBodyYawSin *
                 rawPositionForward +
-            transferredYawCos *
+            positionBodyYawCos *
                 rawPositionLeft;
 
         g_vrHeadPositionLocal[2] =
@@ -11226,6 +11314,23 @@ bool VR_UpdateHudEditorInput(
         isHeld(VrInput::Action::MenuBack);
     const bool snapEnabled =
         !isHeld(VrInput::Action::SupportGrip);
+    const bool previousHeld =
+        isHeld(VrInput::Action::Use);
+    const bool nextHeld =
+        isHeld(VrInput::Action::NextWeapon);
+    const bool centerHeld =
+        isHeld(VrInput::Action::Sprint);
+    const bool resetHeld =
+        isHeld(VrInput::Action::Melee);
+
+    const bool keyboardTabHeld =
+        (GetAsyncKeyState(VK_TAB) & 0x8000) != 0;
+    const bool keyboardShiftHeld =
+        (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+    const bool keyboardCenterHeld =
+        (GetAsyncKeyState(VK_HOME) & 0x8000) != 0;
+    const bool keyboardResetHeld =
+        (GetAsyncKeyState(VK_END) & 0x8000) != 0;
 
     const std::size_t turnIndex =
         static_cast<std::size_t>(VrInput::Action::Turn);
@@ -11237,6 +11342,10 @@ bool VR_UpdateHudEditorInput(
     bool finish = false;
     bool save = false;
     bool layoutChanged = false;
+    const char* recoveryCommand = nullptr;
+    VrHud::Element recoveryElement = VrHud::Element::AmmoEquipment;
+    VrHud::Point recoveryCenter = {};
+    float recoveryScale = 1.0f;
     {
         std::lock_guard<std::mutex> lock(g_vrHudEditorMutex);
         if (!g_vrHudEditorActive)
@@ -11254,6 +11363,22 @@ bool VR_UpdateHudEditorInput(
             confirmHeld && !g_vrHudEditorConfirmWasHeld;
         const bool backPressed =
             backHeld && !g_vrHudEditorBackWasHeld;
+        const bool keyboardTabPressed =
+            keyboardTabHeld && !g_vrHudEditorKeyboardTabWasHeld;
+        const bool previousPressed =
+            (previousHeld && !g_vrHudEditorPreviousWasHeld) ||
+            (keyboardTabPressed && keyboardShiftHeld);
+        const bool nextPressed =
+            (nextHeld && !g_vrHudEditorNextWasHeld) ||
+            (keyboardTabPressed && !keyboardShiftHeld);
+        const bool centerPressed =
+            (centerHeld && !g_vrHudEditorCenterWasHeld) ||
+            (keyboardCenterHeld &&
+             !g_vrHudEditorKeyboardCenterWasHeld);
+        const bool resetPressed =
+            (resetHeld && !g_vrHudEditorResetWasHeld) ||
+            (keyboardResetHeld &&
+             !g_vrHudEditorKeyboardResetWasHeld);
 
         if (backPressed)
         {
@@ -11264,6 +11389,55 @@ bool VR_UpdateHudEditorInput(
         {
             finish = true;
             save = true;
+        }
+        else if (previousPressed || nextPressed)
+        {
+            g_vrHudEditorSelected = VrHud::CycleElement(
+                g_vrHudEditorSelected,
+                previousPressed ? -1 : 1);
+            g_vrHudEditorDragging = false;
+            recoveryCommand = previousPressed
+                ? "Selected previous"
+                : "Selected next";
+            recoveryElement = g_vrHudEditorSelected;
+            recoveryCenter = VrHud::ElementCenter(
+                g_vrHudEditorLayout,
+                recoveryElement);
+            recoveryScale = VrHud::ElementScale(
+                g_vrHudEditorLayout,
+                recoveryElement);
+        }
+        else if (centerPressed)
+        {
+            VrHud::CenterElement(
+                &g_vrHudEditorLayout,
+                g_vrHudEditorSelected);
+            g_vrHudEditorDragging = false;
+            layoutChanged = true;
+            recoveryCommand = "Centered";
+            recoveryElement = g_vrHudEditorSelected;
+            recoveryCenter = VrHud::ElementCenter(
+                g_vrHudEditorLayout,
+                recoveryElement);
+            recoveryScale = VrHud::ElementScale(
+                g_vrHudEditorLayout,
+                recoveryElement);
+        }
+        else if (resetPressed)
+        {
+            VrHud::ResetElement(
+                &g_vrHudEditorLayout,
+                g_vrHudEditorSelected);
+            g_vrHudEditorDragging = false;
+            layoutChanged = true;
+            recoveryCommand = "Reset";
+            recoveryElement = g_vrHudEditorSelected;
+            recoveryCenter = VrHud::ElementCenter(
+                g_vrHudEditorLayout,
+                recoveryElement);
+            recoveryScale = VrHud::ElementScale(
+                g_vrHudEditorLayout,
+                recoveryElement);
         }
         else if (triggerPressed && pointerValid)
         {
@@ -11343,6 +11517,28 @@ bool VR_UpdateHudEditorInput(
         g_vrHudEditorTriggerWasHeld = triggerHeld;
         g_vrHudEditorConfirmWasHeld = confirmHeld;
         g_vrHudEditorBackWasHeld = backHeld;
+        g_vrHudEditorPreviousWasHeld = previousHeld;
+        g_vrHudEditorNextWasHeld = nextHeld;
+        g_vrHudEditorCenterWasHeld = centerHeld;
+        g_vrHudEditorResetWasHeld = resetHeld;
+        g_vrHudEditorKeyboardTabWasHeld = keyboardTabHeld;
+        g_vrHudEditorKeyboardCenterWasHeld = keyboardCenterHeld;
+        g_vrHudEditorKeyboardResetWasHeld = keyboardResetHeld;
+    }
+
+    if (recoveryCommand != nullptr)
+    {
+        Com_Printf(
+            0,
+            "[VR][HUD][EDITOR] %s group %u/%u: %s at %.0f %.0f, "
+            "scale %.2f.\n",
+            recoveryCommand,
+            static_cast<unsigned int>(recoveryElement) + 1u,
+            static_cast<unsigned int>(VrHud::kElementCount),
+            VrHud::ElementId(recoveryElement),
+            recoveryCenter.x,
+            recoveryCenter.y,
+            recoveryScale);
     }
 
     if (finish)
@@ -13088,6 +13284,7 @@ void VR_SendMenuKeyTap(
 void VR_UpdateMenuControllerNavigation()
 {
     static bool menuWasActive = false;
+    static bool rightEyeMenuWasActive = false;
     static bool confirmWasHeld = false;
     static bool backWasHeld = false;
     static bool loggedMenuCursor = false;
@@ -13108,6 +13305,7 @@ void VR_UpdateMenuControllerNavigation()
     if (!menuActive)
     {
         menuWasActive = false;
+        rightEyeMenuWasActive = false;
         confirmWasHeld = false;
         backWasHeld = false;
         lastUpdateTime = currentTime;
@@ -13143,9 +13341,17 @@ void VR_UpdateMenuControllerNavigation()
             g_vrMenuBackHeld;
     }
 
-    const bool activeGameplayMenu =
+    // KISAK_SP_VR_CENTERED_SCRIPT_MODAL_V75
+    // Ordinary active-game pause UI is painted in the right stereo viewport.
+    // Centered modals are painted once across the full packed canvas, so they
+    // must use full-canvas coordinates for hit testing as well as rendering.
+    const bool centeredModalMenu =
+        VR_IsCenteredMonoscopicMenuActive();
+
+    const bool rightEyeGameplayMenu =
         clientUIActives[0].connectionState ==
-            CA_ACTIVE;
+            CA_ACTIVE &&
+        !centeredModalMenu;
 
     const std::uint32_t capturedWidth =
         g_vrCapturedStereoWidth > 0u
@@ -13153,7 +13359,7 @@ void VR_UpdateMenuControllerNavigation()
             : 640u;
 
     const std::uint32_t cursorWidth =
-        activeGameplayMenu &&
+        rightEyeGameplayMenu &&
         capturedWidth >= 2u
             ? capturedWidth / 2u
             : capturedWidth;
@@ -13164,7 +13370,7 @@ void VR_UpdateMenuControllerNavigation()
     // controller cursor but add the right-eye viewport origin
     // before passing it into CoD's UI hit-testing path.
     const std::uint32_t cursorOriginX =
-        activeGameplayMenu &&
+        rightEyeGameplayMenu &&
         capturedWidth >= 2u
             ? capturedWidth / 2u
             : 0u;
@@ -13176,7 +13382,7 @@ void VR_UpdateMenuControllerNavigation()
 
     static bool loggedActivePauseCursorOffset = false;
 
-    if (activeGameplayMenu &&
+    if (rightEyeGameplayMenu &&
         !loggedActivePauseCursorOffset)
     {
         Com_Printf(
@@ -13187,17 +13393,42 @@ void VR_UpdateMenuControllerNavigation()
         loggedActivePauseCursorOffset = true;
     }
 
-    if (!menuWasActive)
+    static bool loggedCenteredModalCursor = false;
+
+    if (centeredModalMenu &&
+        !loggedCenteredModalCursor)
+    {
+        const char* topMenuName =
+            UI_GetTopActiveMenuName(0);
+
+        Com_Printf(
+            0,
+            "[VR][UI] V75 centered modal cursor uses the full "
+            "packed canvas (top menu '%s').\n",
+            topMenuName != nullptr
+                ? topMenuName
+                : "unknown");
+
+        loggedCenteredModalCursor = true;
+    }
+
+    const bool cursorCoordinateModeChanged =
+        menuWasActive &&
+        rightEyeGameplayMenu !=
+            rightEyeMenuWasActive;
+
+    if (!menuWasActive ||
+        cursorCoordinateModeChanged)
     {
         cursorX =
-            (activeGameplayMenu
+            (rightEyeGameplayMenu
                 ? 0.25f
                 : 0.5f) *
             static_cast<float>(
                 cursorWidth);
 
         cursorY =
-            (activeGameplayMenu
+            (rightEyeGameplayMenu
                 ? 0.26f
                 : 0.5f) *
             static_cast<float>(
@@ -13214,6 +13445,9 @@ void VR_UpdateMenuControllerNavigation()
         menuWasActive = true;
         lastUpdateTime = currentTime;
     }
+
+    rightEyeMenuWasActive =
+        rightEyeGameplayMenu;
 
     std::uint32_t elapsedMilliseconds =
         currentTime - lastUpdateTime;
@@ -13550,18 +13784,17 @@ bool VR_RenderSolidColorFrame(
             0,
             0x10);
 
-    // KISAK_SP_VR_QUIT_CONFIRMATION_CENTER_CROP_V46
-    // V45 makes SCR_DrawScreenField paint the nested dialog only once across
-    // the main stereo canvas. V46 selects its centered one-eye-wide region;
-    // using the full canvas would squeeze both gameplay eyes into each HMD
-    // eye, while an ordinary right-eye crop cuts through the shared dialog.
-    const bool quitConfirmationComfortMode =
+    // KISAK_SP_VR_CENTERED_SCRIPT_MODAL_V75
+    // Centered dialogs are painted once across the main stereo canvas. Sample
+    // its centered one-eye-wide region; the full canvas would squeeze both
+    // gameplay eyes, while an ordinary right-eye crop cuts through the dialog.
+    const bool centeredModalComfortMode =
         menuComfortMode &&
-        VR_IsQuitConfirmationMenuActive();
+        VR_IsCenteredMonoscopicMenuActive();
 
     const bool activePauseComfortMode =
         menuComfortMode &&
-        !quitConfirmationComfortMode &&
+        !centeredModalComfortMode &&
         clientUIActives[0].connectionState ==
             CA_ACTIVE;
 
@@ -13660,25 +13893,25 @@ bool VR_RenderSolidColorFrame(
         loggedActivePauseCrop = true;
     }
 
-    static bool loggedQuitConfirmationCenterCrop = false;
+    static bool loggedCenteredModalCrop = false;
 
-    if (quitConfirmationComfortMode &&
-        !loggedQuitConfirmationCenterCrop)
+    if (centeredModalComfortMode &&
+        !loggedCenteredModalCrop)
     {
         const char* topMenuName =
             UI_GetTopActiveMenuName(0);
 
         Com_Printf(
             0,
-            "[VR][UI] V46 quit confirmation centered mono: "
-            "retained V45 one-pass painting and sampled the "
+            "[VR][UI] V75 centered modal mono: retained "
+            "one-pass painting and sampled the "
             "center 25%%-75%% of the main stereo canvas for "
             "both eyes (top menu '%s').\n",
             topMenuName != nullptr
                 ? topMenuName
                 : "unknown");
 
-        loggedQuitConfirmationCenterCrop = true;
+        loggedCenteredModalCrop = true;
     }
 
     static bool loggedConvergedMenuProjection = false;
@@ -13778,7 +14011,7 @@ bool VR_RenderSolidColorFrame(
         {
             const std::uint32_t menuSourceWidth =
                 (activePauseComfortMode ||
-                 quitConfirmationComfortMode)
+                 centeredModalComfortMode)
                     ? VR_GetCapturedMainStereoWidth() / 2u
                     : VR_GetCapturedMainStereoWidth();
 
@@ -13886,8 +14119,8 @@ bool VR_RenderSolidColorFrame(
             const UINT offset = 0;
 
             ID3D11Buffer* vertexBuffer =
-                quitConfirmationComfortMode
-                    ? g_vrQuitConfirmationBlitVertexBuffer.Get()
+                centeredModalComfortMode
+                    ? g_vrCenteredModalBlitVertexBuffer.Get()
                     : activePauseComfortMode
                     ? g_vrPauseMenuBlitVertexBuffer.Get()
                     : menuComfortMode
@@ -14110,7 +14343,7 @@ bool VR_RenderOpenVrEye(
         submissionViews,
     const bool submissionViewsValid,
     const bool menuComfortMode,
-    const bool quitConfirmationComfortMode,
+    const bool centeredModalComfortMode,
     const bool activePauseComfortMode)
 {
     if (eyeIndex >= kVrStereoEyeCount ||
@@ -14163,7 +14396,7 @@ bool VR_RenderOpenVrEye(
     {
         const std::uint32_t menuSourceWidth =
             (activePauseComfortMode ||
-             quitConfirmationComfortMode)
+             centeredModalComfortMode)
                 ? VR_GetCapturedMainStereoWidth() / 2u
                 : VR_GetCapturedMainStereoWidth();
 
@@ -14267,8 +14500,8 @@ bool VR_RenderOpenVrEye(
         const UINT offset = 0u;
 
         ID3D11Buffer* vertexBuffer =
-            quitConfirmationComfortMode
-                ? g_vrQuitConfirmationBlitVertexBuffer.Get()
+            centeredModalComfortMode
+                ? g_vrCenteredModalBlitVertexBuffer.Get()
                 : activePauseComfortMode
                     ? g_vrPauseMenuBlitVertexBuffer.Get()
                     : menuComfortMode
@@ -14490,6 +14723,57 @@ bool VR_IsQuitConfirmationMenuActive()
     return
         I_stristr(topMenuName, "quit") != nullptr ||
         I_stristr(topMenuName, "leavegame") != nullptr;
+}
+
+
+bool VR_IsCenteredMonoscopicMenuActive()
+{
+    if (!Key_IsCatcherActive(0, 0x10))
+    {
+        return false;
+    }
+
+    const char* topMenuName =
+        UI_GetTopActiveMenuName(0);
+
+    if (topMenuName == nullptr ||
+        topMenuName[0] == '\0')
+    {
+        return false;
+    }
+
+    // KISAK_SP_VR_FNG_DIFFICULTY_MODAL_V75
+    // COD4's original F.N.G. flow opens select_difficulty as a script popup.
+    // Selecting a non-recommended level can nest one of four diff_con_*
+    // confirmations. All five are centered on one shared packed UI canvas,
+    // not independently inside the left and right gameplay viewports.
+    const bool fngDifficultyModal =
+        I_stricmp(topMenuName, "select_difficulty") == 0 ||
+        I_stricmp(topMenuName, "diff_con_easy") == 0 ||
+        I_stricmp(topMenuName, "diff_con_regular") == 0 ||
+        I_stricmp(topMenuName, "diff_con_hardened") == 0 ||
+        I_stricmp(topMenuName, "diff_con_veteran") == 0;
+
+    if (fngDifficultyModal)
+    {
+        static bool loggedFngDifficultyModal = false;
+
+        if (!loggedFngDifficultyModal)
+        {
+            Com_Printf(
+                0,
+                "[VR][UI] V75 detected F.N.G. difficulty "
+                "modal '%s'; suppressing stereo-list duplicates "
+                "and using centered mono rendering/input.\n",
+                topMenuName);
+
+            loggedFngDifficultyModal = true;
+        }
+
+        return true;
+    }
+
+    return VR_IsQuitConfirmationMenuActive();
 }
 
 
@@ -16399,7 +16683,7 @@ bool VR_UpdateManualGrenadeInput(
     {
         Com_Printf(
             0,
-            "[VR][GRENADE] beta.10 handed manual hip grenades are %s. "
+            "[VR][GRENADE] beta.11 handed manual hip grenades are %s. "
             "Belt layout %s; release/toggle the off-hand grip to throw.\n",
             *manualModeEnabled
                 ? "enabled"
@@ -16737,7 +17021,7 @@ void VR_EnsureWeaponProfilesLoaded()
     {
         Com_Printf(
             0,
-            "[VR][WEAPON PROFILE] beta.10 loaded revision %s; %u weapon "
+            "[VR][WEAPON PROFILE] beta.11 loaded revision %s; %u weapon "
             "override(s), %u gunstock profile(s), active '%s'.\n",
             g_vrWeaponProfilesRevision.c_str(),
             static_cast<unsigned int>(g_vrWeaponProfiles.weapons.size()),
@@ -17905,6 +18189,30 @@ bool VR_ApplyOffhandControllerHaptic(
 }
 
 
+bool VR_GetCampaignAdsHeld(
+    bool* const adsHeld)
+{
+    if (adsHeld == nullptr)
+    {
+        return false;
+    }
+
+    *adsHeld = false;
+
+    if (!g_vrInitialized)
+    {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(
+        g_vrHeadOrientationMutex);
+
+    *adsHeld =
+        g_vrPoseFocusAimHeld;
+
+    return true;
+}
+
 bool VR_GetBasicGameplayButtons(
     bool* adsHeld,
     bool* jumpHeld,
@@ -18352,6 +18660,9 @@ bool VR_TransferHmdYawToBody(
     g_vrTransferredBodyYawDegrees +=
         yawDeltaDegrees;
 
+    g_vrHeadPositionBodyYawDegrees +=
+        yawDeltaDegrees;
+
     while (g_vrTransferredBodyYawDegrees >=
            180.0f)
     {
@@ -18363,6 +18674,20 @@ bool VR_TransferHmdYawToBody(
            -180.0f)
     {
         g_vrTransferredBodyYawDegrees +=
+            360.0f;
+    }
+
+    while (g_vrHeadPositionBodyYawDegrees >=
+           180.0f)
+    {
+        g_vrHeadPositionBodyYawDegrees -=
+            360.0f;
+    }
+
+    while (g_vrHeadPositionBodyYawDegrees <
+           -180.0f)
+    {
+        g_vrHeadPositionBodyYawDegrees +=
             360.0f;
     }
 
@@ -18964,73 +19289,108 @@ bool VR_GetRightControllerWeaponCommand(
     return true;
 }
 
-bool VR_RecenterHeadPosition()
+static bool VR_RecenterHeadForMode(
+    const VrCalibration::RecenterMode mode)
 {
     std::lock_guard<std::mutex> lock(
         g_vrHeadOrientationMutex);
 
-    if (!g_vrLatestHeadPositionValid)
+    if (mode == VrCalibration::RecenterMode::Disabled)
+    {
+        return true;
+    }
+
+    const bool needsPosition =
+        mode == VrCalibration::RecenterMode::PositionOnly ||
+        mode == VrCalibration::RecenterMode::Full;
+    const bool needsDirectionLevel =
+        mode == VrCalibration::RecenterMode::DirectionLevelOnly ||
+        mode == VrCalibration::RecenterMode::Full;
+
+    // Validate every requested component before mutating either one. A full
+    // recenter therefore stays atomic if tracking temporarily loses only
+    // position or only orientation.
+    if ((needsPosition && !g_vrLatestHeadPositionValid) ||
+        (needsDirectionLevel && !g_vrLatestHeadOrientationValid))
     {
         return false;
     }
 
-    g_vrHeadPositionOrigin =
-        g_vrLatestHeadPosition;
+    if (needsDirectionLevel)
+    {
+        g_vrHeadBaseOrientation =
+            g_vrLatestHeadOrientation;
+        g_vrHeadBaseOrientationValid = true;
 
-    g_vrHeadPositionOriginValid =
-        true;
+        g_vrHeadOrientationAxis[0][0] = 1.0f;
+        g_vrHeadOrientationAxis[0][1] = 0.0f;
+        g_vrHeadOrientationAxis[0][2] = 0.0f;
+        g_vrHeadOrientationAxis[1][0] = 0.0f;
+        g_vrHeadOrientationAxis[1][1] = 1.0f;
+        g_vrHeadOrientationAxis[1][2] = 0.0f;
+        g_vrHeadOrientationAxis[2][0] = 0.0f;
+        g_vrHeadOrientationAxis[2][1] = 0.0f;
+        g_vrHeadOrientationAxis[2][2] = 1.0f;
+        g_vrHeadOrientationValid = true;
+        g_vrTransferredBodyYawDegrees = 0.0f;
+    }
 
-    g_vrHeadPositionLocal[0] = 0.0f;
-    g_vrHeadPositionLocal[1] = 0.0f;
-    g_vrHeadPositionLocal[2] = 0.0f;
+    if (needsPosition)
+    {
+        g_vrHeadPositionOrigin =
+            g_vrLatestHeadPosition;
+        g_vrHeadPositionOriginValid = true;
+        g_vrHeadPositionLocal[0] = 0.0f;
+        g_vrHeadPositionLocal[1] = 0.0f;
+        g_vrHeadPositionLocal[2] = 0.0f;
+        g_vrHeadPositionValid = true;
+    }
 
-    g_vrHeadPositionValid =
-        true;
+    if (mode == VrCalibration::RecenterMode::Full)
+    {
+        g_vrHeadPositionBodyYawDegrees = 0.0f;
+    }
+
+    Com_Printf(
+        0,
+        "[VR][CALIBRATION][RECENTER] backend %s; mode %s; "
+        "position %s; direction/level %s.\n",
+        VR_RuntimeBackendName(),
+        VrCalibration::RecenterModeId(mode),
+        needsPosition ? "updated" : "preserved",
+        needsDirectionLevel ? "updated" : "preserved");
 
     return true;
+}
+
+bool VR_RecenterHeadPosition()
+{
+    return VR_RecenterHeadForMode(
+        VrCalibration::RecenterMode::PositionOnly);
+}
+
+bool VR_RecenterHeadDirectionLevel()
+{
+    return VR_RecenterHeadForMode(
+        VrCalibration::RecenterMode::DirectionLevelOnly);
 }
 
 bool VR_RecenterHeadPose()
 {
-    std::lock_guard<std::mutex> lock(
-        g_vrHeadOrientationMutex);
-
-    if (!g_vrLatestHeadPositionValid ||
-        !g_vrLatestHeadOrientationValid)
-    {
-        return false;
-    }
-
-    g_vrHeadBaseOrientation =
-        g_vrLatestHeadOrientation;
-    g_vrHeadBaseOrientationValid = true;
-
-    g_vrHeadOrientationAxis[0][0] = 1.0f;
-    g_vrHeadOrientationAxis[0][1] = 0.0f;
-    g_vrHeadOrientationAxis[0][2] = 0.0f;
-    g_vrHeadOrientationAxis[1][0] = 0.0f;
-    g_vrHeadOrientationAxis[1][1] = 1.0f;
-    g_vrHeadOrientationAxis[1][2] = 0.0f;
-    g_vrHeadOrientationAxis[2][0] = 0.0f;
-    g_vrHeadOrientationAxis[2][1] = 0.0f;
-    g_vrHeadOrientationAxis[2][2] = 1.0f;
-    g_vrHeadOrientationValid = true;
-    g_vrTransferredBodyYawDegrees = 0.0f;
-
-    g_vrHeadPositionOrigin =
-        g_vrLatestHeadPosition;
-    g_vrHeadPositionOriginValid = true;
-    g_vrHeadPositionLocal[0] = 0.0f;
-    g_vrHeadPositionLocal[1] = 0.0f;
-    g_vrHeadPositionLocal[2] = 0.0f;
-    g_vrHeadPositionValid = true;
-
-    return true;
+    return VR_RecenterHeadForMode(
+        VrCalibration::RecenterMode::Full);
 }
 
-bool VR_RecenterOnStartEnabled()
+bool VR_RecenterAtFirstGameplayCamera()
 {
-    return VR_GetConfiguratorSettings().recenterOnStart;
+    return VR_RecenterHeadForMode(
+        VR_GetConfiguratorSettings().firstGameplayRecenterMode);
+}
+
+const char* VR_GetFirstGameplayRecenterModeName()
+{
+    return VrCalibration::RecenterModeId(
+        VR_GetConfiguratorSettings().firstGameplayRecenterMode);
 }
 
 namespace
@@ -19156,6 +19516,7 @@ void VR_WriteCalibrationStatus(
     const bool floorAvailable,
     const float measuredEyeHeightInches,
     const float appliedEyeHeightInches,
+    const VrCalibration::RecenterMode recenterMode,
     const bool recentered)
 {
     const char* const statusPath =
@@ -19205,6 +19566,9 @@ void VR_WriteCalibrationStatus(
                << VrCalibration::EyeHeightCorrectionInches(
                       appliedEyeHeightInches)
                << "\r\n";
+        output << "RECENTER_MODE="
+               << VrCalibration::RecenterModeId(recenterMode)
+               << "\r\n";
         output << "RECENTERED=" << (recentered ? 1 : 0) << "\r\n";
         output.flush();
 
@@ -19229,6 +19593,7 @@ void VR_AppendCalibrationReceipt(
     const bool floorAvailable,
     const float measuredEyeHeightInches,
     const float appliedEyeHeightInches,
+    const VrCalibration::RecenterMode recenterMode,
     const bool recentered)
 {
     const char* const receiptPath =
@@ -19261,6 +19626,7 @@ void VR_AppendCalibrationReceipt(
         "RUNTIME_CALIBRATION_HEIGHT_CORRECTION=%+.2f\r\n"
         "RUNTIME_CALIBRATION_DISPLAY_UNITS=%s\r\n"
         "RUNTIME_CALIBRATION_APPLIED_DISPLAY=%.1f %s\r\n"
+        "RUNTIME_CALIBRATION_RECENTER_MODE=%s\r\n"
         "RUNTIME_CALIBRATION_RECENTERED=%d\r\n",
         request.requestId.c_str(),
         VrCalibration::CommandId(request.command),
@@ -19274,6 +19640,7 @@ void VR_AppendCalibrationReceipt(
         VR_MeasurementUnitSystemId(units),
         VR_DisplayInches(appliedEyeHeightInches, units),
         VR_DisplayLengthUnit(units),
+        VrCalibration::RecenterModeId(recenterMode),
         recentered ? 1 : 0);
 
     std::fflush(receipt);
@@ -19382,6 +19749,13 @@ void VR_ProcessHudEditorRequest()
         g_vrHudEditorConfirmWasHeld = false;
         g_vrHudEditorBackWasHeld = false;
         g_vrHudEditorScaleArmed = true;
+        g_vrHudEditorPreviousWasHeld = false;
+        g_vrHudEditorNextWasHeld = false;
+        g_vrHudEditorCenterWasHeld = false;
+        g_vrHudEditorResetWasHeld = false;
+        g_vrHudEditorKeyboardTabWasHeld = false;
+        g_vrHudEditorKeyboardCenterWasHeld = false;
+        g_vrHudEditorKeyboardResetWasHeld = false;
         g_vrHudEditorSelected = VrHud::Element::AmmoEquipment;
         g_vrHudEditorRequestId = request.requestId;
         ++g_vrHudLayoutRevision;
@@ -19392,7 +19766,7 @@ void VR_ProcessHudEditorRequest()
     response.status = VrHud::ResponseStatus::Active;
     response.layout = request.layout;
     response.message =
-        "Point and hold trigger to drag; right stick up or down resizes";
+        "Use/Next selects; Sprint/Melee centers or resets; trigger drags";
     VR_WriteHudEditorResponse(response);
     if (requestPath != nullptr)
     {
@@ -19480,12 +19854,12 @@ void VR_ProcessCalibrationRequest(
         }
     }
 
-    const bool needsRecenter =
-        request.command !=
-            VrCalibration::Command::ApplyHeight;
+    const VrCalibration::RecenterMode recenterMode =
+        VrCalibration::CommandRecenterMode(request.command);
 
     const bool recentered =
-        !needsRecenter || VR_RecenterHeadPose();
+        recenterMode == VrCalibration::RecenterMode::Disabled ||
+        VR_RecenterHeadForMode(recenterMode);
 
     if (!recentered)
     {
@@ -19495,6 +19869,7 @@ void VR_ProcessCalibrationRequest(
             floorAvailable,
             measuredEyeHeightInches,
             appliedEyeHeightInches,
+            recenterMode,
             false);
         return;
     }
@@ -19525,14 +19900,16 @@ void VR_ProcessCalibrationRequest(
         floorAvailable,
         measuredEyeHeightInches,
         appliedEyeHeightInches,
-        needsRecenter);
+        recenterMode,
+        recenterMode != VrCalibration::RecenterMode::Disabled);
 
     VR_AppendCalibrationReceipt(
         request,
         floorAvailable,
         measuredEyeHeightInches,
         appliedEyeHeightInches,
-        needsRecenter);
+        recenterMode,
+        recenterMode != VrCalibration::RecenterMode::Disabled);
 
     const VrMeasurementUnitSystem units =
         VR_GetConfiguratorSettings().measurementUnits;
@@ -19552,7 +19929,7 @@ void VR_ProcessCalibrationRequest(
             units),
         VR_DisplayLengthUnit(units),
         floorAvailable ? "measured" : "not measured",
-        needsRecenter ? "complete" : "not requested");
+        VrCalibration::RecenterModeId(recenterMode));
 }
 
 void VR_ProcessWeaponCalibrationRequest()
@@ -21717,13 +22094,13 @@ void VR_FrameOpenVr()
             0,
             0x10);
 
-    const bool quitConfirmationComfortMode =
+    const bool centeredModalComfortMode =
         menuComfortMode &&
-        VR_IsQuitConfirmationMenuActive();
+        VR_IsCenteredMonoscopicMenuActive();
 
     const bool activePauseComfortMode =
         menuComfortMode &&
-        !quitConfirmationComfortMode &&
+        !centeredModalComfortMode &&
         clientUIActives[0].connectionState ==
             CA_ACTIVE;
 
@@ -21739,7 +22116,7 @@ void VR_FrameOpenVr()
                 submissionViews,
                 submissionViewsValid,
                 menuComfortMode,
-                quitConfirmationComfortMode,
+                centeredModalComfortMode,
                 activePauseComfortMode))
         {
             return;
@@ -22674,7 +23051,7 @@ void VR_Shutdown()
     g_vrBlitSampler.Reset();
     g_vrMenuBlitVertexBuffer.Reset();
     g_vrPauseMenuBlitVertexBuffer.Reset();
-    g_vrQuitConfirmationBlitVertexBuffer.Reset();
+    g_vrCenteredModalBlitVertexBuffer.Reset();
     g_vrLoggedMenuComfortScreen = false;
 
     for (auto& vertexBuffer :
@@ -22759,6 +23136,91 @@ void VR_Shutdown()
 bool VR_IsInitialized()
 {
     return g_vrInitialized;
+}
+
+int VR_GetPromptBindingLabels(
+    const char* const command,
+    char (*const bindingNames)[128])
+{
+    if (bindingNames == nullptr)
+    {
+        return 0;
+    }
+
+    bindingNames[0][0] = '\0';
+    bindingNames[1][0] = '\0';
+
+    if (!g_vrInitialized || command == nullptr || command[0] == '\0')
+    {
+        return 0;
+    }
+
+    const VrInput::ActionDefinition* const action =
+        VrPrompts::FindPromptAction(command);
+    if (action == nullptr)
+    {
+        return 0;
+    }
+
+    const std::size_t actionIndex =
+        static_cast<std::size_t>(action->action);
+    const VrConfiguratorSettings& configurable =
+        VR_GetConfiguratorSettings();
+
+    const std::array<std::string_view, 2> profiles = {{
+        g_vrCompatibilityControllerProfiles[VR_CONTROLLER_LEFT].data(),
+        g_vrCompatibilityControllerProfiles[VR_CONTROLLER_RIGHT].data(),
+    }};
+
+    const VrPrompts::Backend backend =
+        g_vrRuntimeBackend == VrRuntimeBackend::OpenVr
+            ? VrPrompts::Backend::OpenVr
+            : VrPrompts::Backend::OpenXr;
+
+    const VrPrompts::BindingLabels labels =
+        VrPrompts::BuildBindingLabels(
+            configurable.bindings[actionIndex],
+            profiles,
+            backend,
+            command);
+
+    for (std::size_t index = 0u; index < labels.count; ++index)
+    {
+        std::snprintf(
+            bindingNames[index],
+            128u,
+            "%s",
+            labels.values[index].c_str());
+    }
+
+    if (labels.count > 0u)
+    {
+        static std::array<std::string, VrInput::kActionCount>
+            loggedLabels = {};
+        std::string signature = labels.values[0];
+        if (labels.count == 2u)
+        {
+            signature += " OR ";
+            signature += labels.values[1];
+        }
+
+        if (loggedLabels[actionIndex] != signature)
+        {
+            Com_Printf(
+                0,
+                "[VR][PROMPTS] V71 %s uses configured %s label%s: "
+                "%s%s%s.\n",
+                command,
+                action->label,
+                labels.count == 1u ? "" : "s",
+                labels.values[0].c_str(),
+                labels.count == 2u ? " OR " : "",
+                labels.count == 2u ? labels.values[1].c_str() : "");
+            loggedLabels[actionIndex] = signature;
+        }
+    }
+
+    return static_cast<int>(labels.count);
 }
 
 const char* VR_GetActiveBackendName()

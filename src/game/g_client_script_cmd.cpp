@@ -1553,7 +1553,37 @@ void __cdecl PlayerCmd_playerADS(scr_entref_t entref)
             Scr_ObjectError(v2);
         }
     }
-    Scr_AddFloat(v1->client->ps.fWeaponPosFrac);
+    float scriptAdsFraction =
+        v1->client->ps.fWeaponPosFrac;
+
+    bool vrAdsHeld = false;
+
+    // KISAK_SP_VR_FNG_CAMPAIGN_INPUT_BRIDGE_V72
+    // F.N.G. advances from the hip-fire targets by polling playerADS() > 0.5.
+    // The physical two-hand detector is sampled on the client/render path and
+    // can lead the server-side weapon fraction used by this script method.
+    // Expose the same live ADS intent to script only; native weapon state and
+    // all keyboard/mouse behavior remain untouched.
+    if (VR_GetCampaignAdsHeld(&vrAdsHeld) &&
+        vrAdsHeld &&
+        scriptAdsFraction <= 0.5f)
+    {
+        scriptAdsFraction = 1.0f;
+
+        static bool loggedVrCampaignAdsBridge = false;
+
+        if (!loggedVrCampaignAdsBridge)
+        {
+            Com_Printf(
+                0,
+                "[VR][CAMPAIGN] V72 playerADS() now sees the "
+                "configured or physical two-hand ADS action.\n");
+
+            loggedVrCampaignAdsBridge = true;
+        }
+    }
+
+    Scr_AddFloat(scriptAdsFraction);
 }
 
 void __cdecl PlayerCmd_isOnGround(scr_entref_t entref)
@@ -4500,4 +4530,3 @@ void __cdecl G_AddCommandNotify(volatile unsigned __int16 notify)
     //__lwsync();
     s_cmdNotify.write += v3 + 2;
 }
-

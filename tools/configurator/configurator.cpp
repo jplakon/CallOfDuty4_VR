@@ -54,7 +54,7 @@ constexpr wchar_t kHudEditorClass[] =
 constexpr wchar_t kWeaponEditorClass[] =
     L"KisakCODVrWeaponCalibrationEditorV65";
 constexpr wchar_t kWindowTitle[] =
-    L"KisakCOD VR Configurator - v0.10.0-beta.10";
+    L"KisakCOD VR Configurator - v0.10.0-beta.11";
 
 constexpr int kWindowWidth = 1160;
 constexpr int kWindowHeight = 790;
@@ -85,7 +85,7 @@ constexpr int kIdCaptureAlternate = 114;
 constexpr int kIdClearBinding = 115;
 constexpr int kIdChordPrimary = 116;
 constexpr int kIdChordAlternate = 117;
-constexpr int kIdCalibrationRecenter = 118;
+constexpr int kIdCalibrationRecenterFull = 118;
 constexpr int kIdCalibrationMeasureStanding = 119;
 constexpr int kIdCalibrationApplySeated = 120;
 constexpr int kIdCalibrationShorter = 121;
@@ -101,6 +101,8 @@ constexpr int kIdSetupRescan = 130;
 constexpr int kIdSetupApplyRecommended = 131;
 constexpr int kIdSetupCopyReport = 132;
 constexpr int kIdSetupOpenReport = 133;
+constexpr int kIdCalibrationRecenterPosition = 134;
+constexpr int kIdCalibrationRecenterDirectionLevel = 135;
 constexpr int kIdSettingBase = 2000;
 
 constexpr int kIdWeaponEditWeapon = 500;
@@ -2130,9 +2132,12 @@ void EditControllerChord(
 }
 
 constexpr RECT kHudEditorCanvas = {32, 76, 832, 676};
-constexpr RECT kHudEditorSnapButton = {858, 386, 1082, 426};
-constexpr RECT kHudEditorResetButton = {858, 438, 1082, 478};
-constexpr RECT kHudEditorDefaultsButton = {858, 490, 1082, 530};
+constexpr RECT kHudEditorPreviousButton = {858, 310, 966, 350};
+constexpr RECT kHudEditorNextButton = {974, 310, 1082, 350};
+constexpr RECT kHudEditorSnapButton = {858, 360, 1082, 400};
+constexpr RECT kHudEditorCenterButton = {858, 410, 1082, 450};
+constexpr RECT kHudEditorResetButton = {858, 460, 1082, 500};
+constexpr RECT kHudEditorDefaultsButton = {858, 510, 1082, 550};
 constexpr RECT kHudEditorCancelButton = {858, 650, 964, 694};
 constexpr RECT kHudEditorApplyButton = {976, 650, 1082, 694};
 
@@ -2429,7 +2434,7 @@ void DrawHudEditorSurface(
     details.precision(2);
     details << vh::ElementScale(editor.layout, editor.selected)
             << L"x\r\n\r\n"
-            << L"Drag the box to move it. Drag the yellow corner or use the mouse wheel to resize. Blue dots are snap anchors.";
+            << L"Drag the box to move it. Drag the yellow corner or use the mouse wheel to resize. Blue dots are snap anchors. The crosshair stays at optical center.";
     RECT detailRect = {858, 126, 1082, 300};
     DrawTextW(
         dc,
@@ -2438,13 +2443,18 @@ void DrawHudEditorSurface(
         &detailRect,
         DT_LEFT | DT_WORDBREAK);
 
-    RECT centerNote = {858, 310, 1082, 372};
-    DrawTextW(
+    DrawHudEditorButton(
         dc,
-        L"Crosshair remains locked to the optical center. Hold Shift while dragging for free movement.",
-        -1,
-        &centerNote,
-        DT_LEFT | DT_WORDBREAK);
+        kHudEditorPreviousButton,
+        L"Previous",
+        RGB(231, 235, 242),
+        RGB(42, 52, 68));
+    DrawHudEditorButton(
+        dc,
+        kHudEditorNextButton,
+        L"Next",
+        RGB(231, 235, 242),
+        RGB(42, 52, 68));
 
     DrawHudEditorButton(
         dc,
@@ -2458,6 +2468,12 @@ void DrawHudEditorSurface(
         RGB(33, 54, 72));
     DrawHudEditorButton(
         dc,
+        kHudEditorCenterButton,
+        L"Center selected element",
+        RGB(231, 235, 242),
+        RGB(42, 52, 68));
+    DrawHudEditorButton(
+        dc,
         kHudEditorResetButton,
         L"Reset selected element",
         RGB(231, 235, 242),
@@ -2469,7 +2485,7 @@ void DrawHudEditorSurface(
         RGB(231, 235, 242),
         RGB(42, 52, 68));
 
-    RECT liveNote = {858, 548, 1082, 630};
+    RECT liveNote = {858, 558, 1082, 630};
     DrawTextW(
         dc,
         L"Apply updates the configurator values. Use “Edit live in headset” afterward to verify placement against the real mission HUD.",
@@ -2493,22 +2509,7 @@ void DrawHudEditorSurface(
 
 void ResetSelectedHudElement(HudEditorState& editor)
 {
-    const vh::Layout defaults = vh::DefaultLayout();
-    const vh::Point defaultCenter =
-        vh::ElementCenter(defaults, editor.selected);
-    vh::SetElementScale(
-        &editor.layout,
-        editor.selected,
-        vh::ElementScale(defaults, editor.selected));
-    vh::MoveElement(
-        &editor.layout,
-        editor.selected,
-        defaultCenter,
-        false);
-    if (editor.selected == vh::Element::Compass)
-    {
-        editor.layout.compassEnabled = defaults.compassEnabled;
-    }
+    vh::ResetElement(&editor.layout, editor.selected);
 }
 
 void AcceptHudEditor(HudEditorState& editor)
@@ -2589,6 +2590,24 @@ LRESULT CALLBACK HudEditorWindowProc(
         if (PointInRect(kHudEditorSnapButton, point))
         {
             editor->snapEnabled = !editor->snapEnabled;
+            InvalidateRect(window, nullptr, FALSE);
+            return 0;
+        }
+        if (PointInRect(kHudEditorPreviousButton, point))
+        {
+            editor->selected = vh::CycleElement(editor->selected, -1);
+            InvalidateRect(window, nullptr, FALSE);
+            return 0;
+        }
+        if (PointInRect(kHudEditorNextButton, point))
+        {
+            editor->selected = vh::CycleElement(editor->selected, 1);
+            InvalidateRect(window, nullptr, FALSE);
+            return 0;
+        }
+        if (PointInRect(kHudEditorCenterButton, point))
+        {
+            vh::CenterElement(&editor->layout, editor->selected);
             InvalidateRect(window, nullptr, FALSE);
             return 0;
         }
@@ -2714,7 +2733,23 @@ LRESULT CALLBACK HudEditorWindowProc(
             InvalidateRect(window, nullptr, FALSE);
             return 0;
         }
-        if (wParam == 'R')
+        if (wParam == VK_TAB &&
+            (lParam & (static_cast<LPARAM>(1) << 30)) == 0)
+        {
+            const int direction =
+                (GetKeyState(VK_SHIFT) & 0x8000) != 0 ? -1 : 1;
+            editor->selected =
+                vh::CycleElement(editor->selected, direction);
+            InvalidateRect(window, nullptr, FALSE);
+            return 0;
+        }
+        if (wParam == VK_HOME)
+        {
+            vh::CenterElement(&editor->layout, editor->selected);
+            InvalidateRect(window, nullptr, FALSE);
+            return 0;
+        }
+        if (wParam == VK_END)
         {
             ResetSelectedHudElement(*editor);
             InvalidateRect(window, nullptr, FALSE);
@@ -3653,7 +3688,7 @@ void StartHeadsetHudEditor(AppState& state)
         SetHudStatus(state, L"Could not write HUD-Editor-Request.txt.");
         MessageBoxW(
             state.window,
-            L"Beta.10 could not write HUD-Editor-Request.txt under your KisakCOD-VR settings folder.",
+            L"The configurator could not write HUD-Editor-Request.txt under your KisakCOD-VR settings folder.",
             L"Headset HUD editor failed",
             MB_OK | MB_ICONERROR);
         return;
@@ -3679,6 +3714,9 @@ void StartHeadsetHudEditor(AppState& state)
     MessageBoxW(
         state.window,
         L"In the headset:\r\n\r\n"
+        L"• Press Use / Next weapon (Quest X / Y) to select the previous / next HUD group.\r\n"
+        L"• Press Sprint / Melee (Quest L3 / R3) to center / reset only the selected group.\r\n"
+        L"• Keyboard: Shift+Tab / Tab selects, Home centers, and End resets.\r\n"
         L"• Point at a HUD group and hold the right trigger to drag it.\r\n"
         L"• Right-stick up/down resizes the selected group.\r\n"
         L"• Hold the off-hand grip to temporarily disable snapping.\r\n"
@@ -3943,11 +3981,38 @@ bool SendCalibrationCommand(
 
     if (guidedCountdown)
     {
+        const wchar_t* instructions =
+            L"Put on the headset and assume your normal playing posture. "
+            L"After you press OK, the configurator waits three seconds before capturing.";
+        switch (command)
+        {
+        case vc::Command::RecenterPosition:
+            instructions =
+                L"Put on the headset and assume your normal playing posture.\r\n\r\n"
+                L"After you press OK, the configurator waits three seconds and recenters only your physical position. Your existing direction and level remain unchanged.";
+            break;
+        case vc::Command::RecenterDirectionLevel:
+            instructions =
+                L"Put on the headset, face the desired forward direction, and look level.\r\n\r\n"
+                L"After you press OK, the configurator waits three seconds and captures only direction and level. Your positional origin remains unchanged.";
+            break;
+        case vc::Command::RecenterFull:
+            instructions =
+                L"Put on the headset, assume your normal playing posture, face the desired forward direction, and look level.\r\n\r\n"
+                L"After you press OK, the configurator waits three seconds and captures both position and direction/level.";
+            break;
+        case vc::Command::MeasureStanding:
+            instructions =
+                L"Stand naturally with the headset on.\r\n\r\n"
+                L"After you press OK, the configurator waits three seconds and measures eye height from the runtime floor. Position and direction/level remain unchanged.";
+            break;
+        default:
+            break;
+        }
+
         const int accepted = MessageBoxW(
             state.window,
-            command == vc::Command::MeasureStanding
-                ? L"Stand naturally with the headset on, face the desired forward direction, and look level.\r\n\r\nAfter you press OK, beta.10 waits three seconds, measures your eye height from the runtime floor, and recenters the view."
-                : L"Put on the headset, assume your normal playing posture, face the desired forward direction, and look level.\r\n\r\nAfter you press OK, beta.10 waits three seconds and captures that pose as forward and level.",
+            instructions,
             L"Guided VR calibration",
             MB_OKCANCEL | MB_ICONINFORMATION);
 
@@ -4004,7 +4069,7 @@ bool SendCalibrationCommand(
             L"Could not write the live calibration request.");
         MessageBoxW(
             state.window,
-            L"Beta.10 could not write Calibration-Request.txt under your KisakCOD-VR settings folder.",
+            L"The configurator could not write Calibration-Request.txt under your KisakCOD-VR settings folder.",
             L"Calibration request failed",
             MB_OK | MB_ICONERROR);
         return false;
@@ -4092,13 +4157,34 @@ bool SendCalibrationCommand(
         heightKey.c_str(),
         appliedCanonical);
 
-    std::wstring success =
-        L"Applied by " + backend + L": " + applied +
-        L" virtual eye height";
-
-    if (command != vc::Command::ApplyHeight)
+    std::wstring success;
+    switch (command)
     {
-        success += L"; position and forward/level pose recentered";
+    case vc::Command::RecenterPosition:
+        success =
+            L"Position recentered by " + backend +
+            L"; direction and level were preserved";
+        break;
+    case vc::Command::RecenterDirectionLevel:
+        success =
+            L"Direction and level recentered by " + backend +
+            L"; the positional origin was preserved";
+        break;
+    case vc::Command::RecenterFull:
+        success =
+            L"Full recenter applied by " + backend +
+            L": position plus direction and level";
+        break;
+    case vc::Command::MeasureStanding:
+        success =
+            L"Standing eye height applied by " + backend + L": " +
+            applied + L"; position and direction/level were preserved";
+        break;
+    default:
+        success =
+            L"Applied by " + backend + L": " + applied +
+            L" virtual eye height; position and direction/level were preserved";
+        break;
     }
 
     if (command == vc::Command::MeasureStanding &&
@@ -4119,11 +4205,27 @@ bool SendCalibrationCommand(
     return true;
 }
 
-void RecenterCalibration(AppState& state)
+void RecenterPositionCalibration(AppState& state)
 {
     SendCalibrationCommand(
         state,
-        vc::Command::Recenter,
+        vc::Command::RecenterPosition,
+        true);
+}
+
+void RecenterDirectionLevelCalibration(AppState& state)
+{
+    SendCalibrationCommand(
+        state,
+        vc::Command::RecenterDirectionLevel,
+        true);
+}
+
+void RecenterFullCalibration(AppState& state)
+{
+    SendCalibrationCommand(
+        state,
+        vc::Command::RecenterFull,
         true);
 }
 
@@ -4147,7 +4249,7 @@ void ApplySeatedCalibration(AppState& state)
         "seated");
     SendCalibrationCommand(
         state,
-        vc::Command::Recenter,
+        vc::Command::RecenterPosition,
         true);
 }
 
@@ -4790,7 +4892,7 @@ void DrawCalibrationPreview(
     RECT footer = {22, 404, client.right - 22, 438};
     DrawTextSimple(
         dc,
-        L"Recenter captures position plus forward/level. Height changes preserve COD4's native crouch and prone steps.",
+        L"Position and direction/level recentering are independent. Height changes preserve COD4's native crouch and prone steps.",
         footer,
         DT_CENTER | DT_WORDBREAK,
         RGB(104, 63, 20));
@@ -5202,43 +5304,65 @@ void BuildCalibrationPanel(AppState& state)
     add(CreateControl(
         state,
         L"STATIC",
-        L"For recentering, put on the headset, assume your normal posture, face the desired forward direction, and look level. After you confirm, beta.10 waits three seconds before capturing the pose.",
+        L"Choose exactly what to recenter. Position only never changes your angles; Direction / level only never moves the positional origin. Each guided action waits three seconds.",
         SS_LEFT,
         kTabLeft + 20,
         kTabTop + 338,
         kTabWidth - 40,
-        45));
+        40));
 
     add(CreateControl(
         state,
         L"BUTTON",
-        L"Recenter now",
+        L"Recenter position only",
         BS_DEFPUSHBUTTON | WS_TABSTOP,
         kTabLeft + 20,
-        kTabTop + 392,
-        205,
+        kTabTop + 382,
+        216,
         34,
-        kIdCalibrationRecenter));
+        kIdCalibrationRecenterPosition));
 
     add(CreateControl(
         state,
         L"BUTTON",
-        L"Measure standing height",
+        L"Recenter direction / level only",
         BS_PUSHBUTTON | WS_TABSTOP,
-        kTabLeft + 238,
-        kTabTop + 392,
-        224,
+        kTabLeft + 248,
+        kTabTop + 382,
+        225,
+        34,
+        kIdCalibrationRecenterDirectionLevel));
+
+    add(CreateControl(
+        state,
+        L"BUTTON",
+        L"Full recenter",
+        BS_PUSHBUTTON | WS_TABSTOP,
+        kTabLeft + 485,
+        kTabTop + 382,
+        215,
+        34,
+        kIdCalibrationRecenterFull));
+
+    add(CreateControl(
+        state,
+        L"BUTTON",
+        L"Measure standing height (center unchanged)",
+        BS_PUSHBUTTON | WS_TABSTOP,
+        kTabLeft + 20,
+        kTabTop + 428,
+        330,
         34,
         kIdCalibrationMeasureStanding));
 
     add(CreateControl(
         state,
         L"BUTTON",
-        L"Apply seated calibration",
+        L"Apply seated + recenter position",
         BS_PUSHBUTTON | WS_TABSTOP,
-        kTabLeft + 475,
-        kTabTop + 392,
-        225,
+        kTabLeft + 362,
+        kTabTop + 428,
+        338,
         34,
         kIdCalibrationApplySeated));
 
@@ -5248,7 +5372,7 @@ void BuildCalibrationPanel(AppState& state)
         L"Fine height adjustment (applies live without changing your forward direction)",
         SS_LEFT,
         kTabLeft + 20,
-        kTabTop + 440,
+        kTabTop + 474,
         kTabWidth - 40,
         22));
 
@@ -5258,7 +5382,7 @@ void BuildCalibrationPanel(AppState& state)
         L"1 cm shorter",
         BS_PUSHBUTTON | WS_TABSTOP,
         kTabLeft + 20,
-        kTabTop + 466,
+        kTabTop + 500,
         150,
         32,
         kIdCalibrationShorter));
@@ -5269,7 +5393,7 @@ void BuildCalibrationPanel(AppState& state)
         L"Reset current mode to 152.4 cm",
         BS_PUSHBUTTON | WS_TABSTOP,
         kTabLeft + 182,
-        kTabTop + 466,
+        kTabTop + 500,
         260,
         32,
         kIdCalibrationResetHeight));
@@ -5280,7 +5404,7 @@ void BuildCalibrationPanel(AppState& state)
         L"1 cm taller",
         BS_PUSHBUTTON | WS_TABSTOP,
         kTabLeft + 454,
-        kTabTop + 466,
+        kTabTop + 500,
         150,
         32,
         kIdCalibrationTaller));
@@ -5291,9 +5415,9 @@ void BuildCalibrationPanel(AppState& state)
         L"Status: Save and launch COD4, enter a mission, then use a calibration button.",
         SS_LEFT,
         kTabLeft + 20,
-        kTabTop + 510,
+        kTabTop + 540,
         kTabWidth - 40,
-        58));
+        38));
 }
 
 void ShowHudPanel(
@@ -6552,7 +6676,7 @@ bool BuildMainWindow(AppState& state)
     CreateControl(
         state,
         L"STATIC",
-        L"Beta.10 two-hand, proximity, and detonator fixes with beta.9 setup and calibration",
+        L"Beta.11 HUD recovery, recenter, VR prompts, and F.N.G. repair",
         SS_LEFT,
         22,
         52,
@@ -6859,8 +6983,14 @@ LRESULT CALLBACK MainWindowProc(
         case kIdChordAlternate:
             EditControllerChord(*state, true);
             return 0;
-        case kIdCalibrationRecenter:
-            RecenterCalibration(*state);
+        case kIdCalibrationRecenterPosition:
+            RecenterPositionCalibration(*state);
+            return 0;
+        case kIdCalibrationRecenterDirectionLevel:
+            RecenterDirectionLevelCalibration(*state);
+            return 0;
+        case kIdCalibrationRecenterFull:
+            RecenterFullCalibration(*state);
             return 0;
         case kIdCalibrationMeasureStanding:
             MeasureStandingCalibration(*state);

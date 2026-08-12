@@ -70,6 +70,8 @@ target_sources(
         ${SRC_DIR}/vr/vr_openvr_input.h
         ${SRC_DIR}/vr/vr_openxr_profiles.cpp
         ${SRC_DIR}/vr/vr_openxr_profiles.h
+        ${SRC_DIR}/vr/vr_prompt_labels.cpp
+        ${SRC_DIR}/vr/vr_prompt_labels.h
         ${SRC_DIR}/vr/vr_weapon_profiles.cpp
         ${SRC_DIR}/vr/vr_weapon_profiles.h
         ${SRC_DIR}/vr/vr_d3d9_capture.cpp

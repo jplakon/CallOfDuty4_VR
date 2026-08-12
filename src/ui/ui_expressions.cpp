@@ -14,6 +14,7 @@
 #include <cgame/cg_main.h>
 #include "ui.h"
 #include <game/g_local.h>
+#include <vr/vr_openxr.h>
 #endif
 
 int s_operatorPrecedence[81] =
@@ -1715,7 +1716,21 @@ int __cdecl GetKeyBindingLocalizedString(int localClientNum, const char *command
     char bindings[2][128]; // [esp+1Ch] [ebp-108h] BYREF
     const char *conjunction; // [esp+120h] [ebp-4h]
 
-    bindCount = CL_GetKeyBinding(localClientNum, command, bindings);
+#ifdef KISAK_SP
+    // V71 resolves the semantic VR action first during gameplay. Full-screen
+    // menus retain their keyboard labels so COD4's keyboard-binding editor
+    // never advertises a VR control that it cannot edit. Unknown/unbound
+    // commands return zero and preserve the exact keyboard behavior below.
+    bindCount = UI_IsFullscreen()
+        ? 0
+        : VR_GetPromptBindingLabels(command, bindings);
+#else
+    bindCount = 0;
+#endif
+    if (bindCount == 0)
+    {
+        bindCount = CL_GetKeyBinding(localClientNum, command, bindings);
+    }
     if (single && bindCount > 1)
         bindCount = 1;
     if (bindCount)
@@ -2703,4 +2718,3 @@ double __cdecl GetExpressionFloat(int localClientNum, const statement_s *stateme
     else
         return 0.0;
 }
-

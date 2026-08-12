@@ -1,6 +1,6 @@
 # Release checklist
 
-This checklist is for `v0.10.0-beta.10` over `v0.10.0-beta.9`.
+This checklist is for `v0.10.0-beta.11` over `v0.10.0-beta.10`.
 
 ## Documentation blockers
 
@@ -41,7 +41,7 @@ This checklist is for `v0.10.0-beta.10` over `v0.10.0-beta.9`.
   `KisakCOD-VR-Input-Mapper`, and `KisakCOD-VR-Configurator-Tests` in Win32
   Release configuration from the committed source.
 - Run the settings tests against `release/package/VR-Settings.bat` and require
-  all 142 catalog settings plus beta.10 compatibility, launcher, runtime, and
+  all 142 catalog settings plus beta.11 compatibility, launcher, runtime, and
   configurator receipts to pass.
 - Confirm `git status --porcelain --untracked-files=no` remains empty.
 - Copy nothing from `bin/Debug` into the player package.
@@ -51,7 +51,7 @@ This checklist is for `v0.10.0-beta.10` over `v0.10.0-beta.9`.
 
 - Open **Setup & Compatibility** on the primary VDXR/Quest 3/RTX 3080 Ti
   system. Require file, DirectX, OS, GPU, and 32-bit OpenXR checks to pass;
-  before the first beta.10 run, require honest headset/controller warnings.
+  before the first beta.11 run, require honest headset/controller warnings.
 - Apply the recommendation only after verifying its confirmation lists the
   exact backend/graphics delta. Snapshot all other settings before/after and
   require handedness, units, comfort, input, HUD, height, interactions, and
@@ -112,21 +112,54 @@ This checklist is for `v0.10.0-beta.10` over `v0.10.0-beta.9`.
   `[VR][DETONATOR]` route marker.
 - After the detonator test, recheck rifle/pistol fire, muzzle obstruction,
   ordinary grenades, manual reload, Hold-mode two-hand aim, and OpenXR.
-- Test first-gameplay recenter both enabled and disabled. In a running mission,
-  verify **Recenter now** captures position and forward/level after its
-  countdown without changing the OpenXR or SteamVR system origin.
+- Test all four first-gameplay modes: Off, Position only, Direction / level
+  only, and Full. Verify legacy `0` and `1` profiles load as Off and Full.
+- In a running OpenXR mission, deliberately offset both physical position and
+  facing. Verify **Recenter position only** zeros translation without changing
+  facing/level, **Recenter direction / level only** changes facing/level without
+  moving the positional origin, and **Full recenter** changes both.
+- In F.N.G./Killhouse, verify movement, sprint, stance, lower-stance,
+  jump/mantle, melee, use, reload, and fire tutorials show the configured VR
+  text rather than PC keys wherever COD4 uses a binding token.
+- At Station One, enter physical/configured VR ADS and require the initial ADS
+  tutorial to continue without right-click. After the hip-fire targets rise,
+  fire at least one accepted VR shot and require a V74 `+attack` marker with
+  one or more matched script listeners; after every target falls, require the
+  plywood instruction without touching the mouse. At the course endpoint, use
+  the configured VR Sprint action and require completion without Shift.
+  Confirm the V73 native `+speed`, V74 virtual `+attack`, and V72 native
+  `+sprint` markers.
+- Remap Use from the Touch default X to B, restart, and require the same
+  interaction prompt to change to B. Restore the original binding afterward.
+- Give one mapped action identical primary and alternate bindings and require
+  one label; then use two different slots and require both with the localized
+  OR conjunction. Verify a cross-hand chord preserves every term.
+- Open COD4's full-screen keyboard controls menu and confirm it still displays
+  keyboard bindings. Verify an unbound or ambiguous VR action also retains its
+  keyboard fallback.
+- Repeat one prompt through forced OpenVR and confirm its label describes the
+  legacy component mapping rather than assuming the OpenXR profile.
+- Repeat the component-isolation test through OpenVR. Confirm no action changes
+  the OpenXR or SteamVR system origin and that a failed Full request changes
+  neither component when either required tracked component is unavailable.
 - Test standing height measurement with an OpenXR `STAGE` space and OpenVR's
-  standing universe, then verify the explicit manual-height fallback on a
-  runtime without a usable floor reference.
+  standing universe. Require position and direction/level to remain unchanged,
+  then verify the explicit manual-height fallback on a runtime without a usable
+  floor reference.
 - Test seated calibration plus all three fine-height buttons. Verify that each
-  action applies live, preserves crouch/prone steps, survives restart, and
-  records its request, height, backend, floor availability, and recenter result.
+  action applies live, seated calibration recenters position only, crouch/prone
+  steps survive, and every receipt records request, height, backend, floor
+  availability, explicit recenter mode, and result.
 - Open the desktop visual HUD editor. Drag and resize all five groups, exercise
-  snapping plus Shift/free movement, reset one group, restore defaults, apply,
-  save, restart, and verify the exact placement round-trip.
+  snapping plus Shift/free movement, cycle selection without clicking a group,
+  center and reset one group, restore defaults, apply, save, restart, and
+  verify the exact placement round-trip.
 - In a running mission, open **Edit live in headset**. Test ray selection,
   trigger drag, right-stick resizing, left-grip snap bypass, A/pointed Save,
-  and B/pointed Cancel. Confirm gameplay input is suppressed while active.
+  and B/pointed Cancel. Put the compass fully outside the canvas, select it via
+  X/Y and Shift+Tab/Tab, recover it via L3/Home, reset only it via R3/End, and
+  verify the fixed selected-group banner. Confirm gameplay input is suppressed
+  while active.
 - Trigger ammo/equipment, compass objective icons, normal notifications, a bold
   objective/status banner, and subtitles. Verify each group moves independently
   and that the crosshair remains at optical center.
@@ -171,7 +204,7 @@ This checklist is for `v0.10.0-beta.10` over `v0.10.0-beta.9`.
 
 ## Tag and package
 
-- Create annotated tag `v0.10.0-beta.10` only after the compatibility,
+- Create annotated tag `v0.10.0-beta.11` only after the compatibility,
   Metric/Imperial, per-weapon/gunstock, handed-interaction, controller, menu,
   rendering, crash-diagnostic, tracked-hand, reload, grenade, OpenVR two-hand,
   Automatic-proximity release, detonator, and campaign state is validated.

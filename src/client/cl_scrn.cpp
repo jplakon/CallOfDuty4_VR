@@ -97,12 +97,12 @@ int __cdecl CL_CGameRendering()
     DemoType = CL_GetDemoType();
     if (!CG_DrawActiveFrame(0, clients[0].serverTime, DemoType, CUBEMAPSHOT_NONE, 0, animFrametime))
         return 0;
-    // KISAK_SP_VR_QUIT_CONFIRMATION_MONO_V45
-    // The final shared command list below already paints active UI.  Do not
-    // also attach a nested quit confirmation to both stereo view lists: the
-    // two passes use different viewports and become visibly separated in VR.
+    // KISAK_SP_VR_CENTERED_SCRIPT_MODAL_V75
+    // The final shared command list below already paints centered modal UI.
+    // Do not also attach that dialog to both stereo view lists: the two
+    // passes use different viewports and become visibly separated in VR.
     if ((clientUIActives[0].keyCatchers & 0x10) != 0 &&
-        !VR_IsQuitConfirmationMenuActive())
+        !VR_IsCenteredMonoscopicMenuActive())
         UI_Refresh();
     R_AddCmdEndOfList();
     return 1;

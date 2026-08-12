@@ -14,15 +14,35 @@ copy of the original game.
 
 ## Current status
 
-The current public beta is `v0.10.0-beta.10`.
+The current public beta is `v0.10.0-beta.11`.
 
-Beta.10 is a focused controller-interaction and campaign-scripting repair over
-beta.9. It retains beta.9's unified compatibility scan, per-weapon and gunstock
-calibration, Metric/Imperial presentation, handed physical interactions, and
-all earlier campaign, performance, HUD, tracked-hand, reload, grenade, scope,
+Beta.11 makes the configurator and opening F.N.G. training sequence fully
+controller-operable in VR. It retains beta.10's OpenVR two-hand repair,
+Automatic-proximity release, scripted detonator support, and all earlier
+campaign, performance, HUD, tracked-hand, reload, grenade, scope, calibration,
 and Mission Select work.
 
-### Beta.10 fixes
+### Beta.11 fixes
+
+- Adds previous/next selection, center-selected, and reset-selected controls to
+  the live in-headset HUD editor, so covered or off-screen groups can always be
+  recovered without editing settings by hand.
+- Separates position-only, direction/level-only, and full recenter actions.
+  First-gameplay recenter exposes the same explicit modes and safely migrates
+  the old Off/On values.
+- Replaces common PC-key HUD prompts with text derived from the active VR
+  controller profile and the user's configured primary, alternate, directional,
+  and chord bindings. Keyboard menus and unknown actions retain keyboard text.
+- Bridges accepted VR attack, ADS, and Sprint actions into the native command
+  notifications used by F.N.G., allowing the training sequence and finish line
+  to advance without a mouse or keyboard.
+- Renders the F.N.G. difficulty recommendation and confirmation dialogs once as
+  a fused centered image, with controller cursor access to the full menu.
+- Retains all 142 exact settings checks and adds regression coverage for HUD
+  recovery, split recentering, dynamic prompts, campaign input, and centered
+  modal menus.
+
+### Beta.10 fixes retained
 
 - Runs the same two-hand weapon target update after either OpenXR or OpenVR
   publishes controller poses. On OpenVR, the weapon now follows the support

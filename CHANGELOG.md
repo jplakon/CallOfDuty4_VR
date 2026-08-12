@@ -1,5 +1,63 @@
 # Changelog
 
+## v0.10.0-beta.11
+
+HUD recovery, separated recentering, dynamic VR prompts, and F.N.G. campaign
+repair over `v0.10.0-beta.10`.
+
+### HUD-editor recovery
+
+- Adds previous/next group selection that does not depend on hitting the
+  group's current rectangle, so covered and off-screen HUD groups remain
+  reachable.
+- Adds Center selected and Reset selected actions. Center preserves scale;
+  Reset restores only that group to the tested defaults.
+- Shows the selected group in a fixed in-headset banner and exposes matching
+  controller and keyboard recovery controls while preserving transactional
+  Save and full-layout Cancel.
+
+### Separated recenter controls
+
+- Splits live recenter into Position only, Direction / level only, and Full.
+  Position-only preserves the orientation baseline; direction/level-only
+  preserves the positional origin; Full validates both before changing either.
+- Replaces the ambiguous first-gameplay toggle with Off, Position only,
+  Direction / level only, and Full. Legacy `0` and `1` profiles migrate to Off
+  and Full without changing their previous behavior.
+- Makes standing-height measurement preserve both recenter components and
+  seated calibration recenter position only.
+
+### Dynamic VR prompt labels
+
+- Routes normal HUD binding prompts and single-player script `getKeyBinding()`
+  lookups through one controller-aware label resolver while VR is active.
+- Uses the configured primary and alternate slots, remaps, chords, directional
+  inputs, active controller profile, and selected OpenXR/OpenVR backend instead
+  of assuming Quest defaults.
+- Keeps full-screen keyboard menus and unknown, ambiguous, or unbound actions
+  on COD4's original keyboard resolver. This release uses text labels rather
+  than controller-button artwork.
+
+### F.N.G. campaign input and menu repair
+
+- Mirrors physical/configured VR ADS and Sprint through isolated native command
+  state so the scripted training and finish-line listeners receive the same
+  semantics as the corresponding PC controls.
+- Notifies native `+attack` listeners only for a newly accepted VR shot after
+  the existing muzzle-obstruction check, without changing mouse state, fire
+  cadence, or weapon simulation.
+- Recognizes `select_difficulty` and its `diff_con_*` confirmations as centered
+  active-mission dialogs, paints them once for both eyes, and gives their VR
+  cursor the full selectable canvas.
+
+### Validation
+
+- Retains all 142 settings and compatibility/configurator checks and adds
+  focused regression coverage for every beta.11 path.
+- Verified on Meta Quest 3 through Virtual Desktop VDXR: HUD recovery,
+  separated recentering, controller-aware prompts, the complete F.N.G. training
+  flow, Sprint finish, and the fused controller-selectable difficulty menu.
+
 ## v0.10.0-beta.10
 
 Focused OpenVR two-hand, Automatic-proximity, and campaign detonator repair

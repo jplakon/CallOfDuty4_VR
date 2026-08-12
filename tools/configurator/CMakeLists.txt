@@ -18,6 +18,8 @@ add_executable(
     ../../src/vr/vr_compatibility.h
     ../../src/vr/vr_openxr_profiles.cpp
     ../../src/vr/vr_openxr_profiles.h
+    ../../src/vr/vr_prompt_labels.cpp
+    ../../src/vr/vr_prompt_labels.h
     ../../src/vr/vr_weapon_profiles.cpp
     ../../src/vr/vr_weapon_profiles.h
 )
@@ -93,6 +95,8 @@ add_executable(
     ../../src/vr/vr_openvr_input.h
     ../../src/vr/vr_openxr_profiles.cpp
     ../../src/vr/vr_openxr_profiles.h
+    ../../src/vr/vr_prompt_labels.cpp
+    ../../src/vr/vr_prompt_labels.h
     ../../src/vr/vr_weapon_profiles.cpp
     ../../src/vr/vr_weapon_profiles.h
 )

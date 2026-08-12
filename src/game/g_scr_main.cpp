@@ -38,6 +38,7 @@
 #include <script/scr_main.h>
 #include "actor_state.h"
 #include <script/scr_memorytree.h>
+#include <vr/vr_openxr.h>
 
 const BuiltinMethodDef methods[104] =
 {
@@ -2004,7 +2005,12 @@ void GScr_GetKeyBinding()
     int bindCount;
     char bindings[2][128];
 
-    bindCount = CL_GetKeyBinding(0, Scr_GetString(0), bindings);
+    const char* const command = Scr_GetString(0);
+    bindCount = VR_GetPromptBindingLabels(command, bindings);
+    if (bindCount == 0)
+    {
+        bindCount = CL_GetKeyBinding(0, command, bindings);
+    }
     Scr_MakeArray();
     Scr_AddIString(bindings[0]);
     Scr_AddArrayStringIndexed(scr_const.key1);

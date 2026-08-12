@@ -31,10 +31,12 @@ Physical measurements can be shown in Metric or Imperial units. Per-weapon
 hip/ADS fit and shareable physical-gunstock profiles layer over the global
 weapon fit. Right- and left-handed functional routing, mirrored bindings, and
 configurable grip, reload, belt, melee, haptic, and muzzle-obstruction behavior
-are included. The Height & Recenter page can capture a new forward pose and
-calibrate standing or seated eye height. Personal settings are stored
-separately and survive future updates. The setup scan and launcher preflight
-write a Compatibility-Report.txt support receipt.
+are included. The Height & Recenter page separates position, direction/level,
+and full recenter actions and calibrates standing or seated eye height. VR
+gameplay prompts use the configured controller bindings instead of common PC
+key labels, with profile-aware text and keyboard fallback for ambiguous cases.
+Personal settings are stored separately and survive future updates. The setup
+scan and launcher preflight write a Compatibility-Report.txt support receipt.
 If you hand-edited VR-Settings.bat in an earlier beta, keep a copy and use the
 configurator's Import button after installing. You can still run
 Launch-KisakCOD-VR.bat directly with the last saved profile. Most settings need
@@ -57,8 +59,9 @@ CONFIGURATOR
 - Directional stick/trackpad inputs and chords of up to four simultaneous
   inputs per slot.
 - Press-to-bind capture through the configured OpenXR or SteamVR backend.
-- Guided live recenter, automatic standing measurement, seated calibration,
-  and safe 1 cm Metric or 1 in Imperial height adjustments.
+- Separate position-only, direction/level-only, and full live recenter,
+  automatic standing measurement, position-safe seated calibration, and safe
+  1 cm Metric or 1 in Imperial height adjustments.
 - Per-weapon hip-fire and shouldered/ADS deltas over the global weapon fit.
 - Active gunstock profiles with explicit aim capture and .vrstock sharing.
 - Right- or left-handed weapon control with one-time binding mirroring.

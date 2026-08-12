@@ -314,6 +314,24 @@ bool ParseElement(const std::string& value, Element* const element)
     return false;
 }
 
+Element CycleElement(const Element element, const int direction)
+{
+    const std::size_t current =
+        (std::min)(
+            static_cast<std::size_t>(element),
+            kElementCount - 1u);
+    if (direction < 0)
+    {
+        return static_cast<Element>(
+            (current + kElementCount - 1u) % kElementCount);
+    }
+    if (direction > 0)
+    {
+        return static_cast<Element>((current + 1u) % kElementCount);
+    }
+    return static_cast<Element>(current);
+}
+
 Point SafeAreaMinimum(const Layout& layout)
 {
     return {
@@ -419,6 +437,35 @@ void SetElementScale(
     default: break;
     }
     MoveElement(layout, element, originalCenter, false);
+}
+
+void CenterElement(Layout* const layout, const Element element)
+{
+    MoveElement(
+        layout,
+        element,
+        {kCanvasWidth * 0.5f, kCanvasHeight * 0.5f},
+        false);
+}
+
+void ResetElement(Layout* const layout, const Element element)
+{
+    if (layout == nullptr)
+    {
+        return;
+    }
+
+    const Layout defaults = DefaultLayout();
+    const Point defaultCenter = ElementCenter(defaults, element);
+    SetElementScale(
+        layout,
+        element,
+        ElementScale(defaults, element));
+    MoveElement(layout, element, defaultCenter, false);
+    if (element == Element::Compass)
+    {
+        layout->compassEnabled = defaults.compassEnabled;
+    }
 }
 
 Point SnapPointToGuides(

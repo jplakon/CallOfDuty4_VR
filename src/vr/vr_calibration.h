@@ -18,10 +18,23 @@ enum class PlayMode
     Seated,
 };
 
+// V70 separates translation from the forward/level orientation baseline.
+// Disabled is also used by the explicit first-gameplay setting and by
+// calibration commands that change height without recentering either pose.
+enum class RecenterMode
+{
+    Disabled,
+    PositionOnly,
+    DirectionLevelOnly,
+    Full,
+};
+
 enum class Command
 {
     Invalid,
-    Recenter,
+    RecenterPosition,
+    RecenterDirectionLevel,
+    RecenterFull,
     MeasureStanding,
     ApplyHeight,
 };
@@ -40,18 +53,85 @@ inline const char* PlayModeId(const PlayMode mode)
     return mode == PlayMode::Seated ? "seated" : "standing";
 }
 
+inline const char* RecenterModeId(const RecenterMode mode)
+{
+    switch (mode)
+    {
+    case RecenterMode::PositionOnly:
+        return "position_only";
+    case RecenterMode::DirectionLevelOnly:
+        return "direction_level_only";
+    case RecenterMode::Full:
+        return "full";
+    default:
+        return "off";
+    }
+}
+
+inline bool ParseRecenterMode(
+    const std::string& value,
+    RecenterMode* const mode)
+{
+    if (mode == nullptr)
+    {
+        return false;
+    }
+
+    if (value == "off" || value == "0")
+    {
+        *mode = RecenterMode::Disabled;
+        return true;
+    }
+    if (value == "position_only")
+    {
+        *mode = RecenterMode::PositionOnly;
+        return true;
+    }
+    if (value == "direction_level_only")
+    {
+        *mode = RecenterMode::DirectionLevelOnly;
+        return true;
+    }
+    if (value == "full" || value == "1")
+    {
+        *mode = RecenterMode::Full;
+        return true;
+    }
+
+    return false;
+}
+
 inline const char* CommandId(const Command command)
 {
     switch (command)
     {
-    case Command::Recenter:
-        return "recenter";
+    case Command::RecenterPosition:
+        return "recenter_position";
+    case Command::RecenterDirectionLevel:
+        return "recenter_direction_level";
+    case Command::RecenterFull:
+        return "recenter_full";
     case Command::MeasureStanding:
         return "measure_standing";
     case Command::ApplyHeight:
         return "apply_height";
     default:
         return "invalid";
+    }
+}
+
+inline RecenterMode CommandRecenterMode(const Command command)
+{
+    switch (command)
+    {
+    case Command::RecenterPosition:
+        return RecenterMode::PositionOnly;
+    case Command::RecenterDirectionLevel:
+        return RecenterMode::DirectionLevelOnly;
+    case Command::RecenterFull:
+        return RecenterMode::Full;
+    default:
+        return RecenterMode::Disabled;
     }
 }
 
@@ -151,9 +231,20 @@ inline bool ParseRequest(
         else if (key == "COMMAND")
         {
             commandFound = true;
-            if (value == "recenter")
+            if (value == "recenter_position")
             {
-                parsed.command = Command::Recenter;
+                parsed.command = Command::RecenterPosition;
+            }
+            else if (value == "recenter_direction_level")
+            {
+                parsed.command = Command::RecenterDirectionLevel;
+            }
+            else if (value == "recenter_full" || value == "recenter")
+            {
+                // "recenter" is the beta.8-beta.10 protocol spelling. Keep
+                // accepting it as a full recenter so a stale request or older
+                // configurator cannot silently change meaning.
+                parsed.command = Command::RecenterFull;
             }
             else if (value == "measure_standing")
             {

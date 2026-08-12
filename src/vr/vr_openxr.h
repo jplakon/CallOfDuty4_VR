@@ -27,6 +27,15 @@ bool VR_IsInitialized();
 // Returns "OpenXR", "OpenVR/SteamVR", or "none".
 const char* VR_GetActiveBackendName();
 
+// V71 dynamic prompt labels. Returns zero when VR is inactive, the command
+// has no unambiguous semantic VR equivalent, or that action is unbound. The
+// caller must then preserve COD4's normal keyboard lookup. Otherwise returns
+// one or two configured VR slots and writes concise controller text into the
+// same fixed-size shape used by CL_GetKeyBinding.
+int VR_GetPromptBindingLabels(
+    const char* command,
+    char (*bindingNames)[128]);
+
 // KISAK_SP_VR_CAPTURE_POSE_METADATA_V32
 // Associates the current OpenXR render views with the exact legacy renderer
 // frame that is about to build the packed stereo scene.
@@ -38,10 +47,15 @@ void VR_RecordRenderFramePose(
 bool VR_VerboseDiagnosticsEnabled();
 
 // KISAK_SP_VR_QUIT_CONFIRMATION_MONO_V45
-// True while the top UI menu is a quit/leave-game confirmation.  These
-// nested dialogs are painted as one full packed 2D canvas rather than as
-// ordinary pause UI inside a stereo-eye command list.
+// True while the top UI menu is a quit/leave-game confirmation.
 bool VR_IsQuitConfirmationMenuActive();
+
+// KISAK_SP_VR_CENTERED_SCRIPT_MODAL_V75
+// True while the active UI is a centered modal that must be painted once on
+// the packed 2D canvas and sampled identically for both HMD eyes. This keeps
+// active-mission confirmations and F.N.G.'s difficulty recommendation from
+// inheriting the ordinary right-eye pause-menu render/input path.
+bool VR_IsCenteredMonoscopicMenuActive();
 
 // KISAK_SP_VR_FIXED_SCOPED_TURRET_VIEW_FIX_V1
 // Publishes whether CoD4 currently has the player locked to a fixed weapon
@@ -107,11 +121,19 @@ bool VR_ApplyHeadPosition(
 // Orientation is not changed. Returns false until a valid head pose exists.
 bool VR_RecenterHeadPosition();
 
-// Captures the latest tracked headset position and orientation as the new
-// forward/level origin. This is used by first-gameplay and live guided
-// calibration; controller poses remain rigidly head-relative.
+// Captures only the latest tracked headset orientation as the new
+// forward/level baseline. Translation is not changed.
+bool VR_RecenterHeadDirectionLevel();
+
+// Captures both the latest tracked headset position and the forward/level
+// orientation baseline. Controller poses remain rigidly head-relative.
 bool VR_RecenterHeadPose();
-bool VR_RecenterOnStartEnabled();
+
+// Applies the explicit off/position/direction-level/full startup setting.
+// Disabled counts as success; tracked modes return false until every pose
+// component required by that mode is valid.
+bool VR_RecenterAtFirstGameplayCamera();
+const char* VR_GetFirstGameplayRecenterModeName();
 
 // V61 visual HUD editor. The runtime layout overrides environment defaults
 // only while an in-headset edit is active (or after that edit is saved for
@@ -315,6 +337,14 @@ bool VR_GetBasicGameplayButtons(
     bool* jumpHeld,
     bool* useHeld,
     bool* reloadHeld);
+
+// KISAK_SP_VR_FNG_CAMPAIGN_INPUT_BRIDGE_V72
+// Returns the same configured-or-physical ADS intent used by the VR
+// user-command path. Single-player scripts poll playerADS() independently of
+// client prediction, so this keeps campaign progression aligned with the
+// headset action without synthesizing a mouse button.
+bool VR_GetCampaignAdsHeld(
+    bool* adsHeld);
 
 // KISAK_SP_VR_MANUAL_MAGAZINE_RELOAD_V1
 // Publishes the current weapon's physical magazine well and advances the

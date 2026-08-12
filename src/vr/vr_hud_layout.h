@@ -103,6 +103,7 @@ void ClampLayout(Layout* layout);
 const char* ElementId(Element element);
 const char* ElementLabel(Element element);
 bool ParseElement(const std::string& value, Element* element);
+Element CycleElement(Element element, int direction);
 
 Point SafeAreaMinimum(const Layout& layout);
 Point SafeAreaMaximum(const Layout& layout);
@@ -110,6 +111,8 @@ Point ElementCenter(const Layout& layout, Element element);
 Size ElementSize(const Layout& layout, Element element);
 float ElementScale(const Layout& layout, Element element);
 void SetElementScale(Layout* layout, Element element, float scale);
+void CenterElement(Layout* layout, Element element);
+void ResetElement(Layout* layout, Element element);
 void MoveElement(
     Layout* layout,
     Element element,

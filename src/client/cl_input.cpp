@@ -1621,6 +1621,59 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
             }
         }
 
+        // KISAK_SP_VR_FNG_NATIVE_ADS_COMMAND_BRIDGE_V73
+        // F.N.G.'s post-hip-fire transition is driven by the same native ADS
+        // state produced by a held +speed command.  Setting BUTTON_ADS on the
+        // outgoing usercmd is sufficient for ordinary VR weapon handling, but
+        // it does not reproduce every part of the keyboard/mouse command
+        // route.  Hold one isolated synthetic +speed key for exactly as long
+        // as the configured-or-physical VR ADS action is held.  kbutton_t's
+        // two-key tracking keeps a real right-mouse press independent.
+        static bool vrAdsNativeCommandHeld = false;
+        const bool vrGameplayInputAvailable =
+            !Key_IsCatcherActive(0, 0x33);
+
+        if (vrAdsHeld &&
+            !vrAdsNativeCommandHeld &&
+            vrGameplayInputAvailable)
+        {
+            char vrAdsDownCommand[] =
+                "+speed 253 0";
+
+            Cmd_ExecuteSingleCommand(
+                0,
+                0,
+                vrAdsDownCommand);
+
+            vrAdsNativeCommandHeld = true;
+
+            static unsigned int vrAdsNativePressCount = 0u;
+            ++vrAdsNativePressCount;
+
+            if (vrAdsNativePressCount <= 8u)
+            {
+                Com_Printf(
+                    0,
+                    "[VR][CAMPAIGN] V73 native +speed DOWN from VR "
+                    "ADS (edge %u).\n",
+                    vrAdsNativePressCount);
+            }
+        }
+        else if ((!vrAdsHeld ||
+                  !vrGameplayInputAvailable) &&
+                 vrAdsNativeCommandHeld)
+        {
+            char vrAdsUpCommand[] =
+                "-speed 253 0";
+
+            Cmd_ExecuteSingleCommand(
+                0,
+                0,
+                vrAdsUpCommand);
+
+            vrAdsNativeCommandHeld = false;
+        }
+
         // KISAK_SP_VR_SCRIPTED_JUMP_BRIDGE_V1
         // Mission scripts can listen for +gostand through notifyOnCommand.
         // Directly setting BUTTON_JUMP bypasses that notification, so replay
@@ -1681,6 +1734,55 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
             &vrSprintHeld,
             &vrMeleeHeld,
             &vrStanceHeld);
+
+        // KISAK_SP_VR_FNG_CAMPAIGN_INPUT_BRIDGE_V72
+        // F.N.G.'s final course gate listens for the native +sprint command
+        // through notifyOnCommand(). BUTTON_SPRINT alone drives movement but
+        // bypasses that notification. Mirror the configured held VR action
+        // into the normal command path using a private key number; kbutton_t's
+        // two-key tracking keeps a physical Shift press independent.
+        static bool vrSprintNativeCommandHeld = false;
+
+        if (vrSprintHeld &&
+            !vrSprintNativeCommandHeld &&
+            vrGameplayInputAvailable)
+        {
+            char vrSprintDownCommand[] =
+                "+sprint 254 0";
+
+            Cmd_ExecuteSingleCommand(
+                0,
+                0,
+                vrSprintDownCommand);
+
+            vrSprintNativeCommandHeld = true;
+
+            static bool loggedVrCampaignSprintBridge = false;
+
+            if (!loggedVrCampaignSprintBridge)
+            {
+                Com_Printf(
+                    0,
+                    "[VR][CAMPAIGN] V72 routed the configured Sprint "
+                    "action through COD4's native +sprint command.\n");
+
+                loggedVrCampaignSprintBridge = true;
+            }
+        }
+        else if ((!vrSprintHeld ||
+                  !vrGameplayInputAvailable) &&
+                 vrSprintNativeCommandHeld)
+        {
+            char vrSprintUpCommand[] =
+                "-sprint 254 0";
+
+            Cmd_ExecuteSingleCommand(
+                0,
+                0,
+                vrSprintUpCommand);
+
+            vrSprintNativeCommandHeld = false;
+        }
 
         if (vrSprintHeld)
         {
@@ -2118,11 +2220,19 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
             clients[0].viewangles[0] = oldAngles + 90.0;
         }
     }
+    // KISAK_SP_VR_FNG_SCRIPT_ACTION_NOTIFY_BRIDGE_V74
+    // Keep script command notification state separate from keyboard/mouse
+    // kbutton_t state. F.N.G.'s hip-fire tutorial blocks inside
+    // keyHint("pc_hip_attack") until the engine reports a native +attack
+    // command, while normal VR shooting writes BUTTON_ATTACK directly.
+    static bool vrScriptAttackWasApplied = false;
+
     if (!Key_IsCatcherActive(0, 8))
     {
         float vrGunPitch = 0.0f;
         float vrGunYaw = 0.0f;
         bool vrAttackPressed = false;
+        bool vrAttackApplied = false;
 
         cg_s* cgameGlob =
             CG_GetLocalClientGlobals(0);
@@ -2166,6 +2276,7 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
             {
                 result->buttons |=
                     BUTTON_ATTACK;
+                vrAttackApplied = true;
 
                 static bool
                     loggedSpVrDetonatorAttackInjection =
@@ -2253,6 +2364,7 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
                 {
                     result->buttons |=
                         BUTTON_ATTACK;
+                    vrAttackApplied = true;
 
                     static bool
                         loggedSpVrAttackInjection =
@@ -2294,6 +2406,44 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
                     false);
             }
         }
+
+        const bool vrScriptAttackPressed =
+            vrAttackApplied &&
+            !vrScriptAttackWasApplied;
+
+        vrScriptAttackWasApplied =
+            vrAttackApplied;
+
+        if (vrScriptAttackPressed &&
+            !kb[KEY_ATTACK].active &&
+            !Key_IsCatcherActive(0, 0x33))
+        {
+            // Notify the same registered script listeners as +attack without
+            // mutating kb[KEY_ATTACK]. This preserves muzzle-obstruction and
+            // physical-mouse behavior while releasing F.N.G.'s blocking
+            // hip-fire keyHint as soon as a real VR shot is accepted.
+            const int matchedNotifications =
+                Cmd_NotifyVirtualCommand("+attack");
+
+            static unsigned int vrScriptAttackEdgeCount = 0u;
+            ++vrScriptAttackEdgeCount;
+
+            if (vrScriptAttackEdgeCount <= 12u ||
+                matchedNotifications > 0)
+            {
+                Com_Printf(
+                    0,
+                    "[VR][CAMPAIGN] V74 VR +attack notification "
+                    "matched %d script listener(s) on accepted shot "
+                    "edge %u.\n",
+                    matchedNotifications,
+                    vrScriptAttackEdgeCount);
+            }
+        }
+    }
+    else
+    {
+        vrScriptAttackWasApplied = false;
     }
 
     CL_FinishMove(result);
