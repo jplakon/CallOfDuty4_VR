@@ -1,5 +1,5 @@
 @echo off
-rem KisakCOD VR beta.11 defaults (setup, calibration, and interactions).
+rem KisakCOD VR beta.12 defaults (setup, calibration, and interactions).
 rem Do not put personal changes here: KisakCOD-VR-Configurator.exe writes a
 rem separate VR-User-Settings.bat under LocalAppData so upgrades preserve them.
 rem Profile: Tested Quest 3
@@ -160,7 +160,7 @@ set "KISAK_VR_BIND_MENU_BACK=right.secondary"
 set "KISAK_VR_BIND_MENU_BACK_ALT=unbound"
 set "KISAK_VR_BIND_MENU_AXIS=left.primary_axis"
 set "KISAK_VR_BIND_MENU_AXIS_ALT=unbound"
-set "KISAK_VR_BIND_GRENADE_LAUNCHER=right.thumbrest_touch+left.primary_axis.up"
+set "KISAK_VR_BIND_GRENADE_LAUNCHER=right.squeeze"
 set "KISAK_VR_BIND_GRENADE_LAUNCHER_ALT=unbound"
 set "KISAK_VR_BIND_NIGHT_VISION=right.thumbrest_touch+left.primary_axis.down"
 set "KISAK_VR_BIND_NIGHT_VISION_ALT=unbound"

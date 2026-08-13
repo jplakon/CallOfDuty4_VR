@@ -1,5 +1,57 @@
 # Changelog
 
+## v0.10.0-beta.12
+
+OpenVR compatibility, physical night-vision visor control, and controller
+default update over `v0.10.0-beta.11`.
+
+### OpenVR rendering and controller compatibility
+
+- Corrects the direct OpenVR projection convention used for gameplay eyes.
+- Preserves COD4's display-referred color bytes through the SteamVR-compatible
+  BGRA8/Auto submission path, avoiding the dark image and compositor rejection
+  produced by the earlier linear-color experiment.
+- Resolves semantic grip and aim components from SteamVR render models instead
+  of assuming each driver's raw controller origin is already a portable weapon
+  pose.
+- Adds a neutral-entry guard for legacy OpenVR thumbrest mission chords. Both
+  sticks must begin centered, right-stick movement cancels the selector, and
+  custom non-matching bindings are left alone.
+
+### Physical night-vision visor gesture
+
+- Adds one head-relative visor gesture state machine used by both OpenXR and
+  OpenVR.
+- Lowering begins with a new physical left-grip press at the crown; raising
+  begins with a new press close to the visor. A completed pull toggles night
+  vision exactly once when the grip is released.
+- Requires at least 12 cm of vertical travel, a valid tracked pose, and a
+  completed destination within 3.5 seconds; menus and tracking loss cancel the
+  motion safely.
+- Uses a compact face-close raising zone so a rifle foregrip below and farther
+  in front of the headset remains normal support-hand input. A grip that began
+  on the rifle cannot become a visor gesture mid-hold.
+
+### Default binding and compatibility
+
+- Makes physical Right grip / squeeze the fresh-profile default for Grenade
+  launcher / weapon slot 5 in both the configurator and packaged defaults.
+- Keeps Controller Input at schema V4. Existing profiles retain their saved
+  grenade-launcher binding instead of being silently rewritten.
+- Retains the complete beta.11 package, configurator, F.N.G., HUD, recenter,
+  prompt, campaign, calibration, and interaction work.
+
+### Validation
+
+- The OpenVR geometry, brightness, compositor delivery, and controller angle
+  path was verified on Meta Quest 3 through SteamVR.
+- The shared visor state machine and both backend integration routes are
+  covered by regression tests; the foregrip-safe gesture behavior was
+  confirmed on Quest 3 through SteamVR/OpenVR.
+- Retains all 142 settings/catalog checks and adds focused regression cases for
+  the OpenVR selector, visor state machine, foregrip isolation, new default,
+  and preservation of existing V4 bindings.
+
 ## v0.10.0-beta.11
 
 HUD recovery, separated recentering, dynamic VR prompts, and F.N.G. campaign

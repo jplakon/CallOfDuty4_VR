@@ -32,7 +32,8 @@ main thumbstick, or the trackpad on a Vive wand.
 | Pause | Off-hand menu |
 | Menu confirm / back | Weapon-hand primary / weapon-hand secondary |
 | Menu cursor | Off-hand primary axis |
-| Mission shortcuts | Weapon-hand thumbrest touch + off-hand primary-axis direction |
+| Grenade launcher / weapon slot 5 | Physical right grip / squeeze |
+| Other mission shortcuts | Right thumbrest touch + left primary-axis direction |
 | Mounted-scope zoom | Off-hand primary axis |
 
 The upward gesture is shown directly as the primary binding for **Jump**. It
@@ -59,7 +60,7 @@ the requested direction to the configured stick or trackpad label.
 
 Full-screen COD4 keyboard menus still show keyboard bindings. If VR is not
 initialized, a command has no unambiguous VR equivalent, or its semantic VR
-action is unbound, the original keyboard label is preserved. Beta.11 uses text
+action is unbound, the original keyboard label is preserved. Beta.12 uses text
 labels; controller artwork is a separate future phase.
 
 F.N.G.'s scripted training gates receive the same command semantics as the
@@ -89,17 +90,42 @@ The configurator warns when two gameplay actions share an input, but allows the
 choice because intentional overlaps are useful. Menu and context-specific axis
 bindings may overlap gameplay controls without a warning.
 
-The four mission shortcuts—grenade launcher, night vision, airstrike, and C4—
-are ordinary visible chord bindings. They can be replaced with single inputs
-on controllers that do not expose a thumbrest touch sensor. The default layout
-remains:
+The grenade-launcher shortcut uses the physical **Right grip / squeeze** in a
+fresh/default profile. Night vision, airstrike, and C4 remain visible chord
+bindings and can be replaced with single inputs on controllers that do not
+expose a thumbrest touch sensor. Existing profiles keep their saved binding.
+The remaining directional layout is:
 
 | Direction | Action |
 |---|---|
-| Up | Grenade launcher / weapon slot 5 |
 | Down | Night vision |
 | Left | Airstrike / mission slot 6 |
 | Right | C4 / mission slot 7 |
+
+On the legacy SteamVR/OpenVR controller path, a right-thumbrest directional
+chord must begin with both sticks centered. Touch and hold the centered right
+stick, then move the left stick in the requested direction. Moving the right
+stick cancels the selector so normal walking and turning cannot trigger one of
+these shortcuts.
+
+## Physical night-vision visor gesture
+
+The physical left grip also supports a headset-relative visor gesture through
+both OpenXR and OpenVR:
+
+- To lower the visor, start with the grip released, reach the left controller
+  to the top of the head, press and hold left grip, pull down in front of the
+  eyes, and release.
+- To raise the visor, start with the grip released, reach close to the visor in
+  front of the face, press and hold left grip, pull up to the crown, and
+  release.
+
+The motion toggles night vision on release after at least 12 cm of vertical
+travel. A press that starts on the rifle foregrip stays a normal support-hand
+grip even if the held controller later moves toward the face. Opening a menu,
+losing tracking, leaving the safe travel envelope, or holding longer than 3.5
+seconds cancels the gesture. The configured Night vision action remains
+available as a button/chord fallback.
 
 ## Live HUD editor recovery controls
 

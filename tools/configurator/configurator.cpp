@@ -54,7 +54,7 @@ constexpr wchar_t kHudEditorClass[] =
 constexpr wchar_t kWeaponEditorClass[] =
     L"KisakCODVrWeaponCalibrationEditorV65";
 constexpr wchar_t kWindowTitle[] =
-    L"KisakCOD VR Configurator - v0.10.0-beta.11";
+    L"KisakCOD VR Configurator - v0.10.0-beta.12";
 
 constexpr int kWindowWidth = 1160;
 constexpr int kWindowHeight = 790;

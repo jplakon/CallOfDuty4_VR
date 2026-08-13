@@ -1,6 +1,7 @@
 #include "vr/vr_openxr.h"
 #include "vr/vr_input_bindings.h"
 #include "vr/vr_calibration.h"
+#include "vr/vr_gestures.h"
 #include "vr/vr_hud_layout.h"
 #include "vr/vr_interactions.h"
 #include "vr/vr_openvr_input.h"
@@ -52,6 +53,7 @@ namespace
 using Microsoft::WRL::ComPtr;
 namespace VrInput = kisak::vr::input;
 namespace VrCalibration = kisak::vr::calibration;
+namespace VrGestures = kisak::vr::gestures;
 namespace VrHud = kisak::vr::hud;
 namespace VrInteractions = kisak::vr::interactions;
 namespace VrPrompts = kisak::vr::prompts;
@@ -84,6 +86,7 @@ VrRuntimeBackend g_vrRuntimeBackend =
 
 vr::IVRSystem* g_vrOpenVrSystem = nullptr;
 vr::IVRCompositor* g_vrOpenVrCompositor = nullptr;
+vr::IVRRenderModels* g_vrOpenVrRenderModels = nullptr;
 
 std::array<
     vr::TrackedDevicePose_t,
@@ -99,6 +102,33 @@ std::array<VrInput::OpenVrHandState, 2>
 
 std::array<bool, 2>
     g_vrOpenVrLoggedController = {};
+
+// KISAK_SP_VR_OPENVR_MISSION_SELECTOR_V79
+// SteamVR's legacy Oculus state aliases thumbrest contact to joystick touch.
+// Require a neutral-entry gesture for the default mission chords so walking
+// plus turning cannot fire night vision or weapon-slot shortcuts.
+VrInput::OpenVrMissionSelectorState
+    g_vrOpenVrMissionSelector = {};
+bool g_vrOpenVrLoggedMissionSelector = false;
+
+// KISAK_SP_VR_OPENVR_SEMANTIC_CONTROLLER_POSES_V77
+// OpenVR's tracked-device pose is the driver's controller origin, not a
+// portable grip or pointing pose. Cache the render-model components SteamVR
+// publishes for those semantic coordinate systems so Oculus Touch, Index,
+// PSVR2, and other controllers do not need headset-specific angle offsets.
+struct VrOpenVrControllerPoseComponents
+{
+    vr::TrackedDeviceIndex_t deviceIndex =
+        vr::k_unTrackedDeviceIndexInvalid;
+    bool resolved = false;
+    bool stateFailureLogged = false;
+    std::array<char, 256> renderModelName = {};
+    const char* gripComponent = nullptr;
+    const char* aimComponent = nullptr;
+};
+
+std::array<VrOpenVrControllerPoseComponents, 2>
+    g_vrOpenVrControllerPoseComponents = {};
 
 std::array<char, 256> g_vrCompatibilityRuntimeName = {};
 std::array<char, 256> g_vrCompatibilityHeadsetName = {};
@@ -119,6 +149,7 @@ XrAction g_vrGripPoseAction = XR_NULL_HANDLE;
 XrAction g_vrPalmPoseAction = XR_NULL_HANDLE;
 XrAction g_vrAimPoseAction = XR_NULL_HANDLE;
 XrAction g_vrHapticOutputAction = XR_NULL_HANDLE;
+XrAction g_vrNightVisionGestureGripAction = XR_NULL_HANDLE;
 
 using VrInputTermActions = std::array<
     std::array<
@@ -139,6 +170,17 @@ std::array<bool, VrInput::kActionCount>
     g_vrInputActionPreviousHeld = {};
 
 bool g_vrMissionShortcutArmed = true;
+
+// KISAK_SP_VR_NIGHT_VISION_VISOR_GESTURE_V80
+// Both runtime backends feed the physical left grip and its tracked pose into
+// one head-relative state machine. The detector consumes that grip only after
+// a crown/visor press has armed, so ordinary support-grip use is unchanged.
+// KISAK_SP_VR_NIGHT_VISION_VISOR_FOREGRIP_GUARD_V81
+// Raising arms only inside a face-close ellipsoid; the broader visor region
+// remains a forgiving destination for the crown-to-visor lowering motion.
+VrGestures::NightVisionVisorState
+    g_vrNightVisionVisorGesture = {};
+bool g_vrLoggedNightVisionVisorGesture = false;
 
 std::array<bool, VrInput::kOpenXrProfileCount>
     g_vrEnabledOpenXrProfiles = {};
@@ -506,22 +548,23 @@ ComPtr<ID3D11Texture2D>
 ComPtr<ID3D11ShaderResourceView>
     g_vrCapturedStereoView;
 
-// KISAK_SP_VR_SRGB_CAPTURE_DECODE_V1
+// KISAK_SP_VR_CAPTURE_COLOR_TRANSFER_V78
 // COD4's D3D9 backbuffer contains display-referred sRGB values, although
-// D3D9Ex exposes the shared resource to D3D11 as plain BGRA UNORM.  Keep one
-// typeless copy per producer slot so an sRGB SRV can perform the required
-// hardware decode before the sRGB OpenXR swapchain encodes the result once.
+// D3D9Ex exposes the shared resource to D3D11 as plain BGRA UNORM. Keep one
+// typeless copy per producer slot so OpenXR can sample through an sRGB SRV,
+// while legacy OpenVR can preserve the encoded bytes through a UNORM SRV for
+// its compatible 8-bit Auto/gamma submission path.
 std::array<
     ComPtr<ID3D11Texture2D>,
     kVrD3D9SharedFrameSlotCount>
-    g_vrSrgbDecodedSharedTextures = {};
+    g_vrCapturedSharedTextures = {};
 
 std::array<
     ComPtr<ID3D11ShaderResourceView>,
     kVrD3D9SharedFrameSlotCount>
-    g_vrSrgbDecodedSharedViews = {};
+    g_vrCapturedSharedViews = {};
 
-bool g_vrLoggedSrgbCaptureDecode = false;
+bool g_vrLoggedCaptureColorTransfer = false;
 
 std::uint32_t g_vrCapturedStereoWidth = 0u;
 std::uint32_t g_vrCapturedStereoHeight = 0u;
@@ -1685,7 +1728,7 @@ const VrConfiguratorSettings& VR_GetConfiguratorSettings()
 
         Com_Printf(
             0,
-            "[VR][CONFIG] beta.11 customization loaded: snap %.0f, turn "
+            "[VR][CONFIG] beta.12 customization loaded: snap %.0f, turn "
             "deadzone %.2f, movement deadzone %.2f, two-hand %.2f; "
             "belt forward %.1f, height %.1f, hip %.1f +/- %.1f %s.\n",
             loaded.snapTurnAngleDegrees,
@@ -5176,6 +5219,43 @@ void VR_AbandonCurrentSharedFrameForFallback()
     g_vrCurrentSharedSerial = 0u;
 }
 
+DXGI_FORMAT VR_CapturedStereoSampleFormat()
+{
+    return
+        g_vrRuntimeBackend ==
+                VrRuntimeBackend::OpenVr
+            ? DXGI_FORMAT_B8G8R8A8_UNORM
+            : DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+}
+
+void VR_LogCapturedStereoColorTransfer()
+{
+    if (g_vrLoggedCaptureColorTransfer)
+    {
+        return;
+    }
+
+    if (g_vrRuntimeBackend ==
+        VrRuntimeBackend::OpenVr)
+    {
+        Com_Printf(
+            0,
+            "[VR][OPENVR][COLOR] V78 preserving gamma-encoded "
+            "D3D9 capture through a BGRA8 UNORM view; SteamVR "
+            "submission uses ColorSpace_Auto.\n");
+    }
+    else
+    {
+        Com_Printf(
+            0,
+            "[VR] D3D9 capture is now sampled as sRGB before "
+            "the sRGB OpenXR swapchain; double-gamma "
+            "brightness is removed.\n");
+    }
+
+    g_vrLoggedCaptureColorTransfer = true;
+}
+
 bool VR_OpenGpuSharedStereoFrame(
     const VrD3D9SharedFrame& frame)
 {
@@ -5229,12 +5309,15 @@ bool VR_OpenGpuSharedStereoFrame(
     }
 
     ComPtr<ID3D11Texture2D>& decodedTexture =
-        g_vrSrgbDecodedSharedTextures[
+        g_vrCapturedSharedTextures[
             frame.slotIndex];
 
     ComPtr<ID3D11ShaderResourceView>& decodedView =
-        g_vrSrgbDecodedSharedViews[
+        g_vrCapturedSharedViews[
             frame.slotIndex];
+
+    const DXGI_FORMAT capturedViewFormat =
+        VR_CapturedStereoSampleFormat();
 
     bool recreateDecodedTexture =
         decodedTexture == nullptr ||
@@ -5250,6 +5333,19 @@ bool VR_OpenGpuSharedStereoFrame(
             decodedDescription.Height != frame.height ||
             decodedDescription.Format !=
                 DXGI_FORMAT_B8G8R8A8_TYPELESS;
+
+        if (!recreateDecodedTexture)
+        {
+            D3D11_SHADER_RESOURCE_VIEW_DESC
+                decodedViewDescription = {};
+
+            decodedView->GetDesc(
+                &decodedViewDescription);
+
+            recreateDecodedTexture =
+                decodedViewDescription.Format !=
+                    capturedViewFormat;
+        }
     }
 
     if (recreateDecodedTexture)
@@ -5279,7 +5375,7 @@ bool VR_OpenGpuSharedStereoFrame(
             decodedTexture == nullptr)
         {
             VR_LogHrFailure(
-                "CreateTexture2D(sRGB capture decode)",
+                "CreateTexture2D(capture color transfer)",
                 hr);
 
             return false;
@@ -5289,7 +5385,7 @@ bool VR_OpenGpuSharedStereoFrame(
             decodedViewDescription = {};
 
         decodedViewDescription.Format =
-            DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+            capturedViewFormat;
         decodedViewDescription.ViewDimension =
             D3D11_SRV_DIMENSION_TEXTURE2D;
         decodedViewDescription.Texture2D.MostDetailedMip = 0u;
@@ -5305,7 +5401,7 @@ bool VR_OpenGpuSharedStereoFrame(
             decodedView == nullptr)
         {
             VR_LogHrFailure(
-                "CreateShaderResourceView(sRGB capture decode)",
+                "CreateShaderResourceView(capture color transfer)",
                 hr);
 
             decodedTexture.Reset();
@@ -5319,8 +5415,9 @@ bool VR_OpenGpuSharedStereoFrame(
     }
 
     // Copying within the BGRA8 format family preserves the encoded bytes.
-    // Sampling the typeless destination through its sRGB view then decodes
-    // those bytes to linear light without a per-pixel pow() shader cost.
+    // OpenXR decodes them through an sRGB view. OpenVR deliberately samples
+    // them through a UNORM view so the working Auto/gamma compositor path
+    // receives display-referred values instead of rejecting Linear mode.
     g_vrD3dContext->CopyResource(
         decodedTexture.Get(),
         sharedTexture.Get());
@@ -5330,16 +5427,7 @@ bool VR_OpenGpuSharedStereoFrame(
     g_vrCapturedStereoView =
         decodedView;
 
-    if (!g_vrLoggedSrgbCaptureDecode)
-    {
-        Com_Printf(
-            0,
-            "[VR] D3D9 capture is now sampled as sRGB before "
-            "the sRGB OpenXR swapchain; double-gamma "
-            "brightness is removed.\n");
-
-        g_vrLoggedSrgbCaptureDecode = true;
-    }
+    VR_LogCapturedStereoColorTransfer();
 
     g_vrCapturedStereoWidth =
         frame.width;
@@ -5440,9 +5528,29 @@ bool VR_UpdateCapturedStereoTexture()
             nullptr;
     }
 
-    if (!g_vrCapturedStereoTexture ||
+    const DXGI_FORMAT capturedViewFormat =
+        VR_CapturedStereoSampleFormat();
+
+    bool recreateCapturedTexture =
+        !g_vrCapturedStereoTexture ||
+        !g_vrCapturedStereoView ||
         width != g_vrCapturedStereoWidth ||
-        height != g_vrCapturedStereoHeight)
+        height != g_vrCapturedStereoHeight;
+
+    if (!recreateCapturedTexture)
+    {
+        D3D11_SHADER_RESOURCE_VIEW_DESC
+            currentViewDescription = {};
+
+        g_vrCapturedStereoView->GetDesc(
+            &currentViewDescription);
+
+        recreateCapturedTexture =
+            currentViewDescription.Format !=
+                capturedViewFormat;
+    }
+
+    if (recreateCapturedTexture)
     {
         g_vrCapturedStereoView.Reset();
         g_vrCapturedStereoTexture.Reset();
@@ -5452,8 +5560,8 @@ bool VR_UpdateCapturedStereoTexture()
         textureDescription.Height = height;
         textureDescription.MipLevels = 1;
         textureDescription.ArraySize = 1;
-        // Upload the gamma-encoded D3D9 bytes into a typeless
-        // texture so the SRV can decode them as sRGB during sampling.
+        // Upload the gamma-encoded D3D9 bytes into a typeless texture so the
+        // runtime-specific SRV can either decode or preserve them.
         textureDescription.Format =
             DXGI_FORMAT_B8G8R8A8_TYPELESS;
         textureDescription.SampleDesc.Count = 1;
@@ -5482,7 +5590,7 @@ bool VR_UpdateCapturedStereoTexture()
             capturedViewDescription = {};
 
         capturedViewDescription.Format =
-            DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+            capturedViewFormat;
         capturedViewDescription.ViewDimension =
             D3D11_SRV_DIMENSION_TEXTURE2D;
         capturedViewDescription.Texture2D.MostDetailedMip = 0u;
@@ -5521,6 +5629,8 @@ bool VR_UpdateCapturedStereoTexture()
     VR_RecordCapturedStereoPose(metadata);
 
     g_vrUploadedStereoSerial = serial;
+
+    VR_LogCapturedStereoColorTransfer();
 
     if (!g_vrLoggedCaptureBufferHandoff)
     {
@@ -8622,6 +8732,14 @@ void VR_DestroyControllerInput()
         g_vrHapticOutputAction = XR_NULL_HANDLE;
     }
 
+    if (g_vrNightVisionGestureGripAction != XR_NULL_HANDLE)
+    {
+        xrDestroyAction(
+            g_vrNightVisionGestureGripAction);
+        g_vrNightVisionGestureGripAction =
+            XR_NULL_HANDLE;
+    }
+
     for (auto& actionBindings : g_vrInputTermActions)
     {
         for (auto& bindingTerms : actionBindings)
@@ -8680,6 +8798,8 @@ void VR_DestroyControllerInput()
     g_vrInputActionPreviousHeld.fill(false);
     g_vrDirectionalTermLatched = {};
     g_vrMissionShortcutArmed = true;
+    g_vrNightVisionVisorGesture = {};
+    g_vrLoggedNightVisionVisorGesture = false;
 
     {
         std::lock_guard<std::mutex> lock(
@@ -9432,6 +9552,29 @@ bool VR_SuggestControllerBindings()
                     "/user/hand/right/output/haptic");
         }
 
+        if (pathsValid)
+        {
+            const char* const leftSqueezeComponent =
+                VrInput::ResolveOpenXrComponent(
+                    profile.profile,
+                    VrInput::Source::LeftSqueeze);
+
+            if (leftSqueezeComponent != nullptr)
+            {
+                std::array<char, 128> leftSqueezePath = {};
+                std::snprintf(
+                    leftSqueezePath.data(),
+                    leftSqueezePath.size(),
+                    "/user/hand/left%s",
+                    leftSqueezeComponent);
+
+                pathsValid =
+                    appendPath(
+                        g_vrNightVisionGestureGripAction,
+                        leftSqueezePath.data());
+            }
+        }
+
         if (pathsValid &&
             VrInput::OpenXrProfileHasPalmPose(profile.profile) &&
             g_vrPalmPoseExtensionEnabled &&
@@ -9644,7 +9787,12 @@ bool VR_CreateControllerActions()
             XR_ACTION_TYPE_VIBRATION_OUTPUT,
             "haptic_output",
             "Haptic Output",
-            &g_vrHapticOutputAction))
+            &g_vrHapticOutputAction) ||
+        !VR_CreateControllerAction(
+            XR_ACTION_TYPE_BOOLEAN_INPUT,
+            "night_vision_gesture_grip",
+            "Night Vision Visor Grip",
+            &g_vrNightVisionGestureGripAction))
     {
         VR_DestroyControllerInput();
         return false;
@@ -10149,6 +10297,130 @@ void VR_LogControllerPoseSnapshot(
         aimForward.z,
         triggerValue,
         squeezeValue);
+}
+
+bool VR_GetNightVisionGestureHeadLocalPosition(
+    const XrPosef& leftGripPose,
+    VrGestures::HeadLocalPosition* const position)
+{
+    if (position == nullptr ||
+        g_vrViews.size() < kVrStereoEyeCount)
+    {
+        return false;
+    }
+
+    const XrQuaternionf headOrientation =
+        VR_NormalizeQuaternion(
+            g_vrViews[0].pose.orientation);
+
+    const XrVector3f headCenter = {
+        (g_vrViews[0].pose.position.x +
+         g_vrViews[1].pose.position.x) * 0.5f,
+        (g_vrViews[0].pose.position.y +
+         g_vrViews[1].pose.position.y) * 0.5f,
+        (g_vrViews[0].pose.position.z +
+         g_vrViews[1].pose.position.z) * 0.5f,
+    };
+
+    const VrHeadVector headLocal =
+        VR_RotateHeadVector(
+            VR_ConjugateQuaternion(
+                headOrientation),
+            {
+                leftGripPose.position.x - headCenter.x,
+                leftGripPose.position.y - headCenter.y,
+                leftGripPose.position.z - headCenter.z,
+            });
+
+    position->x = headLocal.x;
+    position->y = headLocal.y;
+    position->z = headLocal.z;
+
+    return VrGestures::IsFinite(*position);
+}
+
+VrGestures::NightVisionVisorUpdate
+VR_UpdateNightVisionVisorGesture(
+    const bool gripPoseValid,
+    const XrPosef& leftGripPose,
+    const bool gripAvailable,
+    const bool gripHeld,
+    const char* const backendLabel)
+{
+    VrGestures::HeadLocalPosition position = {};
+    const bool positionValid =
+        gripPoseValid &&
+        VR_GetNightVisionGestureHeadLocalPosition(
+            leftGripPose,
+            &position);
+
+    const bool gameplayAllowed =
+        clientUIActives[0].connectionState == CA_ACTIVE &&
+        !Key_IsCatcherActive(0, 0x10);
+
+    const VrGestures::NightVisionVisorUpdate update =
+        VrGestures::UpdateNightVisionVisorGesture(
+            &g_vrNightVisionVisorGesture,
+            gameplayAllowed,
+            gripAvailable,
+            gripHeld,
+            positionValid,
+            position,
+            static_cast<std::uint32_t>(
+                Sys_Milliseconds()));
+
+    if (update.available &&
+        !g_vrLoggedNightVisionVisorGesture)
+    {
+        Com_Printf(
+            0,
+            "[VR][GESTURE][NIGHT_VISION] V81 foregrip-safe left-grip "
+            "visor gesture is active through %s: grip at the crown and "
+            "pull down, or grip at the visor and pull up; release "
+            "to toggle.\n",
+            backendLabel != nullptr
+                ? backendLabel
+                : "the active runtime");
+        g_vrLoggedNightVisionVisorGesture = true;
+    }
+
+    if (VR_VerboseDiagnosticsEnabled() &&
+        update.armedThisFrame)
+    {
+        Com_Printf(
+            0,
+            "[VR][GESTURE][NIGHT_VISION] Armed visor-%s gesture "
+            "at head-local %.3f %.3f %.3f m.\n",
+            g_vrNightVisionVisorGesture.direction ==
+                    VrGestures::NightVisionVisorDirection::Lower
+                ? "lowering"
+                : "raising",
+            position.x,
+            position.y,
+            position.z);
+    }
+
+    if (update.toggledThisFrame)
+    {
+        Com_Printf(
+            0,
+            "[VR][GESTURE][NIGHT_VISION] Visor pulled %s and "
+            "released; queued one night-vision toggle.\n",
+            update.completedDirection ==
+                    VrGestures::NightVisionVisorDirection::Lower
+                ? "down"
+                : "up");
+    }
+    else if (VR_VerboseDiagnosticsEnabled() &&
+             update.cancelledThisFrame)
+    {
+        Com_Printf(
+            0,
+            "[VR][GESTURE][NIGHT_VISION] Cancelled incomplete "
+            "visor gesture.\n");
+    }
+
+    return update;
 }
 
 
@@ -12033,6 +12305,31 @@ void VR_UpdateControllerActions(
     const VrConfiguratorSettings& configurable =
         VR_GetConfiguratorSettings();
 
+    bool nightVisionGestureGripPressed = false;
+    bool nightVisionGestureGripActive = false;
+    const bool nightVisionGestureGripValid =
+        VR_GetControllerBooleanState(
+            g_vrNightVisionGestureGripAction,
+            g_vrControllerHandPaths[
+                VR_CONTROLLER_LEFT],
+            &nightVisionGestureGripPressed,
+            &nightVisionGestureGripActive);
+
+    const VrControllerRenderPose&
+        nightVisionGesturePose =
+            g_vrControllerRenderPoses[
+                VR_CONTROLLER_LEFT];
+
+    const VrGestures::NightVisionVisorUpdate
+        nightVisionGesture =
+            VR_UpdateNightVisionVisorGesture(
+                nightVisionGesturePose.gripValid,
+                nightVisionGesturePose.gripPose,
+                nightVisionGestureGripValid &&
+                    nightVisionGestureGripActive,
+                nightVisionGestureGripPressed,
+                "OpenXR");
+
     for (const VrInput::ActionDefinition& action :
          VrInput::ActionDefinitions())
     {
@@ -12122,6 +12419,13 @@ void VR_UpdateControllerActions(
                         termHeld = valid && active && pressed;
                     }
 
+                    if (nightVisionGesture.consumeLeftGrip &&
+                        source ==
+                            VrInput::Source::LeftSqueeze)
+                    {
+                        termHeld = false;
+                    }
+
                     const bool missionShortcut =
                         action.action == VrInput::Action::GrenadeLauncher ||
                         action.action == VrInput::Action::NightVision ||
@@ -12182,6 +12486,13 @@ void VR_UpdateControllerActions(
                 selectedMagnitudeSquared = magnitudeSquared;
             }
         }
+    }
+
+    if (nightVisionGesture.toggledThisFrame)
+    {
+        inputHeld[
+            static_cast<std::size_t>(
+                VrInput::Action::NightVision)] = true;
     }
 
     const auto isHeld = [&inputHeld](
@@ -14337,6 +14648,225 @@ bool VR_RenderSolidColorFrame(
     return true;
 }
 
+// KISAK_SP_VR_OPENVR_MENU_OPTICAL_CENTER_V76
+// OpenXR can submit the same centered pose/FOV for both eyes while the
+// monoscopic menu is active. OpenVR owns its per-eye projection at Submit(),
+// so place the copied menu into an equal tangent-space rectangle instead.
+// This keeps every menu pixel on the same visual ray even when a runtime such
+// as AVP/ALVR reports strongly asymmetric left/right optical centers.
+bool VR_ConfigureOpenVrMenuComfortViewport(
+    const std::uint32_t eyeIndex,
+    const float sourceAspect,
+    const int32_t targetWidth,
+    const int32_t targetHeight,
+    D3D11_VIEWPORT* viewport)
+{
+    if (eyeIndex >= kVrStereoEyeCount ||
+        !std::isfinite(sourceAspect) ||
+        sourceAspect <= 0.0f ||
+        targetWidth <= 0 ||
+        targetHeight <= 0 ||
+        viewport == nullptr)
+    {
+        return false;
+    }
+
+    std::array<
+        VrEyeProjectionTangents,
+        kVrStereoEyeCount>
+        projections = {};
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrProjectionMutex);
+
+        if (!g_vrEyeProjectionValid)
+        {
+            return false;
+        }
+
+        projections =
+            g_vrEyeProjectionTangents;
+    }
+
+    float commonHorizontal =
+        (std::min)(
+            -projections[0].left,
+            projections[0].right);
+
+    float commonVertical =
+        (std::min)(
+            -projections[0].down,
+            projections[0].up);
+
+    for (std::uint32_t projectionIndex = 0u;
+         projectionIndex < kVrStereoEyeCount;
+         ++projectionIndex)
+    {
+        const VrEyeProjectionTangents& projection =
+            projections[projectionIndex];
+
+        const float horizontalSpan =
+            projection.right - projection.left;
+
+        const float verticalSpan =
+            projection.up - projection.down;
+
+        if (!std::isfinite(projection.left) ||
+            !std::isfinite(projection.right) ||
+            !std::isfinite(projection.down) ||
+            !std::isfinite(projection.up) ||
+            horizontalSpan <= 0.0f ||
+            verticalSpan <= 0.0f ||
+            projection.left >= 0.0f ||
+            projection.right <= 0.0f ||
+            projection.down >= 0.0f ||
+            projection.up <= 0.0f)
+        {
+            return false;
+        }
+
+        commonHorizontal =
+            (std::min)(
+                commonHorizontal,
+                (std::min)(
+                    -projection.left,
+                    projection.right));
+
+        commonVertical =
+            (std::min)(
+                commonVertical,
+                (std::min)(
+                    -projection.down,
+                    projection.up));
+    }
+
+    constexpr float projectionSafetyMargin =
+        0.90f;
+
+    const float maximumHorizontal =
+        projectionSafetyMargin *
+        commonHorizontal;
+
+    const float maximumVertical =
+        projectionSafetyMargin *
+        commonVertical;
+
+    // Match the centered OpenXR comfort projection whenever the runtime has
+    // room for it, then shrink uniformly in tangent space on narrower HMDs.
+    float halfTangentX =
+        (std::min)(
+            std::tan(0.62f),
+            maximumHorizontal);
+
+    const float requestedMaximumY =
+        (std::min)(
+            std::tan(0.38f),
+            maximumVertical);
+
+    float halfTangentY =
+        halfTangentX /
+        sourceAspect;
+
+    if (halfTangentY >
+        requestedMaximumY)
+    {
+        halfTangentY =
+            requestedMaximumY;
+
+        halfTangentX =
+            halfTangentY *
+            sourceAspect;
+    }
+
+    if (!std::isfinite(halfTangentX) ||
+        !std::isfinite(halfTangentY) ||
+        halfTangentX <= 0.0f ||
+        halfTangentY <= 0.0f ||
+        halfTangentX > maximumHorizontal ||
+        halfTangentY > maximumVertical)
+    {
+        return false;
+    }
+
+    const VrEyeProjectionTangents& projection =
+        projections[eyeIndex];
+
+    const float horizontalSpan =
+        projection.right - projection.left;
+
+    const float verticalSpan =
+        projection.up - projection.down;
+
+    const float leftUv =
+        (-halfTangentX - projection.left) /
+        horizontalSpan;
+
+    const float rightUv =
+        (halfTangentX - projection.left) /
+        horizontalSpan;
+
+    const float topUv =
+        (projection.up - halfTangentY) /
+        verticalSpan;
+
+    const float bottomUv =
+        (projection.up + halfTangentY) /
+        verticalSpan;
+
+    if (leftUv < 0.0f ||
+        rightUv > 1.0f ||
+        topUv < 0.0f ||
+        bottomUv > 1.0f ||
+        leftUv >= rightUv ||
+        topUv >= bottomUv)
+    {
+        return false;
+    }
+
+    viewport->TopLeftX =
+        leftUv *
+        static_cast<float>(targetWidth);
+
+    viewport->TopLeftY =
+        topUv *
+        static_cast<float>(targetHeight);
+
+    viewport->Width =
+        (rightUv - leftUv) *
+        static_cast<float>(targetWidth);
+
+    viewport->Height =
+        (bottomUv - topUv) *
+        static_cast<float>(targetHeight);
+
+    viewport->MinDepth = 0.0f;
+    viewport->MaxDepth = 1.0f;
+
+    static std::array<bool, kVrStereoEyeCount>
+        loggedViewport = {};
+
+    if (!loggedViewport[eyeIndex])
+    {
+        Com_Printf(
+            0,
+            "[VR][OPENVR][MENU] V76 optical-center comfort "
+            "viewport eye %u: center %.4f %.4f, size %.4f %.4f, "
+            "half tangents %.4f %.4f.\n",
+            eyeIndex,
+            0.5f * (leftUv + rightUv),
+            0.5f * (topUv + bottomUv),
+            rightUv - leftUv,
+            bottomUv - topUv,
+            halfTangentX,
+            halfTangentY);
+
+        loggedViewport[eyeIndex] = true;
+    }
+
+    return true;
+}
+
 bool VR_RenderOpenVrEye(
     const std::uint32_t eyeIndex,
     const std::array<XrView, kVrStereoEyeCount>&
@@ -14405,33 +14935,47 @@ bool VR_RenderOpenVrEye(
             static_cast<float>(
                 g_vrCapturedStereoHeight);
 
-        const float targetAspect =
-            static_cast<float>(eyeTarget.width) /
-            static_cast<float>(eyeTarget.height);
+        const bool opticalCenterViewport =
+            VR_ConfigureOpenVrMenuComfortViewport(
+                eyeIndex,
+                sourceAspect,
+                eyeTarget.width,
+                eyeTarget.height,
+                &viewport);
 
-        if (sourceAspect > targetAspect)
+        // Retain the beta.11 centered-pixel fallback if SteamVR ever fails to
+        // publish usable projection tangents. Normal OpenVR initialization
+        // publishes them before the first frame.
+        if (!opticalCenterViewport)
         {
-            viewport.Height =
-                viewport.Width /
-                sourceAspect;
+            const float targetAspect =
+                static_cast<float>(eyeTarget.width) /
+                static_cast<float>(eyeTarget.height);
 
-            viewport.TopLeftY =
-                0.5f *
-                (static_cast<float>(
-                     eyeTarget.height) -
-                 viewport.Height);
-        }
-        else
-        {
-            viewport.Width =
-                viewport.Height *
-                sourceAspect;
+            if (sourceAspect > targetAspect)
+            {
+                viewport.Height =
+                    viewport.Width /
+                    sourceAspect;
 
-            viewport.TopLeftX =
-                0.5f *
-                (static_cast<float>(
-                     eyeTarget.width) -
-                 viewport.Width);
+                viewport.TopLeftY =
+                    0.5f *
+                    (static_cast<float>(
+                         eyeTarget.height) -
+                     viewport.Height);
+            }
+            else
+            {
+                viewport.Width =
+                    viewport.Height *
+                    sourceAspect;
+
+                viewport.TopLeftX =
+                    0.5f *
+                    (static_cast<float>(
+                         eyeTarget.width) -
+                     viewport.Width);
+            }
         }
     }
 
@@ -14626,10 +15170,16 @@ void VR_ResetState()
     g_vrPalmPoseExtensionEnabled = false;
     g_vrEnabledOpenXrProfiles.fill(false);
     g_vrOpenVrInitialized = false;
+    g_vrOpenVrRenderModels = nullptr;
     g_vrOpenVrLoggedFirstPose = false;
     g_vrOpenVrLoggedFirstSubmit = false;
     g_vrOpenVrHands = {};
     g_vrOpenVrLoggedController.fill(false);
+    g_vrOpenVrMissionSelector = {};
+    g_vrOpenVrLoggedMissionSelector = false;
+    g_vrOpenVrControllerPoseComponents = {};
+    g_vrNightVisionVisorGesture = {};
+    g_vrLoggedNightVisionVisorGesture = false;
     g_vrCompatibilityRuntimeName.fill('\0');
     g_vrCompatibilityHeadsetName.fill('\0');
     for (auto& profile : g_vrCompatibilityControllerProfiles)
@@ -16683,7 +17233,7 @@ bool VR_UpdateManualGrenadeInput(
     {
         Com_Printf(
             0,
-            "[VR][GRENADE] beta.11 handed manual hip grenades are %s. "
+            "[VR][GRENADE] beta.12 handed manual hip grenades are %s. "
             "Belt layout %s; release/toggle the off-hand grip to throw.\n",
             *manualModeEnabled
                 ? "enabled"
@@ -17021,7 +17571,7 @@ void VR_EnsureWeaponProfilesLoaded()
     {
         Com_Printf(
             0,
-            "[VR][WEAPON PROFILE] beta.11 loaded revision %s; %u weapon "
+                "[VR][WEAPON PROFILE] beta.12 loaded revision %s; %u weapon "
             "override(s), %u gunstock profile(s), active '%s'.\n",
             g_vrWeaponProfilesRevision.c_str(),
             static_cast<unsigned int>(g_vrWeaponProfiles.weapons.size()),
@@ -20731,13 +21281,16 @@ bool VR_ConfigureOpenVrViews()
         VrEyeProjectionTangents& tangents =
             publishedTangents[eyeIndex];
 
-        // OpenVR raw projection uses negative top and positive bottom.
-        // Normalize it to the OpenXR-style tangents used by the existing
-        // KisakCOD stereo renderer: left/down negative, right/up positive.
+        // KISAK_SP_VR_OPENVR_PROJECTION_CONVENTION_V77
+        // GetProjectionRaw reports negative top and positive bottom in
+        // OpenVR's texture convention. Those values map directly to the
+        // negative down and positive up tangents consumed by KisakCOD's
+        // OpenXR-style renderer. Negating and exchanging them mirrored the
+        // vertical optical asymmetry and warped SteamVR gameplay.
         tangents.left = left;
         tangents.right = right;
-        tangents.down = -bottom;
-        tangents.up = -top;
+        tangents.down = top;
+        tangents.up = bottom;
 
         if (!std::isfinite(tangents.left) ||
             !std::isfinite(tangents.right) ||
@@ -21073,6 +21626,24 @@ bool VR_InitOpenVrFallback(
     g_vrOpenVrCompositor->SetTrackingSpace(
         vr::TrackingUniverseStanding);
 
+    g_vrOpenVrRenderModels =
+        vr::VRRenderModels();
+
+    if (g_vrOpenVrRenderModels == nullptr)
+    {
+        Com_PrintWarning(
+            0,
+            "[VR][OPENVR][POSE] IVRRenderModels is unavailable; "
+            "controller poses will retain the raw-device fallback.\n");
+    }
+    else
+    {
+        Com_Printf(
+            0,
+            "[VR][OPENVR][POSE] V77 semantic grip/aim component "
+            "discovery is available.\n");
+    }
+
     VR_LogOpenVrIdentity();
 
     if (!VR_CreateOpenVrD3D11Device() ||
@@ -21092,6 +21663,7 @@ bool VR_InitOpenVrFallback(
                 : "OpenVR graphics initialization failed.");
 
         vr::VR_Shutdown();
+        g_vrOpenVrRenderModels = nullptr;
         g_vrOpenVrCompositor = nullptr;
         g_vrOpenVrSystem = nullptr;
         g_vrOpenVrInitialized = false;
@@ -21619,6 +22191,178 @@ bool VR_UpdateOpenVrHeadPose()
     return true;
 }
 
+const char* VR_FindOpenVrControllerComponent(
+    const char* renderModelName,
+    const std::array<const char*, 2>& candidates)
+{
+    if (g_vrOpenVrRenderModels == nullptr ||
+        renderModelName == nullptr ||
+        renderModelName[0] == '\0')
+    {
+        return nullptr;
+    }
+
+    for (const char* candidate : candidates)
+    {
+        if (candidate != nullptr &&
+            g_vrOpenVrRenderModels->RenderModelHasComponent(
+                renderModelName,
+                candidate))
+        {
+            return candidate;
+        }
+    }
+
+    return nullptr;
+}
+
+bool VR_ResolveOpenVrControllerPoseComponents(
+    const std::size_t handIndex,
+    const VrInput::OpenVrHandState& hand)
+{
+    if (handIndex >=
+            g_vrOpenVrControllerPoseComponents.size() ||
+        g_vrOpenVrSystem == nullptr ||
+        g_vrOpenVrRenderModels == nullptr ||
+        hand.deviceIndex ==
+            vr::k_unTrackedDeviceIndexInvalid)
+    {
+        return false;
+    }
+
+    VrOpenVrControllerPoseComponents& components =
+        g_vrOpenVrControllerPoseComponents[handIndex];
+
+    if (components.deviceIndex != hand.deviceIndex)
+    {
+        components = {};
+        components.deviceIndex = hand.deviceIndex;
+    }
+
+    if (components.resolved)
+    {
+        return components.gripComponent != nullptr ||
+            components.aimComponent != nullptr;
+    }
+
+    vr::ETrackedPropertyError propertyError =
+        vr::TrackedProp_Success;
+
+    g_vrOpenVrSystem->GetStringTrackedDeviceProperty(
+        hand.deviceIndex,
+        vr::Prop_RenderModelName_String,
+        components.renderModelName.data(),
+        static_cast<std::uint32_t>(
+            components.renderModelName.size()),
+        &propertyError);
+
+    components.resolved = true;
+
+    if (propertyError != vr::TrackedProp_Success ||
+        components.renderModelName[0] == '\0')
+    {
+        Com_PrintWarning(
+            0,
+            "[VR][OPENVR][POSE] SteamVR did not publish a "
+            "render-model name for the %s controller; using its "
+            "raw device pose.\n",
+            VR_ControllerHandName(
+                static_cast<std::uint32_t>(handIndex)));
+        return false;
+    }
+
+    const std::array<const char*, 2> gripCandidates = {
+        vr::k_pch_Controller_Component_OpenXR_Grip,
+        vr::k_pch_Controller_Component_HandGrip,
+    };
+
+    const std::array<const char*, 2> aimCandidates = {
+        vr::k_pch_Controller_Component_OpenXR_Aim,
+        vr::k_pch_Controller_Component_Tip,
+    };
+
+    components.gripComponent =
+        VR_FindOpenVrControllerComponent(
+            components.renderModelName.data(),
+            gripCandidates);
+
+    components.aimComponent =
+        VR_FindOpenVrControllerComponent(
+            components.renderModelName.data(),
+            aimCandidates);
+
+    Com_Printf(
+        0,
+        "[VR][OPENVR][POSE] V77 %s controller render model "
+        "'%s': grip component %s; aim component %s.\n",
+        VR_ControllerHandName(
+            static_cast<std::uint32_t>(handIndex)),
+        components.renderModelName.data(),
+        components.gripComponent != nullptr
+            ? components.gripComponent
+            : "unavailable (raw-device fallback)",
+        components.aimComponent != nullptr
+            ? components.aimComponent
+            : "unavailable (raw-device fallback)");
+
+    if (components.aimComponent == nullptr)
+    {
+        Com_PrintWarning(
+            0,
+            "[VR][OPENVR][POSE] The %s controller has no "
+            "openxr_aim or tip component; SteamVR cannot supply "
+            "a portable weapon-aim basis for this device.\n",
+            VR_ControllerHandName(
+                static_cast<std::uint32_t>(handIndex)));
+    }
+
+    return components.gripComponent != nullptr ||
+        components.aimComponent != nullptr;
+}
+
+bool VR_LocateOpenVrControllerComponentPose(
+    const VrInput::OpenVrHandState& hand,
+    const VrOpenVrControllerPoseComponents& components,
+    const char* componentName,
+    const XrPosef& devicePose,
+    XrPosef* componentPose)
+{
+    if (g_vrOpenVrRenderModels == nullptr ||
+        !components.resolved ||
+        componentName == nullptr ||
+        components.renderModelName[0] == '\0' ||
+        componentPose == nullptr)
+    {
+        return false;
+    }
+
+    vr::RenderModel_ControllerMode_State_t modeState = {};
+    vr::RenderModel_ComponentState_t componentState = {};
+
+    if (!g_vrOpenVrRenderModels->GetComponentState(
+            components.renderModelName.data(),
+            componentName,
+            &hand.controllerState,
+            &modeState,
+            &componentState))
+    {
+        return false;
+    }
+
+    // mTrackingToComponentLocal is the portable attachment coordinate system
+    // and defines -Z as pointing out from the component surface. Compose it
+    // after the absolute tracked-device transform, matching OpenXR grip/aim
+    // action-space semantics without a controller-specific Euler correction.
+    *componentPose =
+        VR_ComposePose(
+            devicePose,
+            VR_OpenVrMatrixToPose(
+                componentState
+                    .mTrackingToComponentLocal));
+
+    return true;
+}
+
 bool VR_UpdateOpenVrControllerActions()
 {
     if (g_vrOpenVrSystem == nullptr)
@@ -21670,6 +22414,7 @@ bool VR_UpdateOpenVrControllerActions()
         else if (!stateValid)
         {
             g_vrOpenVrLoggedController[handIndex] = false;
+            g_vrOpenVrControllerPoseComponents[handIndex] = {};
         }
     }
 
@@ -21677,8 +22422,70 @@ bool VR_UpdateOpenVrControllerActions()
     VrInputVectorState inputVectors = {};
     VrInputActiveState inputVectorActive = {};
     bool missionMovementLockHeld = false;
+
+    bool missionTouchActive = false;
+    const bool missionTouchHeld =
+        VrInput::GetOpenVrBooleanSourceState(
+            g_vrOpenVrHands,
+            VrInput::Source::RightThumbrestTouch,
+            &missionTouchActive);
+    bool leftPrimaryAxisActive = false;
+    const VrInput::OpenVrVector2 leftPrimaryAxis =
+        VrInput::GetOpenVrVector2SourceState(
+            g_vrOpenVrHands,
+            VrInput::Source::LeftPrimaryAxis,
+            &leftPrimaryAxisActive);
+    bool rightPrimaryAxisActive = false;
+    const VrInput::OpenVrVector2 rightPrimaryAxis =
+        VrInput::GetOpenVrVector2SourceState(
+            g_vrOpenVrHands,
+            VrInput::Source::RightPrimaryAxis,
+            &rightPrimaryAxisActive);
+    const VrInput::OpenVrMissionSelectorUpdate missionSelector =
+        VrInput::UpdateOpenVrMissionSelector(
+            &g_vrOpenVrMissionSelector,
+            missionTouchActive,
+            missionTouchHeld,
+            leftPrimaryAxis,
+            leftPrimaryAxisActive,
+            rightPrimaryAxis,
+            rightPrimaryAxisActive);
+
+    if (missionSelector.available &&
+        !g_vrOpenVrLoggedMissionSelector)
+    {
+        Com_Printf(
+            0,
+            "[VR][OPENVR][CONTROLS] V79 guarded mission selector is "
+            "active: start with both sticks centered, touch the centered "
+            "right stick, then move the left stick; right-stick movement "
+            "cancels selection.\n");
+        g_vrOpenVrLoggedMissionSelector = true;
+    }
+
     const VrConfiguratorSettings& configurable =
         VR_GetConfiguratorSettings();
+
+    bool nightVisionGestureGripActive = false;
+    const bool nightVisionGestureGripPressed =
+        VrInput::GetOpenVrBooleanSourceState(
+            g_vrOpenVrHands,
+            VrInput::Source::LeftSqueeze,
+            &nightVisionGestureGripActive);
+
+    const VrControllerRenderPose&
+        nightVisionGesturePose =
+            g_vrControllerRenderPoses[
+                VR_CONTROLLER_LEFT];
+
+    const VrGestures::NightVisionVisorUpdate
+        nightVisionGesture =
+            VR_UpdateNightVisionVisorGesture(
+                nightVisionGesturePose.gripValid,
+                nightVisionGesturePose.gripPose,
+                nightVisionGestureGripActive,
+                nightVisionGestureGripPressed,
+                "OpenVR/SteamVR");
 
     for (const VrInput::ActionDefinition& action :
          VrInput::ActionDefinitions())
@@ -21702,6 +22509,15 @@ bool VR_UpdateOpenVrControllerActions()
             {
                 continue;
             }
+
+            const bool missionShortcut =
+                action.action == VrInput::Action::GrenadeLauncher ||
+                action.action == VrInput::Action::NightVision ||
+                action.action == VrInput::Action::Airstrike ||
+                action.action == VrInput::Action::C4;
+            const bool guardedMissionBinding =
+                missionShortcut &&
+                VrInput::UsesOpenVrMissionSelector(binding);
 
             bool chordHeld = true;
             for (std::size_t termIndex = 0u;
@@ -21760,11 +22576,20 @@ bool VR_UpdateOpenVrControllerActions()
                             &sourceActive);
                 }
 
-                const bool missionShortcut =
-                    action.action == VrInput::Action::GrenadeLauncher ||
-                    action.action == VrInput::Action::NightVision ||
-                    action.action == VrInput::Action::Airstrike ||
-                    action.action == VrInput::Action::C4;
+                if (nightVisionGesture.consumeLeftGrip &&
+                    source ==
+                        VrInput::Source::LeftSqueeze)
+                {
+                    sourceHeld = false;
+                }
+
+                if (guardedMissionBinding &&
+                    source == VrInput::Source::RightThumbrestTouch)
+                {
+                    sourceActive = missionSelector.available;
+                    sourceHeld = missionSelector.modifierHeld;
+                }
+
                 if (missionShortcut &&
                     source == VrInput::Source::RightThumbrestTouch &&
                     sourceActive && sourceHeld)
@@ -21779,6 +22604,13 @@ bool VR_UpdateOpenVrControllerActions()
         }
 
         inputHeld[actionIndex] = held;
+    }
+
+    if (nightVisionGesture.toggledThisFrame)
+    {
+        inputHeld[
+            static_cast<std::size_t>(
+                VrInput::Action::NightVision)] = true;
     }
 
     const auto readVectorAction = [&](
@@ -21902,6 +22734,59 @@ bool VR_UpdateOpenVrControllerActions()
                 trackedPose->mDeviceToAbsoluteTracking);
         }
 
+        XrPosef controllerGripPose =
+            controllerPose;
+        XrPosef controllerAimPose =
+            controllerPose;
+        bool semanticGripPose = false;
+        bool semanticAimPose = false;
+
+        if (poseValid)
+        {
+            VR_ResolveOpenVrControllerPoseComponents(
+                handIndex,
+                hand);
+
+            VrOpenVrControllerPoseComponents& components =
+                g_vrOpenVrControllerPoseComponents[handIndex];
+
+            semanticGripPose =
+                VR_LocateOpenVrControllerComponentPose(
+                    hand,
+                    components,
+                    components.gripComponent,
+                    controllerPose,
+                    &controllerGripPose);
+
+            semanticAimPose =
+                VR_LocateOpenVrControllerComponentPose(
+                    hand,
+                    components,
+                    components.aimComponent,
+                    controllerPose,
+                    &controllerAimPose);
+
+            if ((!semanticGripPose &&
+                 components.gripComponent != nullptr) ||
+                (!semanticAimPose &&
+                 components.aimComponent != nullptr))
+            {
+                if (!components.stateFailureLogged)
+                {
+                    Com_PrintWarning(
+                        0,
+                        "[VR][OPENVR][POSE] SteamVR rejected a "
+                        "semantic component-state query for the %s "
+                        "controller; the affected pose is using the "
+                        "raw-device fallback.\n",
+                        VR_ControllerHandName(
+                            static_cast<std::uint32_t>(handIndex)));
+
+                    components.stateFailureLogged = true;
+                }
+            }
+        }
+
         VrControllerRenderPose& renderPose =
             g_vrControllerRenderPoses[handIndex];
         renderPose.gripValid = poseValid;
@@ -21910,9 +22795,12 @@ bool VR_UpdateOpenVrControllerActions()
 
         if (poseValid)
         {
-            renderPose.gripPose = controllerPose;
-            renderPose.palmPose = controllerPose;
-            renderPose.aimPose = controllerPose;
+            renderPose.gripPose =
+                controllerGripPose;
+            renderPose.palmPose =
+                controllerGripPose;
+            renderPose.aimPose =
+                controllerAimPose;
         }
 
         XrVector3f linearVelocity = {};
@@ -21928,8 +22816,8 @@ bool VR_UpdateOpenVrControllerActions()
             if (poseValid)
             {
                 VR_PublishRightControllerWeaponPose(
-                    controllerPose,
-                    controllerPose,
+                    controllerGripPose,
+                    controllerAimPose,
                     linearVelocity,
                     poseValid);
             }
@@ -21941,7 +22829,7 @@ bool VR_UpdateOpenVrControllerActions()
         else if (handIndex == offHandIndex)
         {
             VR_PublishLeftControllerForegripPose(
-                controllerPose,
+                controllerGripPose,
                 poseValid,
                 objectGripHeld,
                 supportGripHeld,
@@ -21949,7 +22837,7 @@ bool VR_UpdateOpenVrControllerActions()
                 poseValid);
 
             VR_PublishLeftControllerPalmPose(
-                controllerPose,
+                controllerGripPose,
                 poseValid);
         }
 
@@ -21959,10 +22847,17 @@ bool VR_UpdateOpenVrControllerActions()
             Com_Printf(
                 0,
                 "[VR][OPENVR] Located first valid %s controller "
-                "pose; grip and aim share the runtime device pose.\n",
+                "poses; grip %s and aim %s.\n",
                 VR_ControllerHandName(
-                    static_cast<std::uint32_t>(handIndex)));
+                    static_cast<std::uint32_t>(handIndex)),
+                semanticGripPose
+                    ? "uses a semantic component"
+                    : "uses the raw-device fallback",
+                semanticAimPose
+                    ? "uses a semantic component"
+                    : "uses the raw-device fallback");
             g_vrLoggedFirstGripPose[handIndex] = true;
+            g_vrLoggedFirstPalmPose[handIndex] = true;
             g_vrLoggedFirstAimPose[handIndex] = true;
         }
     }
@@ -22021,6 +22916,14 @@ void VR_FrameOpenVr()
     KisakCrash_SetStage(
         "VR_Frame: OpenVR controller input");
     VR_UpdateOpenVrControllerActions();
+
+    // KISAK_SP_VR_OPENVR_MENU_NAVIGATION_V76
+    // Keep legacy SteamVR controller state on the same menu-dispatch path as
+    // OpenXR. Without this call OpenVR gameplay actions update, but frontend
+    // cursor movement, confirm, and back are never sent to COD4's UI.
+    KisakCrash_SetStage(
+        "VR_Frame: OpenVR menu controller navigation");
+    VR_UpdateMenuControllerNavigation();
 
     KisakCrash_SetStage(
         "VR_Frame: OpenVR acquire captured frame");
@@ -22149,6 +23052,11 @@ void VR_FrameOpenVr()
         texture.handle = target.texture.Get();
         texture.eType =
             vr::TextureType_DirectX;
+        // KISAK_SP_VR_OPENVR_GAMMA_SUBMISSION_V78
+        // Oculus/SteamVR rejects this legacy D3D11 BGRA-to-RGBA path when it
+        // is tagged ColorSpace_Linear (EVRCompositorError 105). OpenVR now
+        // preserves the D3D9 display-referred values during sampling, so the
+        // previously compatible 8-bit Auto/gamma compositor path is correct.
         texture.eColorSpace =
             vr::ColorSpace_Auto;
         texture.mDeviceToAbsoluteTracking =
@@ -22188,9 +23096,9 @@ void VR_FrameOpenVr()
     {
         Com_Printf(
             0,
-            "[VR][OPENVR] V49 submitted the first stereo D3D11 "
-            "frame to SteamVR with explicit captured-pose "
-            "metadata.\n");
+            "[VR][OPENVR] V78 submitted the first stereo D3D11 "
+            "frame to SteamVR as gamma-encoded BGRA8 with "
+            "ColorSpace_Auto and explicit captured-pose metadata.\n");
 
         g_vrOpenVrLoggedFirstSubmit = true;
     }
@@ -22960,10 +23868,13 @@ void VR_Shutdown()
         }
 
         vr::VR_Shutdown();
+        g_vrOpenVrRenderModels = nullptr;
         g_vrOpenVrCompositor = nullptr;
         g_vrOpenVrSystem = nullptr;
         g_vrOpenVrInitialized = false;
         g_vrOpenVrRenderPoses = {};
+        g_vrOpenVrMissionSelector = {};
+        g_vrOpenVrControllerPoseComponents = {};
     }
 
     VR_DestroyControllerInput();
@@ -23024,18 +23935,18 @@ void VR_Shutdown()
     g_vrCapturedStereoTexture.Reset();
 
     for (auto& decodedView :
-         g_vrSrgbDecodedSharedViews)
+         g_vrCapturedSharedViews)
     {
         decodedView.Reset();
     }
 
     for (auto& decodedTexture :
-         g_vrSrgbDecodedSharedTextures)
+         g_vrCapturedSharedTextures)
     {
         decodedTexture.Reset();
     }
 
-    g_vrLoggedSrgbCaptureDecode = false;
+    g_vrLoggedCaptureColorTransfer = false;
 
     for (VrRetiredSharedFrame& retired :
          g_vrRetiredSharedFrames)

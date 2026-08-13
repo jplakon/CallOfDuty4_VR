@@ -133,6 +133,16 @@ bool ButtonTouched(
         (state.controllerState.ulButtonTouched & mask) != 0u;
 }
 
+bool AxisIsNeutral(
+    const OpenVrVector2 value,
+    const float threshold)
+{
+    return std::isfinite(value.x) &&
+        std::isfinite(value.y) &&
+        value.x * value.x + value.y * value.y <=
+            threshold * threshold;
+}
+
 std::string ReadStringProperty(
     openvr::IVRSystem* const system,
     const openvr::TrackedDeviceIndex_t deviceIndex,
@@ -397,8 +407,10 @@ bool GetOpenVrBooleanSourceState(
 
         case Source::LeftThumbrestTouch:
         case Source::RightThumbrestTouch:
-            // The legacy state has no dedicated thumbrest component. Modern
-            // drivers publish thumb contact through the joystick touch bit.
+            // The legacy state has no dedicated thumbrest component. Oculus
+            // drivers expose joystick contact through this bit. The runtime
+            // guards the default mission chords before treating that contact
+            // as their modifier, so turning cannot invoke a shortcut.
             *active = joystickAxis >= 0 &&
                 ButtonSupported(*state, joystick);
             return ButtonTouched(*state, joystick);
@@ -524,6 +536,79 @@ OpenVrVector2 GetOpenVrVector2SourceState(
     }
 
     return value;
+}
+
+bool UsesOpenVrMissionSelector(const Binding& binding)
+{
+    bool hasLegacyThumbrestModifier = false;
+    bool hasLeftPrimaryDirection = false;
+
+    for (std::size_t sourceIndex = 0u;
+         sourceIndex < binding.sourceCount;
+         ++sourceIndex)
+    {
+        const Source source = binding.sources[sourceIndex];
+        hasLegacyThumbrestModifier =
+            hasLegacyThumbrestModifier ||
+            source == Source::RightThumbrestTouch;
+        hasLeftPrimaryDirection =
+            hasLeftPrimaryDirection ||
+            (IsDirectionalSource(source) &&
+             PhysicalSource(source) == Source::LeftPrimaryAxis);
+    }
+
+    return hasLegacyThumbrestModifier && hasLeftPrimaryDirection;
+}
+
+OpenVrMissionSelectorUpdate UpdateOpenVrMissionSelector(
+    OpenVrMissionSelectorState* const state,
+    const bool touchAvailable,
+    const bool touchHeld,
+    const OpenVrVector2 leftPrimaryAxis,
+    const bool leftPrimaryAxisActive,
+    const OpenVrVector2 rightPrimaryAxis,
+    const bool rightPrimaryAxisActive,
+    const float neutralThreshold)
+{
+    OpenVrMissionSelectorUpdate update;
+    if (state == nullptr ||
+        !std::isfinite(neutralThreshold) ||
+        neutralThreshold < 0.0f ||
+        neutralThreshold > 1.0f)
+    {
+        return update;
+    }
+
+    update.available = touchAvailable &&
+        leftPrimaryAxisActive &&
+        rightPrimaryAxisActive;
+
+    const bool contactHeld = update.available && touchHeld;
+    const bool contactBegan = contactHeld && !state->touchWasHeld;
+    const bool leftNeutral = leftPrimaryAxisActive &&
+        AxisIsNeutral(leftPrimaryAxis, neutralThreshold);
+    const bool rightNeutral = rightPrimaryAxisActive &&
+        AxisIsNeutral(rightPrimaryAxis, neutralThreshold);
+
+    if (!contactHeld)
+    {
+        update.cancelledThisFrame = state->armed;
+        state->armed = false;
+    }
+    else if (!rightNeutral)
+    {
+        update.cancelledThisFrame = state->armed;
+        state->armed = false;
+    }
+    else if (contactBegan && leftNeutral)
+    {
+        state->armed = true;
+        update.armedThisFrame = true;
+    }
+
+    update.modifierHeld = state->armed && contactHeld && rightNeutral;
+    state->touchWasHeld = contactHeld;
+    return update;
 }
 
 std::string OpenVrHandDescription(const OpenVrHandState& state)

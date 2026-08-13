@@ -14,15 +14,31 @@ copy of the original game.
 
 ## Current status
 
-The current public beta is `v0.10.0-beta.11`.
+The current public beta is `v0.10.0-beta.12`.
 
-Beta.11 makes the configurator and opening F.N.G. training sequence fully
-controller-operable in VR. It retains beta.10's OpenVR two-hand repair,
-Automatic-proximity release, scripted detonator support, and all earlier
-campaign, performance, HUD, tracked-hand, reload, grenade, scope, calibration,
-and Mission Select work.
+Beta.12 adds one physical night-vision visor gesture shared by OpenXR and
+OpenVR, repairs the tested Quest 3 SteamVR/OpenVR rendering and controller-pose
+path, and makes the physical right grip the default grenade-launcher shortcut
+for fresh profiles. Existing personal settings and Controller Input V4
+bindings remain unchanged during an update.
 
-### Beta.11 fixes
+### Beta.12 fixes
+
+- Corrects direct OpenVR projection, color transfer, compositor submission,
+  and semantic grip/aim controller poses. The complete path was verified on
+  Quest 3 through SteamVR without changing the primary VDXR/OpenXR route.
+- Guards legacy OpenVR thumbrest mission chords behind a neutral-entry
+  selector, preventing ordinary walking plus right-stick turning from firing
+  mission shortcuts.
+- Adds a physical left-hand night-vision gesture on both backends: grip at the
+  crown and pull the visor down, or grip close to the visor and pull it up,
+  then release to toggle.
+- Restricts visor arming to head/face start zones so a normal rifle-foregrip
+  press is never converted into a gesture after the grip is already held.
+- Changes the fresh-profile grenade-launcher default to the physical right
+  grip. Existing saved bindings, including the earlier chord, are preserved.
+
+### Beta.11 fixes retained
 
 - Adds previous/next selection, center-selected, and reset-selected controls to
   the live in-headset HUD editor, so covered or off-screen groups can always be

@@ -1,5 +1,6 @@
 #include "../tools/configurator/settings_core.h"
 #include "vr/vr_hud_layout.h"
+#include "vr/vr_gestures.h"
 #include "vr/vr_input_bindings.h"
 #include "vr/vr_interactions.h"
 #include "vr/vr_calibration.h"
@@ -19,6 +20,7 @@
 #include <string>
 
 namespace kc = kisak::configurator;
+namespace vg = kisak::vr::gestures;
 namespace vi = kisak::vr::input;
 namespace vint = kisak::vr::interactions;
 namespace vc = kisak::vr::calibration;
@@ -108,6 +110,373 @@ std::size_t CountOccurrences(
 
 int main(const int argumentCount, char** arguments)
 {
+    {
+        const vg::HeadLocalPosition crown = {
+            -0.15f,
+            0.17f,
+            -0.02f,
+        };
+        const vg::HeadLocalPosition visor = {
+            -0.14f,
+            -0.04f,
+            -0.14f,
+        };
+        const vg::HeadLocalPosition ordinaryGrip = {
+            -0.30f,
+            -0.40f,
+            -0.25f,
+        };
+        // This is intentionally inside V80's forgiving visor destination
+        // box, but represents a normal foregrip below and farther forward
+        // than a hand touching the visor.
+        const vg::HeadLocalPosition rifleForegrip = {
+            -0.20f,
+            -0.16f,
+            -0.30f,
+        };
+
+        Check(
+            vg::IsNightVisionCrownZone(crown) &&
+                !vg::IsNightVisionVisorZone(crown) &&
+                vg::IsNightVisionVisorZone(visor) &&
+                vg::IsNightVisionVisorStartZone(visor) &&
+                !vg::IsNightVisionCrownZone(visor) &&
+                vg::IsNightVisionVisorZone(rifleForegrip) &&
+                !vg::IsNightVisionVisorStartZone(rifleForegrip),
+            "V81 should keep visor arming close to the face while retaining a forgiving lowering destination");
+
+        vg::NightVisionVisorState visorState;
+        vg::NightVisionVisorUpdate visorUpdate =
+            vg::UpdateNightVisionVisorGesture(
+                &visorState,
+                true,
+                true,
+                true,
+                true,
+                ordinaryGrip,
+                1000u);
+        Check(
+            !visorUpdate.armedThisFrame &&
+                !visorUpdate.consumeLeftGrip,
+            "V80 should not steal an ordinary left-grip press away from the weapon interactions");
+
+        visorUpdate = vg::UpdateNightVisionVisorGesture(
+            &visorState,
+            true,
+            true,
+            true,
+            true,
+            crown,
+            1050u);
+        Check(
+            !visorUpdate.armedThisFrame,
+            "V80 should require grip release before arming after a press that began outside a gesture zone");
+
+        vg::UpdateNightVisionVisorGesture(
+            &visorState,
+            true,
+            true,
+            false,
+            true,
+            crown,
+            1100u);
+
+        visorUpdate = vg::UpdateNightVisionVisorGesture(
+            &visorState,
+            true,
+            true,
+            true,
+            true,
+            rifleForegrip,
+            1120u);
+        Check(
+            !visorUpdate.armedThisFrame &&
+                !visorUpdate.consumeLeftGrip &&
+                visorState.direction ==
+                    vg::NightVisionVisorDirection::None,
+            "V81 should not reserve left grip when a new press begins at the normal rifle foregrip");
+
+        visorUpdate = vg::UpdateNightVisionVisorGesture(
+            &visorState,
+            true,
+            true,
+            true,
+            true,
+            visor,
+            1130u);
+        Check(
+            !visorUpdate.armedThisFrame &&
+                !visorUpdate.consumeLeftGrip,
+            "V81 should not convert a rifle grip into a visor gesture after the held hand moves toward the face");
+
+        vg::UpdateNightVisionVisorGesture(
+            &visorState,
+            true,
+            true,
+            false,
+            true,
+            visor,
+            1140u);
+
+        visorUpdate = vg::UpdateNightVisionVisorGesture(
+            &visorState,
+            true,
+            true,
+            true,
+            true,
+            crown,
+            1150u);
+        Check(
+            visorUpdate.armedThisFrame &&
+                visorUpdate.consumeLeftGrip &&
+                visorState.direction ==
+                    vg::NightVisionVisorDirection::Lower,
+            "V80 should arm a visor-lowering gesture only on a new crown-zone grip press");
+
+        visorUpdate = vg::UpdateNightVisionVisorGesture(
+            &visorState,
+            true,
+            true,
+            true,
+            true,
+            visor,
+            1400u);
+        Check(
+            !visorUpdate.toggledThisFrame &&
+                visorUpdate.consumeLeftGrip &&
+                visorState.destinationReached,
+            "V80 should consume the left grip while the visor is pulled down without toggling before release");
+
+        visorUpdate = vg::UpdateNightVisionVisorGesture(
+            &visorState,
+            true,
+            true,
+            false,
+            true,
+            visor,
+            1450u);
+        Check(
+            visorUpdate.toggledThisFrame &&
+                visorUpdate.completedDirection ==
+                    vg::NightVisionVisorDirection::Lower &&
+                !visorUpdate.consumeLeftGrip,
+            "V80 should emit exactly one night-vision toggle when a completed downward visor pull is released");
+
+        visorUpdate = vg::UpdateNightVisionVisorGesture(
+            &visorState,
+            true,
+            true,
+            false,
+            true,
+            visor,
+            1500u);
+        Check(
+            !visorUpdate.toggledThisFrame,
+            "V80 should not repeat the night-vision toggle after the release frame");
+
+        visorUpdate = vg::UpdateNightVisionVisorGesture(
+            &visorState,
+            true,
+            true,
+            true,
+            true,
+            visor,
+            2000u);
+        Check(
+            visorUpdate.armedThisFrame &&
+                visorState.direction ==
+                    vg::NightVisionVisorDirection::Raise,
+            "V80 should arm a visor-raising gesture from the front-of-face zone");
+
+        vg::UpdateNightVisionVisorGesture(
+            &visorState,
+            true,
+            true,
+            true,
+            true,
+            crown,
+            2250u);
+        visorUpdate = vg::UpdateNightVisionVisorGesture(
+            &visorState,
+            true,
+            true,
+            false,
+            true,
+            crown,
+            2300u);
+        Check(
+            visorUpdate.toggledThisFrame &&
+                visorUpdate.completedDirection ==
+                    vg::NightVisionVisorDirection::Raise,
+            "V80 should toggle once when the user grips the visor and pulls it up to the crown");
+
+        const vg::HeadLocalPosition shortPull = {
+            -0.15f,
+            0.10f,
+            -0.10f,
+        };
+        vg::UpdateNightVisionVisorGesture(
+            &visorState,
+            true,
+            true,
+            true,
+            true,
+            crown,
+            3000u);
+        visorUpdate = vg::UpdateNightVisionVisorGesture(
+            &visorState,
+            true,
+            true,
+            false,
+            true,
+            shortPull,
+            3150u);
+        Check(
+            !visorUpdate.toggledThisFrame &&
+                visorUpdate.cancelledThisFrame,
+            "V80 should reject a short head-area grip motion that does not complete the 12 cm visor travel");
+
+        vg::UpdateNightVisionVisorGesture(
+            &visorState,
+            true,
+            true,
+            true,
+            true,
+            crown,
+            4000u);
+        visorUpdate = vg::UpdateNightVisionVisorGesture(
+            &visorState,
+            false,
+            true,
+            true,
+            true,
+            crown,
+            4100u);
+        Check(
+            visorUpdate.cancelledThisFrame &&
+                visorUpdate.consumeLeftGrip,
+            "V80 should cancel when a menu opens but keep consuming the in-progress grip until release");
+        visorUpdate = vg::UpdateNightVisionVisorGesture(
+            &visorState,
+            true,
+            true,
+            false,
+            true,
+            visor,
+            4150u);
+        Check(
+            !visorUpdate.toggledThisFrame &&
+                !visorUpdate.consumeLeftGrip,
+            "V80 should require a completely new grip after menu or tracking cancellation");
+    }
+
+    {
+        vi::Binding guardedBinding;
+        vi::Binding unrelatedBinding;
+        Check(
+            vi::ParseBinding(
+                vi::Action::NightVision,
+                "right.thumbrest_touch+left.primary_axis.down",
+                &guardedBinding) &&
+                vi::UsesOpenVrMissionSelector(guardedBinding),
+            "V79 should guard the default OpenVR mission-selector chord");
+        Check(
+            vi::ParseBinding(
+                vi::Action::NightVision,
+                "right.thumbrest_touch+right.primary_axis.down",
+                &unrelatedBinding) &&
+                !vi::UsesOpenVrMissionSelector(unrelatedBinding),
+            "V79 should not rewrite a custom non-left-axis chord");
+
+        const vi::OpenVrVector2 neutral = {};
+        const vi::OpenVrVector2 leftUp = {0.0f, 0.9f};
+        const vi::OpenVrVector2 rightTurn = {0.8f, 0.0f};
+        vi::OpenVrMissionSelectorState selector;
+
+        vi::OpenVrMissionSelectorUpdate update =
+            vi::UpdateOpenVrMissionSelector(
+                &selector,
+                true,
+                true,
+                leftUp,
+                true,
+                neutral,
+                true);
+        Check(
+            !update.modifierHeld && !selector.armed,
+            "V79 should not arm while the movement stick is already deflected");
+
+        update = vi::UpdateOpenVrMissionSelector(
+            &selector,
+            true,
+            true,
+            neutral,
+            true,
+            neutral,
+            true);
+        Check(
+            !update.modifierHeld && !selector.armed,
+            "V79 should require release and a new centered contact after walking");
+
+        vi::UpdateOpenVrMissionSelector(
+            &selector,
+            true,
+            false,
+            neutral,
+            true,
+            neutral,
+            true);
+        update = vi::UpdateOpenVrMissionSelector(
+            &selector,
+            true,
+            true,
+            neutral,
+            true,
+            neutral,
+            true);
+        Check(
+            update.available && update.modifierHeld &&
+                update.armedThisFrame && selector.armed,
+            "V79 should arm when right-stick contact begins with both sticks centered");
+
+        update = vi::UpdateOpenVrMissionSelector(
+            &selector,
+            true,
+            true,
+            leftUp,
+            true,
+            neutral,
+            true);
+        Check(
+            update.modifierHeld && selector.armed,
+            "V79 should keep the modifier armed while the left stick selects a mission action");
+
+        update = vi::UpdateOpenVrMissionSelector(
+            &selector,
+            true,
+            true,
+            neutral,
+            true,
+            rightTurn,
+            true);
+        Check(
+            !update.modifierHeld && update.cancelledThisFrame &&
+                !selector.armed,
+            "V79 should cancel mission selection as soon as the right stick turns");
+
+        update = vi::UpdateOpenVrMissionSelector(
+            &selector,
+            true,
+            true,
+            neutral,
+            true,
+            neutral,
+            true);
+        Check(
+            !update.modifierHeld && !selector.armed,
+            "V79 should not rearm after turning until right-stick contact is released");
+    }
+
     {
         const vi::ActionDefinition* useAction =
             vp::FindPromptAction("  +ACTIVATE  ");
@@ -1229,15 +1598,17 @@ int main(const int argumentCount, char** arguments)
         "night vision should expose the proven beta.7 modifier chord");
     Check(
         values["KISAK_VR_BIND_GRENADE_LAUNCHER"] ==
-                "right.thumbrest_touch+left.primary_axis.up" &&
-            values["KISAK_VR_BIND_AIRSTRIKE"] ==
+                "right.squeeze",
+        "grenade launcher should use the physical right grip by default");
+    Check(
+        values["KISAK_VR_BIND_AIRSTRIKE"] ==
                 "right.thumbrest_touch+left.primary_axis.left" &&
             values["KISAK_VR_BIND_C4"] ==
                 "right.thumbrest_touch+left.primary_axis.right",
-        "all four beta.7 mission D-pad defaults should be ordinary chords");
+        "the remaining directional mission shortcuts should retain their ordinary chords");
     Check(
         values["KISAK_VR_BIND_OFFHAND"] == "unbound",
-        "right grip should be unbound by default");
+        "the redundant native off-hand action should remain unbound by default");
     Check(
         values["KISAK_VR_PLAY_MODE"] == "standing" &&
             values["KISAK_VR_STANDING_EYE_HEIGHT"] == "60.0" &&
@@ -1342,7 +1713,7 @@ int main(const int argumentCount, char** arguments)
                 launcher.find("compatibility preflight found a launch blocker") !=
                     std::string::npos &&
                 launcher.find("--validate") != std::string::npos,
-            "the launcher should validate overrides, run beta.11 preflight, and publish every guarded state path");
+            "the launcher should validate overrides, run beta.12 preflight, and publish every guarded state path");
         Check(
             runtime.find("STATUS=RUNTIME_ACCEPTED") != std::string::npos &&
                 runtime.find("RUNTIME_MEASUREMENT_UNITS") !=
@@ -1463,6 +1834,38 @@ int main(const int argumentCount, char** arguments)
                 openVrControllerUpdate < openVrTwoHandUpdate &&
                 openVrTwoHandUpdate < openVrFocusUpdate,
             "issue #26: OpenXR and OpenVR must both update the shared two-hand weapon target after publishing controller poses");
+        Check(
+                runtime.find(
+                    "KISAK_SP_VR_NIGHT_VISION_VISOR_GESTURE_V80") !=
+                    std::string::npos &&
+                runtime.find(
+                    "KISAK_SP_VR_NIGHT_VISION_VISOR_FOREGRIP_GUARD_V81") !=
+                    std::string::npos &&
+                runtime.find(
+                    "night_vision_gesture_grip") !=
+                    std::string::npos &&
+                runtime.find(
+                    "g_vrNightVisionGestureGripAction") !=
+                    std::string::npos &&
+                runtime.find(
+                    "VrInput::Source::LeftSqueeze") !=
+                    std::string::npos &&
+                runtime.find(
+                    "nightVisionGesture.consumeLeftGrip") !=
+                    std::string::npos &&
+                runtime.find(
+                    "nightVisionGesture.toggledThisFrame") !=
+                    std::string::npos &&
+                CountOccurrences(
+                    runtime,
+                    "VR_UpdateNightVisionVisorGesture(") == 3u &&
+                runtime.find(
+                    "queued one night-vision toggle") !=
+                    std::string::npos &&
+                runtime.find(
+                    "V81 foregrip-safe left-grip") !=
+                    std::string::npos,
+            "V81 should route the foregrip-safe physical left-grip visor gesture through one shared OpenXR/OpenVR night-vision pulse path");
         const std::size_t lostPoseStatus =
             runtime.find("\"NO_TRACKED_POSE\"");
         const std::size_t heightCommit =
@@ -1826,7 +2229,7 @@ int main(const int argumentCount, char** arguments)
         Check(
             configurator.find("Setup & Compatibility") !=
                     std::string::npos &&
-                configurator.find("v0.10.0-beta.11") !=
+                configurator.find("v0.10.0-beta.12") !=
                     std::string::npos &&
                 configurator.find("Rescan system") !=
                     std::string::npos &&
@@ -1893,7 +2296,7 @@ int main(const int argumentCount, char** arguments)
                     std::string::npos &&
                 configurator.find("*.vrstock") !=
                     std::string::npos,
-            "the beta.11 menu should retain compatibility, handed interactions, weapon/gunstock, metric, calibration, and both visual HUD workflows");
+            "the beta.12 menu should retain compatibility, handed interactions, weapon/gunstock, metric, calibration, and both visual HUD workflows");
     }
 
     const std::string mixed =
@@ -2326,6 +2729,10 @@ int main(const int argumentCount, char** arguments)
         migrated.values["KISAK_VR_INPUT_BINDINGS_VERSION"] == "4",
         "V2 user profiles should migrate to binding schema V4");
     Check(
+        migrated.values["KISAK_VR_BIND_GRENADE_LAUNCHER"] ==
+            "right.squeeze",
+        "V2 profiles with an unbound launcher shortcut should recover the new right-grip default");
+    Check(
         migrated.values["KISAK_VR_BIND_NIGHT_VISION"] ==
             "right.thumbrest_touch+left.primary_axis.down",
         "V2 profiles should recover the visible night-vision chord");
@@ -2383,10 +2790,30 @@ int main(const int argumentCount, char** arguments)
         "V3-to-V4 migration should preserve every requested directional default and thumbrest chord");
     Check(
         migrated.values["KISAK_VR_BIND_OFFHAND"] == "unbound",
-        "right grip should remain unbound after V3-to-V4 migration");
+        "the native off-hand action should remain unbound after V3-to-V4 migration");
     Check(
         migrated.messages.empty(),
         "migrated V3 settings should validate cleanly");
+
+    const std::filesystem::path v4UserFile =
+        temp / "VR-User-Settings-V4.bat";
+    {
+        std::ofstream current(v4UserFile, std::ios::binary);
+        current << "@echo off\r\n"
+                << "set \"KISAK_VR_INPUT_BINDINGS_VERSION=4\"\r\n"
+                << "set \"KISAK_VR_BIND_GRENADE_LAUNCHER=right.thumbrest_touch+left.primary_axis.up\"\r\n";
+    }
+
+    const kc::LoadResult preservedV4 = kc::LoadSettings(
+        temp / "missing-defaults.bat",
+        v4UserFile);
+    Check(
+        preservedV4.values.at("KISAK_VR_BIND_GRENADE_LAUNCHER") ==
+            "right.thumbrest_touch+left.primary_axis.up",
+        "beta.12 should not overwrite an existing V4 grenade-launcher binding");
+    Check(
+        preservedV4.messages.empty(),
+        "an existing V4 grenade-launcher binding should remain valid");
 
     const std::filesystem::path userFile = temp / "VR-User-Settings.bat";
     values = kc::BuiltInDefaults();
@@ -2408,9 +2835,9 @@ int main(const int argumentCount, char** arguments)
     Check(saved.backupPath.empty(), "first save should not create a backup");
     Check(Read(userFile).find("\r\n") != std::string::npos, "saved batch file should use CRLF");
     Check(
-        Read(userFile).find("generated by beta.11 Configurator (Unified Setup/Compatibility)") !=
+        Read(userFile).find("generated by beta.12 Configurator (Unified Setup/Compatibility)") !=
             std::string::npos,
-        "saved settings should identify the beta.11 unified-compatibility schema");
+        "saved settings should identify the beta.12 unified-compatibility schema");
     Check(
         Read(userFile).find("KISAK_VR_SETTINGS_REVISION=" + saved.revision) !=
             std::string::npos,

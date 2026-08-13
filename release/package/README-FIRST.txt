@@ -78,6 +78,11 @@ PHYSICAL INTERACTIONS
 - Supported magazines can eject by button or a guarded physical pull and
   insert on release or contact.
 - Hold/cook normally, physically swing, and release the grip to throw.
+- Toggle night vision by gripping with the physical left controller at the
+  crown and pulling the visor down, or gripping close to the visor and pulling
+  it up, then releasing. Foregrip presses remain normal rifle support input.
+- Fresh profiles use the physical right grip for the grenade-launcher shortcut;
+  existing saved bindings are preserved.
 - Every standard campaign mission is unlocked in Mission Select.
 
 KNOWN LIMITATION

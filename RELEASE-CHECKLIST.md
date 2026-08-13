@@ -1,6 +1,6 @@
 # Release checklist
 
-This checklist is for `v0.10.0-beta.11` over `v0.10.0-beta.10`.
+This checklist is for `v0.10.0-beta.12` over `v0.10.0-beta.11`.
 
 ## Documentation blockers
 
@@ -41,7 +41,7 @@ This checklist is for `v0.10.0-beta.11` over `v0.10.0-beta.10`.
   `KisakCOD-VR-Input-Mapper`, and `KisakCOD-VR-Configurator-Tests` in Win32
   Release configuration from the committed source.
 - Run the settings tests against `release/package/VR-Settings.bat` and require
-  all 142 catalog settings plus beta.11 compatibility, launcher, runtime, and
+  all 142 catalog settings plus beta.12 compatibility, launcher, runtime, and
   configurator receipts to pass.
 - Confirm `git status --porcelain --untracked-files=no` remains empty.
 - Copy nothing from `bin/Debug` into the player package.
@@ -51,7 +51,7 @@ This checklist is for `v0.10.0-beta.11` over `v0.10.0-beta.10`.
 
 - Open **Setup & Compatibility** on the primary VDXR/Quest 3/RTX 3080 Ti
   system. Require file, DirectX, OS, GPU, and 32-bit OpenXR checks to pass;
-  before the first beta.11 run, require honest headset/controller warnings.
+  before the first beta.12 run, require honest headset/controller warnings.
 - Apply the recommendation only after verifying its confirmation lists the
   exact backend/graphics delta. Snapshot all other settings before/after and
   require handedness, units, comfort, input, HUD, height, interactions, and
@@ -92,8 +92,14 @@ This checklist is for `v0.10.0-beta.11` over `v0.10.0-beta.10`.
   an alternate, profile import/export, and beta.7 value migration.
 - Test the Chord editor with two through four simultaneous inputs, all eight
   left/right primary-axis directions, and V2/V3-to-V4 profile migration.
-- Confirm the default right grip performs no action and every default mission
-  shortcut is displayed as its right-thumbrest + left-direction chord.
+- Confirm a fresh profile binds Grenade launcher / slot 5 to physical Right
+  grip / squeeze while an existing V4 profile retains its previously saved
+  binding. Confirm the native Off-hand action remains unbound.
+- In both OpenXR and OpenVR, lower and raise the night-vision visor with the
+  physical left-grip gesture. Confirm a press begun on the rifle foregrip never
+  arms later in the same hold and ordinary two-hand aiming remains unchanged.
+- In OpenVR, confirm the remaining right-thumbrest + left-direction mission
+  chords require neutral entry and cannot fire while walking and turning.
 - Test **Bind...** for boolean and vector actions through OpenXR, Escape cancel,
   timeout/error reporting, and missing-helper handling.
 - On available native hardware, test Touch, Index, Vive/trackpad, PICO, and
@@ -204,7 +210,7 @@ This checklist is for `v0.10.0-beta.11` over `v0.10.0-beta.10`.
 
 ## Tag and package
 
-- Create annotated tag `v0.10.0-beta.11` only after the compatibility,
+- Create annotated tag `v0.10.0-beta.12` only after the compatibility,
   Metric/Imperial, per-weapon/gunstock, handed-interaction, controller, menu,
   rendering, crash-diagnostic, tracked-hand, reload, grenade, OpenVR two-hand,
   Automatic-proximity release, detonator, and campaign state is validated.
