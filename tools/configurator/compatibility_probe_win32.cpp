@@ -7,6 +7,7 @@
 #include <array>
 #include <chrono>
 #include <ctime>
+#include <cwctype>
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
@@ -164,6 +165,93 @@ bool ReadActiveRuntime(
                L"ActiveRuntime",
                view,
                manifestPath);
+}
+
+std::wstring LowerWide(std::wstring value)
+{
+    std::transform(
+        value.begin(),
+        value.end(),
+        value.begin(),
+        [](const wchar_t character)
+        {
+            return static_cast<wchar_t>(
+                std::towlower(character));
+        });
+    return value;
+}
+
+bool IsPimaxRuntimeManifest(
+    const std::filesystem::path& path)
+{
+    const std::wstring evidence =
+        LowerWide(path.wstring());
+    return evidence.find(L"pimax") != std::wstring::npos ||
+        evidence.find(L"piopenxr") != std::wstring::npos;
+}
+
+bool IsPimaxX64Manifest(
+    const std::filesystem::path& path)
+{
+    const std::wstring filename =
+        LowerWide(path.filename().wstring());
+    return filename.find(L"piopenxr_64.json") !=
+        std::wstring::npos;
+}
+
+std::filesystem::path EnvironmentDirectory(
+    const wchar_t* const variable)
+{
+    std::array<wchar_t, 32768u> value = {};
+    const DWORD length = GetEnvironmentVariableW(
+        variable,
+        value.data(),
+        static_cast<DWORD>(value.size()));
+    if (length == 0u || length >= value.size())
+    {
+        return {};
+    }
+    return std::filesystem::path(value.data());
+}
+
+std::filesystem::path FindPimaxX86Manifest(
+    const std::filesystem::path& activeManifest)
+{
+    std::vector<std::filesystem::path> candidates;
+    if (!activeManifest.empty() &&
+        activeManifest.has_parent_path())
+    {
+        candidates.push_back(
+            activeManifest.parent_path() /
+            L"PiOpenXR_32.json");
+    }
+
+    const std::filesystem::path programFiles64 =
+        EnvironmentDirectory(L"ProgramW6432");
+    if (!programFiles64.empty())
+    {
+        candidates.push_back(
+            programFiles64 / L"Pimax" / L"Runtime" /
+            L"PiOpenXR_32.json");
+    }
+
+    const std::filesystem::path programFiles =
+        EnvironmentDirectory(L"ProgramFiles");
+    if (!programFiles.empty())
+    {
+        candidates.push_back(
+            programFiles / L"Pimax" / L"Runtime" /
+            L"PiOpenXR_32.json");
+    }
+
+    for (const std::filesystem::path& candidate : candidates)
+    {
+        if (std::filesystem::is_regular_file(candidate))
+        {
+            return candidate;
+        }
+    }
+    return {};
 }
 
 bool Is64BitWindows()
@@ -393,6 +481,49 @@ kisak::vr::compatibility::Probe ProbeSystem(
         probe.openXr64ManifestPath = WideToUtf8(openXr64Path);
         probe.openXr64ManifestPresent =
             std::filesystem::is_regular_file(openXr64Path);
+    }
+
+    // KISAK_SP_VR_PIMAX_X86_RUNTIME_V86
+    // Pimax Play can publish PiOpenXR_64.json through the 32-bit registry
+    // view. The launcher repairs only an actively selected Pimax runtime, so
+    // mirror that decision here before the shared compatibility evaluator can
+    // incorrectly block this x86 game. A valid non-Pimax x86 registration is
+    // never replaced merely because Pimax is installed.
+    const std::filesystem::path registeredOpenXr32 =
+        openXr32Path;
+    const std::filesystem::path registeredOpenXr64 =
+        openXr64Path;
+    const bool activePimaxRuntime =
+        (probe.openXr32Registered &&
+         IsPimaxRuntimeManifest(registeredOpenXr32)) ||
+        (!probe.openXr32Registered &&
+         probe.openXr64Registered &&
+         IsPimaxRuntimeManifest(registeredOpenXr64));
+
+    if (activePimaxRuntime)
+    {
+        const std::filesystem::path pimaxEvidence =
+            probe.openXr32Registered
+                ? registeredOpenXr32
+                : registeredOpenXr64;
+        const std::filesystem::path pimaxX86Manifest =
+            FindPimaxX86Manifest(pimaxEvidence);
+
+        if (!pimaxX86Manifest.empty())
+        {
+            probe.openXr32Registered = true;
+            probe.openXr32ManifestPresent = true;
+            probe.openXr32ManifestPath =
+                WideToUtf8(pimaxX86Manifest.wstring());
+            probe.openXr32ManifestText =
+                ReadTextFile(pimaxX86Manifest);
+        }
+        else if (probe.openXr32Registered &&
+                 IsPimaxX64Manifest(registeredOpenXr32))
+        {
+            probe.openXr32ManifestPresent = false;
+            probe.openXr32ManifestText.clear();
+        }
     }
 
     DetectOpenVr(&probe.openVrInstalled, &probe.openVrEvidence);

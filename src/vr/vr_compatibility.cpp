@@ -143,6 +143,12 @@ Report Evaluate(const Probe& probe)
         probe.openXr32ManifestText,
         probe.lastRuntimeName);
 
+    const bool pimaxCrystalLight =
+        report.runtimeFamily == RuntimeFamily::Pimax &&
+        Contains(
+            Lower(probe.lastHeadsetName),
+            "crystal light");
+
     const bool installationReady =
         probe.gameExecutablePresent &&
         probe.modExecutablePresent &&
@@ -334,6 +340,25 @@ Report Evaluate(const Probe& probe)
             ? std::string()
             : "Complete one headset test, then rescan this page.");
 
+    if (pimaxCrystalLight)
+    {
+        const bool scopeLayoutReady =
+            probe.currentPackedMode == "7684x3128" &&
+            probe.currentOutputScale == "1.00";
+
+        AddCheck(
+            &report,
+            "pimax_scope_layout",
+            "Pimax Crystal Light scope layout",
+            scopeLayoutReady ? Status::Ready : Status::Warning,
+            scopeLayoutReady
+                ? "The packed capture reserves two 3330 x 3128 eyes plus the 1024 px dedicated scope panel."
+                : "The selected packed capture cannot preserve the reported 3330 x 3128 eyes and the dedicated scope panel together.",
+            scopeLayoutReady
+                ? std::string()
+                : "Apply the Pimax Crystal Light graphics recommendation before testing M21 or SVD scopes.");
+    }
+
     report.recommendedBackend = probe.backendPolicy;
     if (openXrReady)
     {
@@ -347,7 +372,12 @@ Report Evaluate(const Probe& probe)
         report.recommendedBackend = "openvr";
     }
 
-    if (probe.dedicatedVideoMemoryBytes >= 10u * kGiB)
+    if (pimaxCrystalLight)
+    {
+        report.recommendedGraphicsProfile =
+            "pimax_crystal_light";
+    }
+    else if (probe.dedicatedVideoMemoryBytes >= 10u * kGiB)
     {
         report.recommendedGraphicsProfile = "native";
     }
@@ -363,12 +393,22 @@ Report Evaluate(const Probe& probe)
                 : "native";
     }
 
+    const char* const graphicsProfileLabel =
+        report.recommendedGraphicsProfile ==
+                "pimax_crystal_light"
+            ? "Pimax Crystal Light"
+            : report.recommendedGraphicsProfile.c_str();
+
     std::ostringstream recommendation;
     recommendation << "Backend: " << report.recommendedBackend
-                   << "; graphics: " << report.recommendedGraphicsProfile;
+                   << "; graphics: " << graphicsProfileLabel;
     if (report.runtimeFamily == RuntimeFamily::VirtualDesktop)
     {
         recommendation << "; detected Virtual Desktop/VDXR, the primary tested path";
+    }
+    else if (pimaxCrystalLight)
+    {
+        recommendation << "; detected Pimax Crystal Light scope-safe capture";
     }
     else if (!openXrReady && probe.openVrInstalled)
     {
@@ -400,7 +440,7 @@ std::string SerializeReport(
     const std::string& generatedAt)
 {
     std::ostringstream output;
-    output << "KisakCOD VR beta.12 unified setup and compatibility report\r\n";
+    output << "KisakCOD VR beta.13 unified setup and compatibility report\r\n";
     output << "STATUS=" << StatusId(report.status) << "\r\n";
     output << "READY_FOR_LAUNCH=" << (report.readyForLaunch ? 1 : 0) << "\r\n";
     output << "HEADSET_TEST_REQUIRED=" << (report.headsetTestRequired ? 1 : 0) << "\r\n";

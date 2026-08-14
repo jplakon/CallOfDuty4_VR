@@ -37,6 +37,14 @@ struct Size
     float height = 0.0f;
 };
 
+struct Rect
+{
+    float x = 0.0f;
+    float y = 0.0f;
+    float width = 0.0f;
+    float height = 0.0f;
+};
+
 struct Layout
 {
     float safeX = 0.50f;
@@ -109,6 +117,9 @@ Point SafeAreaMinimum(const Layout& layout);
 Point SafeAreaMaximum(const Layout& layout);
 Point ElementCenter(const Layout& layout, Element element);
 Size ElementSize(const Layout& layout, Element element);
+Rect TransformCompassRect(
+    const Layout& layout,
+    Rect sourceRect);
 float ElementScale(const Layout& layout, Element element);
 void SetElementScale(Layout* layout, Element element, float scale);
 void CenterElement(Layout* layout, Element element);

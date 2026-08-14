@@ -1066,11 +1066,11 @@ int main(const int argumentCount, char** arguments)
                     vh::Element::AmmoEquipment).x,
                 195.0f) &&
                 NearlyEqual(
-                    vh::ElementCenter(
-                        layout,
-                        vh::Element::Compass).y,
+                vh::ElementCenter(
+                    layout,
+                    vh::Element::Compass).y,
                     360.0f),
-            "the visual canvas should reproduce the tested ammo and compass defaults");
+            "the visual canvas should reproduce the tested ammo and V82 compass defaults");
 
         vh::MoveElement(
             &layout,
@@ -1141,10 +1141,15 @@ int main(const int argumentCount, char** arguments)
         const vh::Point unreachableCompass = vh::ElementCenter(
             recovery,
             vh::Element::Compass);
+        const vh::Size unreachableCompassSize = vh::ElementSize(
+            recovery,
+            vh::Element::Compass);
         Check(
-            unreachableCompass.x < 0.0f &&
-                unreachableCompass.y < 0.0f,
-            "the regression fixture should reproduce an off-canvas compass group");
+            unreachableCompass.x -
+                    unreachableCompassSize.width * 0.5f < 0.0f &&
+                unreachableCompass.y -
+                    unreachableCompassSize.height * 0.5f < 0.0f,
+            "the regression fixture should reproduce a partially off-canvas compass group");
 
         vh::CenterElement(&recovery, vh::Element::Compass);
         const vh::Point centeredCompass = vh::ElementCenter(
@@ -1265,6 +1270,43 @@ int main(const int argumentCount, char** arguments)
                 serialized.find("RECOMMENDED_BACKEND=openxr") != std::string::npos &&
                 serialized.find("CHECK_runtime=READY") != std::string::npos,
             "V65 support reports should preserve machine, runtime, recommendation, and per-check evidence");
+
+        vrc::Probe pimax = vd;
+        pimax.openXr32ManifestPath =
+            "C:/Program Files/Pimax/Runtime/PiOpenXR_32.json";
+        pimax.openXr32ManifestText =
+            "{\"runtime\":{\"library_path\":\"PimaxOpenXR.dll\"}}";
+        pimax.lastRuntimeName = "Pimax OpenXR";
+        pimax.lastHeadsetName = "Pimax Crystal Light";
+        pimax.currentPackedMode = "6016x2688";
+        pimax.currentOutputScale = "1.00";
+
+        const vrc::Report pimaxNeedsLayout =
+            vrc::Evaluate(pimax);
+        Check(
+            pimaxNeedsLayout.readyForLaunch &&
+                pimaxNeedsLayout.status == vrc::Status::Warning &&
+                pimaxNeedsLayout.runtimeFamily ==
+                    vrc::RuntimeFamily::Pimax &&
+                pimaxNeedsLayout.recommendedGraphicsProfile ==
+                    "pimax_crystal_light",
+            "issue #41 V85 should recommend the scope-safe packed mode after a Pimax Crystal Light runtime receipt");
+
+        pimax.currentPackedMode = "7684x3128";
+        const vrc::Report pimaxScopeReady =
+            vrc::Evaluate(pimax);
+        Check(
+            pimaxScopeReady.status == vrc::Status::Ready &&
+                pimaxScopeReady.recommendedGraphicsProfile ==
+                    "pimax_crystal_light" &&
+                vrc::SerializeReport(
+                    pimax,
+                    pimaxScopeReady,
+                    "2026-08-13T22:00:00-0300")
+                        .find(
+                            "CHECK_pimax_scope_layout=READY") !=
+                    std::string::npos,
+            "issue #41 V85 should report two 3330 px eyes plus the 1024 px scope panel as ready only in 7684 x 3128 mode");
     }
 
     {
@@ -1327,6 +1369,9 @@ int main(const int argumentCount, char** arguments)
     Check(
         values["KISAK_VR_WEAPON_PROFILES_ENABLED"] == "1",
         "V63 should enable per-weapon and gunstock layering by default");
+    Check(
+        values["KISAK_VR_CROSSHAIR"] == "0",
+        "V83 should default the normal COD4 weapon crosshair to off");
     Check(
         values["KISAK_VR_DOMINANT_HAND"] == "right" &&
             values["KISAK_VR_SUPPORT_GRIP_MODE"] == "hold" &&
@@ -1493,6 +1538,36 @@ int main(const int argumentCount, char** arguments)
     values = kc::BuiltInDefaults();
     {
         vh::Layout edited = kc::HudLayoutFromSettings(values);
+        const vh::Point defaultCompassCenter =
+            vh::ElementCenter(edited, vh::Element::Compass);
+        const vh::Size defaultCompassSize =
+            vh::ElementSize(edited, vh::Element::Compass);
+        const vh::Rect transformedCompassTicker =
+            vh::TransformCompassRect(
+                edited,
+                {-62.0f, -34.0f, 124.0f, 13.0f});
+        Check(
+            NearlyEqual(defaultCompassCenter.x, 348.0f) &&
+                NearlyEqual(defaultCompassCenter.y, 360.0f) &&
+                NearlyEqual(defaultCompassSize.width, 144.0f) &&
+                NearlyEqual(defaultCompassSize.height, 40.0f) &&
+                NearlyEqual(
+                    transformedCompassTicker.x +
+                        transformedCompassTicker.width * 0.5f,
+                    28.0f) &&
+                NearlyEqual(
+                    transformedCompassTicker.y +
+                        transformedCompassTicker.height * 0.5f,
+                    -120.0f),
+            "V82 should preserve beta.12's saved compass rectangle and use one transform for its real ticker and editor bounds");
+        const vh::Point defaultNotificationCenter =
+            vh::ElementCenter(
+                edited,
+                vh::Element::Notifications);
+        Check(
+            NearlyEqual(defaultNotificationCenter.x, 301.0f) &&
+                NearlyEqual(defaultNotificationCenter.y, 109.0f),
+            "V82 notification bounds should start from the real safe-left 6/10 message anchor and include the configured offset");
         vh::MoveElement(
             &edited,
             vh::Element::AmmoEquipment,
@@ -1713,7 +1788,34 @@ int main(const int argumentCount, char** arguments)
                 launcher.find("compatibility preflight found a launch blocker") !=
                     std::string::npos &&
                 launcher.find("--validate") != std::string::npos,
-            "the launcher should validate overrides, run beta.12 preflight, and publish every guarded state path");
+            "the launcher should validate overrides, run beta.13 preflight, and publish every guarded state path");
+        Check(
+            launcher.find(
+                "KISAK_SP_VR_PIMAX_X86_RUNTIME_V86") !=
+                    std::string::npos &&
+                launcher.find(
+                    "Explicit XR_RUNTIME_JSON was preserved") !=
+                    std::string::npos &&
+                launcher.find("PiOpenXR_32.json") !=
+                    std::string::npos &&
+                launcher.find(
+                    "if not defined XR_RUNTIME_JSON if defined VR_ACTIVE_RUNTIME_32") !=
+                    std::string::npos &&
+                launcher.find(
+                    "if not defined XR_RUNTIME_JSON if not defined VR_ACTIVE_RUNTIME_32 if defined VR_ACTIVE_RUNTIME_64") !=
+                    std::string::npos &&
+                launcher.find(
+                    "if /I not \"%KISAK_VR_BACKEND%\"==\"openvr\"") !=
+                    std::string::npos &&
+                launcher.find(
+                    "KISAK_SP_VR_PIMAX_SCOPE_LAUNCH_PREFLIGHT_V86") !=
+                    std::string::npos &&
+                launcher.find("7684x3128") !=
+                    std::string::npos &&
+                launcher.find(
+                    "7684x3128 requires KISAK_VR_OUTPUT_SCALE=1.00") !=
+                    std::string::npos,
+            "issues #11/#41 V86 launcher must preserve explicit/non-Pimax runtime choices, select Pimax's x86 manifest only for an active Pimax runtime, and accept the V85 Crystal Light packed mode");
         Check(
             runtime.find("STATUS=RUNTIME_ACCEPTED") != std::string::npos &&
                 runtime.find("RUNTIME_MEASUREMENT_UNITS") !=
@@ -1900,6 +2002,8 @@ int main(const int argumentCount, char** arguments)
             root / "src/client/cl_console.cpp");
         const std::string compass = Read(
             root / "src/cgame/cg_compass.cpp");
+        const std::string rendererScene = Read(
+            root / "src/gfx_d3d/r_scene.cpp");
         const std::string draw = Read(
             root / "src/cgame/cg_draw.cpp");
         const std::string cgameMain = Read(
@@ -1935,8 +2039,82 @@ int main(const int argumentCount, char** arguments)
             root / "src/qcommon/cmd.cpp");
         const std::string runtimeHeader = Read(
             root / "src/vr/vr_openxr.h");
+        const std::string compatibilityProbe = Read(
+            root / "tools/configurator/compatibility_probe_win32.cpp");
         const std::string configuratorBuild = Read(
             root / "tools/configurator/CMakeLists.txt");
+        const std::size_t interactionPriority =
+            runtime.find(
+                "KISAK_SP_VR_OFFHAND_INTERACTION_PRIORITY_V86");
+        const std::size_t magazinePriority =
+            runtime.find(
+                "const bool magazineOwnsLeftGrip",
+                interactionPriority);
+        const std::size_t supportPriority =
+            runtime.find(
+                "const bool supportGripCandidate",
+                interactionPriority);
+        const std::size_t grenadeGate =
+            runtime.find(
+                "if (beltGrabPressed",
+                interactionPriority);
+        Check(
+            compatibilityProbe.find(
+                "KISAK_SP_VR_PIMAX_X86_RUNTIME_V86") !=
+                    std::string::npos &&
+                compatibilityProbe.find(
+                    "PiOpenXR_32.json") !=
+                    std::string::npos &&
+                compatibilityProbe.find(
+                    "!probe.openXr32Registered") !=
+                    std::string::npos &&
+                compatibilityProbe.find(
+                    "A valid non-Pimax x86 registration") !=
+                    std::string::npos,
+            "issue #11 V86 compatibility preflight must mirror the launcher's active-Pimax-only x86 manifest repair");
+        Check(
+            runtimeHeader.find(
+                "bool VR_UsesPimaxGripPoseFallback();") !=
+                    std::string::npos &&
+                weapons.find(
+                    "KISAK_SP_VR_PIMAX_FREE_HAND_BASIS_V86") !=
+                    std::string::npos &&
+                runtime.find(
+                    "bool VR_UsesPimaxGripPoseFallback()") !=
+                    std::string::npos &&
+                runtime.find(
+                    "VrRuntimeBackend::OpenXr") !=
+                    std::string::npos &&
+                runtime.find(
+                    "g_vrLeftControllerPalmPoseValid") !=
+                    std::string::npos &&
+                weapons.find(
+                    "VrFreeLeftHandPoseBasis::PimaxGripFallback") !=
+                    std::string::npos &&
+                weapons.find(
+                    "usingPimaxGripPoseFallback") !=
+                    std::string::npos &&
+                weapons.find(
+                    "weapon/support/reload consumers retain the original grip axis") !=
+                    std::string::npos,
+            "issue #32 V86 must apply the Pimax grip fallback basis only to the standalone free hand when OpenXR has no palm pose");
+        Check(
+            interactionPriority != std::string::npos &&
+                magazinePriority != std::string::npos &&
+                supportPriority != std::string::npos &&
+                grenadeGate != std::string::npos &&
+                magazinePriority < supportPriority &&
+                supportPriority < grenadeGate &&
+                runtime.find(
+                    "VR_ManualMagazineOwnsOrClaimsLeftGripLocked") !=
+                    std::string::npos &&
+                runtime.find(
+                    "VR_IsSupportGripCandidateLocked") !=
+                    std::string::npos &&
+                runtime.find(
+                    "[VR][GRENADE][V86] Belt grab suppressed") !=
+                    std::string::npos,
+            "issues #11/#32 V86 must assign the squeeze edge to magazine/reload, then a valid support grip, before allowing a belt grenade grab");
         Check(
             runtime.find(
                 "int VR_GetPromptBindingLabels(") !=
@@ -2101,7 +2279,7 @@ int main(const int argumentCount, char** arguments)
                 "const bool centeredModalMenu") !=
                     std::string::npos &&
                 runtime.find(
-                    "const bool rightEyeGameplayMenu") !=
+                    "const bool activeGameplayMenu") !=
                     std::string::npos &&
                 runtime.find("!centeredModalMenu;") !=
                     std::string::npos &&
@@ -2109,12 +2287,69 @@ int main(const int argumentCount, char** arguments)
                     "const bool cursorCoordinateModeChanged") !=
                     std::string::npos &&
                 runtime.find(
-                    "rightEyeMenuWasActive") !=
+                    "eyeLocalMenuWasActive") !=
                     std::string::npos &&
                 runtime.find(
                     "V75 centered modal cursor uses the full") !=
                     std::string::npos,
-            "V75 centered modals must use full-canvas hit testing and reset the VR cursor when transitioning from the right-eye pause coordinate space");
+            "V75/V83 centered modals must retain full-canvas hit testing while ordinary menus reset into eye-local cursor space");
+        Check(
+            runtime.find(
+                "KISAK_SP_VR_EYE_LOCAL_MENU_AND_CURSOR_V83") !=
+                    std::string::npos &&
+                runtime.find(
+                    "const bool eyeLocalMenu") !=
+                    std::string::npos &&
+                runtime.find(
+                    "eyeLocalMenuWasActive") !=
+                    std::string::npos &&
+                runtime.find(
+                    "static_cast<int>(cursorX)") !=
+                    std::string::npos &&
+                runtime.find("cursorOriginX") ==
+                    std::string::npos &&
+                runtime.find(
+                    "V83_EYE_LOCAL_MENU_SOURCE_OPENXR") !=
+                    std::string::npos &&
+                runtime.find(
+                    "V83_EYE_LOCAL_MENU_SOURCE_OPENVR") !=
+                    std::string::npos &&
+                runtime.find(
+                    "{{ 1.0f,  1.0f}, {0.5f, 0.0f}}") !=
+                    std::string::npos &&
+                runtime.find(
+                    "V83 routes ordinary frontend/pause cursor") !=
+                    std::string::npos,
+            "V83 must sample one completed eye for ordinary menus and keep frontend/pause cursor hit testing in eye-local ScreenPlacement coordinates");
+        Check(
+            runtime.find(
+                "KISAK_SP_VR_OPENXR_DXGI_1_1_FACTORY_V84") !=
+                    std::string::npos &&
+                runtime.find(
+                    "ComPtr<IDXGIFactory1> factory;") !=
+                    std::string::npos &&
+                runtime.find(
+                    "CreateDXGIFactory1(") !=
+                    std::string::npos &&
+                runtime.find(
+                    "ComPtr<IDXGIAdapter1> selectedAdapter;") !=
+                    std::string::npos &&
+                runtime.find(
+                    "factory->EnumAdapters1(") !=
+                    std::string::npos &&
+                runtime.find(
+                    "DXGI_ADAPTER_DESC1 description") !=
+                    std::string::npos &&
+                runtime.find(
+                    "candidateAdapter->GetDesc1(") !=
+                    std::string::npos &&
+                runtime.find(
+                    "CreateDXGIFactory(") ==
+                    std::string::npos &&
+                runtime.find(
+                    "V84 created the D3D11 device through") !=
+                    std::string::npos,
+            "issues #4/#20 V84 must create the OpenXR D3D11 device through DXGI 1.1 so SteamVR can import submitted eye textures");
         const std::size_t rawAttackGetter =
             runtime.find(
                 "bool VR_GetConfiguredAttackButton(");
@@ -2162,11 +2397,46 @@ int main(const int argumentCount, char** arguments)
                     std::string::npos,
             "issue #26 V67: only automatic proximity must re-evaluate the finite support-hand release radius every frame");
         Check(
+            runtime.find(
+                "KISAK_SP_VR_EYE_LOCAL_HUD_ALIGNMENT_V82") !=
+                    std::string::npos &&
+                runtime.find(
+                    "const int uiEyeWidth") !=
+                    std::string::npos &&
+                runtime.find(
+                    "int mainStereoWidth = displayWidth") !=
+                    std::string::npos &&
+                runtime.find(
+                    "mainStereoWidth / 2") !=
+                    std::string::npos &&
+                CountOccurrences(
+                    runtime,
+                    "uiEyeWidth,\n        displayHeight);") == 3u &&
+                CountOccurrences(
+                    runtime,
+                    "VR_UpdatePackedUiScreenPlacement();") == 4u &&
+                runtime.find(
+                    "one %d x %d eye") !=
+                    std::string::npos &&
+                rendererScene.find(
+                    "viewInfoIndex == 1") !=
+                    std::string::npos &&
+                rendererScene.find(
+                    "frontEndDataOut->viewInfo[0].cmds") !=
+                    std::string::npos &&
+                compass.find(
+                    "TransformCompassRect") !=
+                    std::string::npos &&
+                compass.find(
+                    "SP compass and editor share center") !=
+                    std::string::npos,
+            "issue #22 V82 must author shared HUD commands in one-eye space and route the real compass through the editor's canonical transform");
+        Check(
             screenPlacement.find("layout.ammoOffsetX") !=
                     std::string::npos &&
                 screenPlacement.find("layout.ammoScale") !=
                     std::string::npos &&
-                compass.find("layout.compassInsetX") !=
+                compass.find("TransformCompassRect") !=
                     std::string::npos &&
                 messages.find("layout.objectiveOffsetX") !=
                     std::string::npos &&
@@ -2229,11 +2499,15 @@ int main(const int argumentCount, char** arguments)
         Check(
             configurator.find("Setup & Compatibility") !=
                     std::string::npos &&
-                configurator.find("v0.10.0-beta.12") !=
+                configurator.find("v0.10.0-beta.13") !=
                     std::string::npos &&
                 configurator.find("Rescan system") !=
                     std::string::npos &&
                 configurator.find("Apply recommended") !=
+                    std::string::npos &&
+                configurator.find("pimax_crystal_light") !=
+                    std::string::npos &&
+                configurator.find("7684x3128") !=
                     std::string::npos &&
                 configurator.find("Copy support report") !=
                     std::string::npos &&
@@ -2296,7 +2570,47 @@ int main(const int argumentCount, char** arguments)
                     std::string::npos &&
                 configurator.find("*.vrstock") !=
                     std::string::npos,
-            "the beta.12 menu should retain compatibility, handed interactions, weapon/gunstock, metric, calibration, and both visual HUD workflows");
+            "the beta.13 menu should retain compatibility, handed interactions, weapon/gunstock, metric, calibration, and both visual HUD workflows");
+    }
+
+    if (argumentCount >= 6)
+    {
+        const std::string mountedTurretPose = Read(arguments[5]);
+        Check(
+            mountedTurretPose.find(
+                "KISAK_SP_VR_MOUNTED_TURRET_MODEL_AIM_V87") !=
+                    std::string::npos &&
+                mountedTurretPose.find(
+                    "VR_GetRightControllerMountedWeaponAim(") !=
+                    std::string::npos &&
+                mountedTurretPose.find(
+                    "CG_PlayerUsingScopedTurret(0)") !=
+                    std::string::npos,
+            "V87 mounted-gun model aim must use the live right-controller ray while explicitly excluding the HMD-centered fixed scope");
+        Check(
+            mountedTurretPose.find("viewAngleClampBase[0]") !=
+                    std::string::npos &&
+                mountedTurretPose.find("viewAngleClampBase[1]") !=
+                    std::string::npos &&
+                mountedTurretPose.find("viewAngleClampRange[0]") !=
+                    std::string::npos &&
+                mountedTurretPose.find("viewAngleClampRange[1]") !=
+                    std::string::npos &&
+                mountedTurretPose.find(
+                    "AngleDelta(clampedPitch, pose->angles[0])") !=
+                    std::string::npos &&
+                mountedTurretPose.find(
+                    "AngleDelta(clampedYaw, pose->angles[1])") !=
+                    std::string::npos,
+            "V87 visible mounted-gun pitch/yaw must share the replicated mechanical clamp and convert back to model-local angles");
+        Check(
+            mountedTurretPose.find(
+                "[VR][TURRET][V87] Visible mounted-gun tag_aim follows") !=
+                    std::string::npos &&
+                mountedTurretPose.find(
+                    "pose->turret.viewAngles") !=
+                    std::string::npos,
+            "V87 must expose a diagnostic marker and retain the native camera-angle fallback when VR aim is unavailable");
     }
 
     const std::string mixed =
@@ -2349,6 +2663,24 @@ int main(const int argumentCount, char** arguments)
     values["KISAK_VR_OUTPUT_SCALE"] = "0.75";
     messages = kc::ValidateSettings(values);
     Check(HasError(messages, "KISAK_VR_OUTPUT_SCALE"), "native packed mode must require 1.00 scale");
+
+    values = kc::BuiltInDefaults();
+    values["VR_CUSTOM_MODE"] = "7684x3128";
+    messages = kc::ValidateSettings(values);
+    Check(
+        messages.empty(),
+        "issue #41 V85 Pimax Crystal Light packed mode should validate with 1.00 output and a 1024 px scope panel");
+    values["KISAK_VR_OUTPUT_SCALE"] = "0.75";
+    messages = kc::ValidateSettings(values);
+    Check(
+        HasError(messages, "KISAK_VR_OUTPUT_SCALE"),
+        "issue #41 V85 Pimax Crystal Light mode must reject the 0.75 output pair");
+    values["KISAK_VR_OUTPUT_SCALE"] = "1.00";
+    values["KISAK_VR_SCOPE_CAPTURE_SIZE"] = "1280";
+    messages = kc::ValidateSettings(values);
+    Check(
+        HasError(messages, "KISAK_VR_SCOPE_CAPTURE_SIZE"),
+        "issue #41 V85 Pimax Crystal Light mode must keep the scope panel within its reserved 1024 px region");
 
     values = kc::BuiltInDefaults();
     values["KISAK_VR_BIND_USE"] = "left.secondary";
@@ -2436,6 +2768,22 @@ int main(const int argumentCount, char** arguments)
     Check(values["KISAK_VR_OUTPUT_SCALE"] == "0.75", "performance preset should use 0.75 output scale");
     Check(values["KISAK_VR_FSR"] == "1", "performance preset should enable FSR");
     Check(kc::ValidateSettings(values).empty(), "performance preset should validate cleanly");
+
+    values = kc::BuiltInDefaults();
+    values["KISAK_VR_HUD_SAFE_X"] = "0.75";
+    Check(
+        kc::ApplyPreset("Pimax Crystal Light", &values),
+        "issue #41 V85 Pimax Crystal Light preset should exist");
+    Check(
+        values["VR_CUSTOM_MODE"] == "7684x3128" &&
+            values["KISAK_VR_OUTPUT_SCALE"] == "1.00" &&
+            values["KISAK_VR_FSR"] == "0" &&
+            values["KISAK_VR_SCOPE_CAPTURE_SIZE"] == "1024" &&
+            values["KISAK_VR_HUD_SAFE_X"] == "0.75",
+        "issue #41 V85 Pimax preset should reserve 3330 + 3330 + 1024 pixels without replacing personal HUD settings");
+    Check(
+        kc::ValidateSettings(values).empty(),
+        "issue #41 V85 Pimax Crystal Light preset should validate cleanly");
 
     values = kc::BuiltInDefaults();
     Check(kc::ApplyPreset("Seated", &values), "seated preset should exist");
@@ -2810,7 +3158,7 @@ int main(const int argumentCount, char** arguments)
     Check(
         preservedV4.values.at("KISAK_VR_BIND_GRENADE_LAUNCHER") ==
             "right.thumbrest_touch+left.primary_axis.up",
-        "beta.12 should not overwrite an existing V4 grenade-launcher binding");
+        "beta.13 should not overwrite an existing V4 grenade-launcher binding");
     Check(
         preservedV4.messages.empty(),
         "an existing V4 grenade-launcher binding should remain valid");
@@ -2835,9 +3183,9 @@ int main(const int argumentCount, char** arguments)
     Check(saved.backupPath.empty(), "first save should not create a backup");
     Check(Read(userFile).find("\r\n") != std::string::npos, "saved batch file should use CRLF");
     Check(
-        Read(userFile).find("generated by beta.12 Configurator (Unified Setup/Compatibility)") !=
+        Read(userFile).find("generated by beta.13 Configurator (Unified Setup/Compatibility)") !=
             std::string::npos,
-        "saved settings should identify the beta.12 unified-compatibility schema");
+        "saved settings should identify the beta.13 unified-compatibility schema");
     Check(
         Read(userFile).find("KISAK_VR_SETTINGS_REVISION=" + saved.revision) !=
             std::string::npos,

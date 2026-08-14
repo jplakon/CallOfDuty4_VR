@@ -83,6 +83,8 @@ PHYSICAL INTERACTIONS
   it up, then releasing. Foregrip presses remain normal rifle support input.
 - Fresh profiles use the physical right grip for the grenade-launcher shortcut;
   existing saved bindings are preserved.
+- Mounted-machine-gun visuals follow the right-controller firing ray inside the
+  weapon's mechanical pitch/yaw limits while HMD look remains independent.
 - Every standard campaign mission is unlocked in Mission Select.
 
 KNOWN LIMITATION
@@ -100,7 +102,9 @@ Meta Quest 3, Virtual Desktop OpenXR, and NVIDIA RTX 3080 Ti.
 Additional OpenXR profiles and SteamVR controller compatibility remain
 experimental on native hardware. A community PSVR2/OpenVR test reached
 gameplay but reported weapon-orientation, magazine-visual, and binding issues;
-see KNOWN-ISSUES.txt.
+see KNOWN-ISSUES.txt. Pimax Crystal Light has a dedicated 7684x3128 packed
+layout and guarded 32-bit runtime handling, but real Pimax hardware validation
+is still pending.
 
 SUPPORT AND SOURCE
 ------------------

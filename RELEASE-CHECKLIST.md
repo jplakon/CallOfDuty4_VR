@@ -1,6 +1,6 @@
 # Release checklist
 
-This checklist is for `v0.10.0-beta.12` over `v0.10.0-beta.11`.
+This checklist is for `v0.10.0-beta.13` over `v0.10.0-beta.12`.
 
 ## Documentation blockers
 
@@ -41,8 +41,8 @@ This checklist is for `v0.10.0-beta.12` over `v0.10.0-beta.11`.
   `KisakCOD-VR-Input-Mapper`, and `KisakCOD-VR-Configurator-Tests` in Win32
   Release configuration from the committed source.
 - Run the settings tests against `release/package/VR-Settings.bat` and require
-  all 142 catalog settings plus beta.12 compatibility, launcher, runtime, and
-  configurator receipts to pass.
+  all 142 catalog settings plus beta.13 compatibility, launcher, runtime,
+  configurator, HUD/menu, Pimax, and mounted-gun contracts to pass.
 - Confirm `git status --porcelain --untracked-files=no` remains empty.
 - Copy nothing from `bin/Debug` into the player package.
 - Test `bin/Release/KisakCOD-sp.exe` in a clean COD4 installation.
@@ -51,7 +51,7 @@ This checklist is for `v0.10.0-beta.12` over `v0.10.0-beta.11`.
 
 - Open **Setup & Compatibility** on the primary VDXR/Quest 3/RTX 3080 Ti
   system. Require file, DirectX, OS, GPU, and 32-bit OpenXR checks to pass;
-  before the first beta.12 run, require honest headset/controller warnings.
+  before the first beta.13 run, require honest headset/controller warnings.
 - Apply the recommendation only after verifying its confirmation lists the
   exact backend/graphics delta. Snapshot all other settings before/after and
   require handedness, units, comfort, input, HUD, height, interactions, and
@@ -116,6 +116,14 @@ This checklist is for `v0.10.0-beta.12` over `v0.10.0-beta.11`.
   detonator with the configured Fire action. Do not click the mouse or cycle a
   rifle first. Require the native detonation sequence and the
   `[VR][DETONATOR]` route marker.
+- In Bog, equip a mounted machine gun and sweep to every mechanical pitch/yaw
+  limit. Require the visible gun, muzzle direction, and bullets to follow the
+  right controller together while HMD look remains independent.
+- On Pimax Crystal Light, verify `7684x3128` contains both `3330x3128` eyes and
+  the 1024-pixel physical-scope panel, and verify active-runtime selection,
+  free-hand fallback, support grip, magazine, and grenade ownership. If
+  hardware is unavailable for this experimental beta, mark the release notes
+  and announcements as pending instead of claiming validation.
 - After the detonator test, recheck rifle/pistol fire, muzzle obstruction,
   ordinary grenades, manual reload, Hold-mode two-hand aim, and OpenXR.
 - Test all four first-gameplay modes: Off, Position only, Direction / level
@@ -210,7 +218,7 @@ This checklist is for `v0.10.0-beta.12` over `v0.10.0-beta.11`.
 
 ## Tag and package
 
-- Create annotated tag `v0.10.0-beta.12` only after the compatibility,
+- Create annotated tag `v0.10.0-beta.13` only after the compatibility,
   Metric/Imperial, per-weapon/gunstock, handed-interaction, controller, menu,
   rendering, crash-diagnostic, tracked-hand, reload, grenade, OpenVR two-hand,
   Automatic-proximity release, detonator, and campaign state is validated.

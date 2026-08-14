@@ -182,7 +182,7 @@ if not exist "%KISAK_VR_CRASH_DIR%\" (
   exit /b 1
 )
 
-rem KISAK_SP_VR_PACKED_MODE_PREFLIGHT_V32
+rem KISAK_SP_VR_PIMAX_SCOPE_LAUNCH_PREFLIGHT_V86
 if /I "%VR_CUSTOM_MODE%"=="3072x1536" (
   echo ERROR: VR_CUSTOM_MODE=3072x1536 is incompatible with the packed renderer.
   echo It cannot hold two rectangular eye images plus the dedicated scope panel.
@@ -194,11 +194,12 @@ if /I "%VR_CUSTOM_MODE%"=="3072x1536" (
   exit /b 1
 )
 
-if /I not "%VR_CUSTOM_MODE%"=="6016x2688" if /I not "%VR_CUSTOM_MODE%"=="4768x2016" (
+if /I not "%VR_CUSTOM_MODE%"=="6016x2688" if /I not "%VR_CUSTOM_MODE%"=="4768x2016" if /I not "%VR_CUSTOM_MODE%"=="7684x3128" (
   echo ERROR: Unsupported VR_CUSTOM_MODE=%VR_CUSTOM_MODE%.
-  echo Use one of the two verified packed renderer pairs:
+  echo Use one of the three verified packed renderer pairs:
   echo   VR_CUSTOM_MODE=6016x2688 with KISAK_VR_OUTPUT_SCALE=1.00
   echo   VR_CUSTOM_MODE=4768x2016 with KISAK_VR_OUTPUT_SCALE=0.75
+  echo   VR_CUSTOM_MODE=7684x3128 with KISAK_VR_OUTPUT_SCALE=1.00
   pause
   exit /b 1
 )
@@ -217,6 +218,13 @@ if /I "%VR_CUSTOM_MODE%"=="4768x2016" if not "%KISAK_VR_OUTPUT_SCALE%"=="0.75" (
   exit /b 1
 )
 
+if /I "%VR_CUSTOM_MODE%"=="7684x3128" if not "%KISAK_VR_OUTPUT_SCALE%"=="1.00" (
+  echo ERROR: 7684x3128 requires KISAK_VR_OUTPUT_SCALE=1.00.
+  echo Select Pimax Crystal Light in KisakCOD-VR-Configurator.exe.
+  pause
+  exit /b 1
+)
+
 rem KISAK_SP_VR_OPENVR_FALLBACK_V49
 rem OpenXR remains primary. If its 32-bit loader cannot find a compatible
 rem runtime, V49 uses SteamVR's architecture-matched 32-bit OpenVR client.
@@ -229,16 +237,45 @@ set "VR_OPENXR_STARTUP_LOG=%~dp0OpenXR-Startup.log"
 set "KISAK_VR_LOADER_LOG=%VR_OPENXR_STARTUP_LOG%"
 set "XR_LOADER_DEBUG=all"
 set "VR_ACTIVE_RUNTIME_32="
+set "VR_ACTIVE_RUNTIME_64="
+set "VR_PIMAX_ACTIVE_MANIFEST="
+set "VR_PIMAX_RUNTIME_DIR="
+set "VR_PIMAX_X86_CANDIDATE="
+set "VR_EXPLICIT_XR_RUNTIME=0"
+set "VR_RUNTIME_OVERRIDE_REASON=No per-process runtime override was selected."
 
 for /f "tokens=2,*" %%A in ('reg query "HKLM\SOFTWARE\Khronos\OpenXR\1" /v ActiveRuntime /reg:32 2^>nul ^| findstr /i "ActiveRuntime"') do set "VR_ACTIVE_RUNTIME_32=%%B"
+if not defined VR_ACTIVE_RUNTIME_32 for /f "tokens=2,*" %%A in ('reg query "HKCU\SOFTWARE\Khronos\OpenXR\1" /v ActiveRuntime /reg:32 2^>nul ^| findstr /i "ActiveRuntime"') do set "VR_ACTIVE_RUNTIME_32=%%B"
+for /f "tokens=2,*" %%A in ('reg query "HKLM\SOFTWARE\Khronos\OpenXR\1" /v ActiveRuntime /reg:64 2^>nul ^| findstr /i "ActiveRuntime"') do set "VR_ACTIVE_RUNTIME_64=%%B"
+if not defined VR_ACTIVE_RUNTIME_64 for /f "tokens=2,*" %%A in ('reg query "HKCU\SOFTWARE\Khronos\OpenXR\1" /v ActiveRuntime /reg:64 2^>nul ^| findstr /i "ActiveRuntime"') do set "VR_ACTIVE_RUNTIME_64=%%B"
 
->"%VR_OPENXR_STARTUP_LOG%" echo KisakCOD VR startup diagnostics V49
+rem KISAK_SP_VR_PIMAX_X86_RUNTIME_V86
+rem Pimax Play can register PiOpenXR_64.json in the 32-bit registry view even
+rem though COD4 is x86. Preserve every explicit XR_RUNTIME_JSON and every
+rem non-Pimax 32-bit ActiveRuntime. Only repair an actively selected Pimax
+rem runtime, using the architecture-matched manifest from the same folder.
+if defined XR_RUNTIME_JSON set "VR_EXPLICIT_XR_RUNTIME=1"
+if defined XR_RUNTIME_JSON set "VR_RUNTIME_OVERRIDE_REASON=Explicit XR_RUNTIME_JSON was preserved."
+if not defined XR_RUNTIME_JSON if defined VR_ACTIVE_RUNTIME_32 set "VR_PIMAX_ACTIVE_MANIFEST=%VR_ACTIVE_RUNTIME_32%"
+if not defined XR_RUNTIME_JSON if not defined VR_ACTIVE_RUNTIME_32 if defined VR_ACTIVE_RUNTIME_64 set "VR_PIMAX_ACTIVE_MANIFEST=%VR_ACTIVE_RUNTIME_64%"
+if defined VR_PIMAX_ACTIVE_MANIFEST (echo "%VR_PIMAX_ACTIVE_MANIFEST%" | findstr /i /c:"pimax" /c:"piopenxr" >nul)
+if errorlevel 1 set "VR_PIMAX_ACTIVE_MANIFEST="
+if defined VR_PIMAX_ACTIVE_MANIFEST for %%P in ("%VR_PIMAX_ACTIVE_MANIFEST%") do set "VR_PIMAX_RUNTIME_DIR=%%~dpP"
+if defined VR_PIMAX_RUNTIME_DIR set "VR_PIMAX_X86_CANDIDATE=%VR_PIMAX_RUNTIME_DIR%PiOpenXR_32.json"
+if defined VR_PIMAX_ACTIVE_MANIFEST if not exist "%VR_PIMAX_X86_CANDIDATE%" if defined ProgramW6432 set "VR_PIMAX_X86_CANDIDATE=%ProgramW6432%\Pimax\Runtime\PiOpenXR_32.json"
+if defined VR_PIMAX_ACTIVE_MANIFEST if not exist "%VR_PIMAX_X86_CANDIDATE%" if defined ProgramFiles set "VR_PIMAX_X86_CANDIDATE=%ProgramFiles%\Pimax\Runtime\PiOpenXR_32.json"
+if not defined XR_RUNTIME_JSON if /I not "%KISAK_VR_BACKEND%"=="openvr" if defined VR_PIMAX_ACTIVE_MANIFEST if exist "%VR_PIMAX_X86_CANDIDATE%" set "XR_RUNTIME_JSON=%VR_PIMAX_X86_CANDIDATE%"
+if "%VR_EXPLICIT_XR_RUNTIME%"=="0" if defined VR_PIMAX_X86_CANDIDATE if /I "%XR_RUNTIME_JSON%"=="%VR_PIMAX_X86_CANDIDATE%" if defined VR_PIMAX_ACTIVE_MANIFEST set "VR_RUNTIME_OVERRIDE_REASON=V86 selected Pimax's x86 PiOpenXR_32.json for this process."
+
+>"%VR_OPENXR_STARTUP_LOG%" echo KisakCOD VR startup diagnostics V86
 >>"%VR_OPENXR_STARTUP_LOG%" echo Date: %DATE% %TIME%
 >>"%VR_OPENXR_STARTUP_LOG%" echo Game binary: 32-bit x86
 >>"%VR_OPENXR_STARTUP_LOG%" echo Windows architecture: %PROCESSOR_ARCHITECTURE%
 >>"%VR_OPENXR_STARTUP_LOG%" echo Backend policy: %KISAK_VR_BACKEND%
 >>"%VR_OPENXR_STARTUP_LOG%" echo ==== OpenXR environment overrides ====
 >>"%VR_OPENXR_STARTUP_LOG%" set XR_RUNTIME_JSON 2>&1
+>>"%VR_OPENXR_STARTUP_LOG%" echo Runtime selection: %VR_RUNTIME_OVERRIDE_REASON%
+>>"%VR_OPENXR_STARTUP_LOG%" echo Pimax x86 candidate: %VR_PIMAX_X86_CANDIDATE%
 >>"%VR_OPENXR_STARTUP_LOG%" set XR_API_LAYER_PATH 2>&1
 >>"%VR_OPENXR_STARTUP_LOG%" set XR_ENABLE_API_LAYERS 2>&1
 >>"%VR_OPENXR_STARTUP_LOG%" echo.

@@ -2866,11 +2866,18 @@ static bool VR_BuildLeftHandPoseAxisFromOpenXrQuaternion(
         0.0001f;
 }
 
+enum class VrFreeLeftHandPoseBasis
+{
+    Grip = 0,
+    PalmSurface,
+    PimaxGripFallback,
+};
+
 static bool VR_BuildFreeLeftHandTransform(
     const VrSplitHandAsset* asset,
     const float leftControllerOrigin[3],
     const float leftControllerAxis[3][3],
-    const bool palmSurfacePose,
+    const VrFreeLeftHandPoseBasis poseBasis,
     float wristOrigin[3],
     float wristAxis[3][3],
     float wristQuaternion[4])
@@ -2923,7 +2930,10 @@ static bool VR_BuildFreeLeftHandTransform(
          component < 3;
          ++component)
     {
-        if (palmSurfacePose)
+        if (poseBasis ==
+                VrFreeLeftHandPoseBasis::PalmSurface ||
+            poseBasis ==
+                VrFreeLeftHandPoseBasis::PimaxGripFallback)
         {
             // XR_EXT_palm_pose / OpenXR 1.1 grip_surface semantics:
             // -Z follows a straightened index finger; +X points away from
@@ -2933,6 +2943,14 @@ static bool VR_BuildFreeLeftHandTransform(
             // "intoPalm"), and wrist-to-fingertips.  V25 left the last two
             // palm-surface rows reversed.  Negate both to remove that exact
             // 180-degree roll while retaining a proper rotation.
+            //
+            // KISAK_SP_VR_PIMAX_FREE_HAND_BASIS_V86
+            // PimaxXR identifies its controllers through the Oculus Touch
+            // profile but does not publish palm_ext/pose. Its grip fallback
+            // carries the palm-oriented controller frame expected by this
+            // mapping; the generic grip mapping turns the free glove toward
+            // the player. Apply this only to the standalone free hand. The
+            // weapon/support/reload consumers retain the original grip axis.
             modelAnatomicalPoseAxis[0][component] =
                 asset->modelAnatomicalGripAxis[2][component];
             modelAnatomicalPoseAxis[1][component] =
@@ -3857,6 +3875,10 @@ static bool VR_AddFloatingLeftHandToScene(
             leftControllerOrigin,
             leftHandPoseOrientationHeadLocalOpenXr);
 
+    const bool usingPimaxGripPoseFallback =
+        !usingPalmSurfacePose &&
+        VR_UsesPimaxGripPoseFallback();
+
     if (!usingPalmSurfacePose &&
         !VR_GetTrackedLeftControllerGripQuaternionWorld(
             cameraOrigin,
@@ -3938,7 +3960,11 @@ static bool VR_AddFloatingLeftHandToScene(
             asset,
             leftControllerOrigin,
             leftControllerAxis,
-            usingPalmSurfacePose,
+            usingPalmSurfacePose
+                ? VrFreeLeftHandPoseBasis::PalmSurface
+                : usingPimaxGripPoseFallback
+                    ? VrFreeLeftHandPoseBasis::PimaxGripFallback
+                    : VrFreeLeftHandPoseBasis::Grip,
             freeWristOrigin,
             freeWristAxis,
             freeWristQuaternion))

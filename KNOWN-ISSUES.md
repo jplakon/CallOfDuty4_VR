@@ -1,6 +1,6 @@
 # Known issues
 
-This list applies to `v0.10.0-beta.12`.
+This list applies to `v0.10.0-beta.13`.
 
 ## Setup and compatibility
 
@@ -9,7 +9,7 @@ This list applies to `v0.10.0-beta.12`.
   Connect and wake the headset, run **Save & Launch Diagnostics**, then rescan
   to import the live backend/runtime/system/interaction-profile receipt.
 - KisakCOD and COD4 are 32-bit processes. A valid 64-bit OpenXR registration
-  does not prove that the 32-bit loader can start. Beta.12 reports both registry
+  does not prove that the 32-bit loader can start. Beta.13 reports both registry
   views independently and blocks an OpenXR-only launch when the 32-bit manifest
   is absent or missing on disk.
 - The automatic backend may continue through the experimental x86 OpenVR path
@@ -20,7 +20,7 @@ This list applies to `v0.10.0-beta.12`.
   rendering cannot maintain headset cadence even when the scan passes.
 - **Apply recommended** changes only the runtime backend and the coupled
   graphics profile. Runtime registration remains owned by the headset software;
-  Beta.12 never writes OpenXR registry values or silently starts SteamVR/VDXR.
+  Beta.13 never writes OpenXR registry values or silently starts SteamVR/VDXR.
 - `Compatibility-Report.txt` contains mod-relevant paths and hardware/runtime
   identities for support. Review it before posting publicly if the Windows
   installation path itself is sensitive.
@@ -52,6 +52,11 @@ This list applies to `v0.10.0-beta.12`.
 - The beta.12 OpenVR projection, color, compositor, semantic pose, and
   controller-selector path was verified on Quest 3 through SteamVR. This does
   not by itself prove the same driver behavior on PSVR2 or Index.
+- Beta.13 can select Pimax's `PiOpenXR_32.json` when Pimax is the active
+  runtime, adds a Pimax-only grip-pose fallback, and exposes the dedicated
+  `7684x3128` packed layout. Real Pimax Crystal Light hardware validation is
+  still pending; do not treat a passing desktop compatibility scan as headset
+  proof.
 - The default `6016x2688` / output-scale `1.0` mode is demanding. The supported
   lower preset is `4768x2016` / output-scale `0.75`.
 - `3072x1536` is incompatible with the packed renderer because it cannot hold
@@ -60,14 +65,10 @@ This list applies to `v0.10.0-beta.12`.
 ## Rendering
 
 - Synchronized dynamic shadows can have a significant performance cost.
-- On Pimax Crystal Light's reported `3330x3128` per-eye mode, the current
-  `6016x2688` packed capture cannot contain both eyes plus the 1024-pixel scope
-  panel. Magnified M21/SVD scope output can therefore fall back or disappear;
-  adaptive packed sizing remains tracked in issue #41.
-- Quest 2 and Quest 3 reports show that some live HUD-editor rectangles can be
-  offset from the artwork they control, especially the compass. The recovery
-  controls still work, but the coordinate/alignment repair remains tracked in
-  issue #22.
+- Pimax Crystal Light's reported `3330x3128` per-eye mode uses beta.13's
+  `7684x3128` packed capture so both eyes and the 1024-pixel scope panel fit.
+  Magnified M21/SVD scope output still needs confirmation on real Pimax
+  hardware; report any crop, fallback, or missing scope output.
 - Physical scope alignment can require small headset-specific calibration
   changes in `KisakCOD-VR-Configurator.exe`.
 - Some original flat-screen post-processing and camera animation has been
@@ -90,9 +91,9 @@ This list applies to `v0.10.0-beta.12`.
   position only. The weapon editor's **Apply live** and guided capture
   also update a running SP mission; other settings take effect on next launch.
 - Automatic standing measurement requires an OpenXR `STAGE` space or OpenVR's
-  standing universe. If the runtime has no usable floor reference, beta.12 says so
+  standing universe. If the runtime has no usable floor reference, beta.13 says so
   and applies the saved manual height; it does not guess a floor.
-- Every beta.12 save performs an exact byte and 142-value read-back before it can
+- Every beta.13 save performs an exact byte and 142-value read-back before it can
   report success. The launcher then records the effective profile under
   `%LOCALAPPDATA%\KisakCOD-VR\Active-VR-Settings.txt`, and the game appends
   `STATUS=RUNTIME_ACCEPTED` after parsing the inherited settings. The runtime appends
@@ -104,7 +105,7 @@ This list applies to `v0.10.0-beta.12`.
   first-gameplay recenter values `0` and `1` migrate to explicit Off and Full.
   Missing
   calibration or visual-HUD fields use tested defaults until the profile is
-  saved once by beta.12. Profiles without a unit selector open in Metric mode; the
+  saved once by beta.13. Profiles without a unit selector open in Metric mode; the
   underlying canonical calibration values are not rewritten unless edited.
 - Press-to-bind briefly starts a separate black VR scene. COD4 must be closed,
   and the configured runtime and controllers must already be active.
@@ -126,7 +127,7 @@ This list applies to `v0.10.0-beta.12`.
 
 ## Dynamic prompt labels
 
-- Beta.12 supplies text labels, not controller-button artwork. Quest, PICO, Index,
+- Beta.13 supplies text labels, not controller-button artwork. Quest, PICO, Index,
   Vive, and Mixed Reality glyph packs remain a future controller-specific phase.
 - Hybrid PC commands that combine two semantic actions, and physical grenade or
   magazine instructions whose grammar cannot be replaced safely inside a
@@ -168,6 +169,10 @@ This list applies to `v0.10.0-beta.12`.
 - COD4 contains mission events that use the original flat-screen view ray,
   attack state, or scripted weapon state. Many known cases are bridged, but an
   untested checkpoint can still expose a mission-specific issue.
+- Beta.13 makes mounted-machine-gun visuals follow the right-controller firing
+  ray inside the replicated mechanical arc. Automated contracts pass, but the
+  Bog emplacement still needs headset confirmation; report whether the model,
+  muzzle, and bullets remain aligned at the horizontal and vertical limits.
 - Native grenade-class `hasDetonator` devices now accept the configured Fire
   action without a rendered firearm pose. Report any remaining scripted device
   that still requires a mouse click or weapon-cycle workaround.

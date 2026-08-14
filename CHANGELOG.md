@@ -1,5 +1,57 @@
 # Changelog
 
+## v0.10.0-beta.13
+
+HUD/menu alignment, SteamVR and Pimax compatibility, and mounted-gun visual
+aiming update over `v0.10.0-beta.12`.
+
+### HUD and centered menus
+
+- Authors the shared 2D command list in one-eye coordinates and replays it into
+  both headset eyes.
+- Routes the real SP compass ticker/objective ownerdraws and the editor handle
+  through one canonical transform, while correcting normal-notification bounds.
+- Samples frontend and pause menus from one completed eye so they appear once,
+  centered, instead of as a squeezed side-by-side duplicate.
+- Keeps controller menu-cursor hit testing in eye-local `ScreenPlacement`
+  coordinates and defaults the normal COD4 crosshair to Off for new/reset
+  profiles without overwriting existing LocalAppData settings.
+
+### SteamVR OpenXR and Pimax compatibility
+
+- Creates the OpenXR D3D11 device through `CreateDXGIFactory1`,
+  `IDXGIFactory1`, and `IDXGIAdapter1`, retaining the adapter-LUID match and
+  D3D9Ex/D3D11 interop probe used by the SteamVR x86 sync-texture path.
+- Adds a dedicated Pimax Crystal Light `7684x3128` packed mode: two
+  `3330x3128` eyes plus the existing 1024-pixel physical-scope panel. Quest
+  Native `6016x2688` and Performance `4768x2016` remain unchanged.
+- Selects Pimax's `PiOpenXR_32.json` only when Pimax is the active runtime.
+  Explicit `XR_RUNTIME_JSON` choices and active Quest, VDXR, SteamVR, or Oculus
+  runtime selections remain authoritative.
+- Adds a Pimax-only free-hand grip-basis fallback when palm pose data is absent.
+  Support/weapon pose behavior is unchanged.
+- Makes off-hand interaction ownership explicit: magazine/reload first, then a
+  valid support grip, then a belt grenade.
+
+### Mounted-machine-gun visual aiming
+
+- Drives client-side `tag_aim` and `tag_aim_animated` from the tracked
+  right-controller ray for mounted guns such as the emplacement in Bog.
+- Uses the replicated `playerState.viewAngleClampBase` and
+  `playerState.viewAngleClampRange`, keeping the visible model and server-fired
+  bullets inside the same mechanical pitch/yaw arc.
+- Keeps HMD look independent, preserves the fixed scoped Barrett's HMD-centered
+  route, and retains the native non-VR camera fallback.
+
+### Validation
+
+- Retains all 142 settings/catalog checks and adds focused HUD, menu, DXGI 1.1,
+  Pimax runtime/hand/interaction, and mounted-gun source contracts.
+- The automated suite, Windows Release builds, package inventory, and guarded
+  install/rollback fixtures pass.
+- Real Pimax Crystal Light testing and Bog mounted-gun headset confirmation are
+  still pending and are called out in the release notes.
+
 ## v0.10.0-beta.12
 
 OpenVR compatibility, physical night-vision visor control, and controller

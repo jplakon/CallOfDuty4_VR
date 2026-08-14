@@ -8,7 +8,9 @@
 #include <ragdoll/ragdoll.h>
 #include <client/cl_pose.h>
 #include "cg_main.h"
+#include "vr/vr_openxr.h"
 #include <gfx_d3d/r_scene.h>
+#include <universal/com_math.h>
 #include <universal/profile.h>
 
 void __cdecl PitchToQuat(float pitch, float *quat)
@@ -76,6 +78,98 @@ void __cdecl NormalizeQuatTrans(DObjAnimMat *mat)
     }
 }
 
+// KISAK_SP_VR_MOUNTED_TURRET_MODEL_AIM_V87
+// The server already clamps the mounted weapon's controller ray before it
+// writes gunAngles and fires. Mirror that clamp from the replicated player
+// state so the rendered tag_aim follows the same mechanical arc without
+// coupling the player's independent HMD view back to the weapon.
+static float CG_ClampVrMountedTurretWorldAngle(
+    const float worldAngle,
+    const float clampBase,
+    const float clampRange)
+{
+    float delta = AngleDelta(worldAngle, clampBase);
+
+    if (delta > clampRange)
+    {
+        delta = clampRange;
+    }
+    else if (delta < -clampRange)
+    {
+        delta = -clampRange;
+    }
+
+    return clampBase + delta;
+}
+
+static bool CG_GetVrMountedTurretModelAim(
+    const cpose_t *pose,
+    float *aimAngles)
+{
+    iassert(pose);
+    iassert(aimAngles);
+
+    // The fixed Barrett's scope is intentionally HMD-centered and its world
+    // model is hidden while scoped. Never substitute the hand ray there.
+    if (CG_PlayerUsingScopedTurret(0))
+    {
+        return false;
+    }
+
+    float controllerPitch = 0.0f;
+    float controllerYaw = 0.0f;
+
+    if (!VR_GetRightControllerMountedWeaponAim(
+            &controllerPitch,
+            &controllerYaw))
+    {
+        return false;
+    }
+
+    const playerState_s *playerState =
+        &CG_GetLocalClientGlobals(0)->predictedPlayerState;
+    const float pitchClampRange =
+        playerState->viewAngleClampRange[0];
+    const float yawClampRange =
+        playerState->viewAngleClampRange[1];
+
+    if (pitchClampRange < 0.0f || pitchClampRange > 180.0f ||
+        yawClampRange < 0.0f || yawClampRange > 180.0f)
+    {
+        return false;
+    }
+
+    const float clampedPitch =
+        CG_ClampVrMountedTurretWorldAngle(
+            controllerPitch,
+            playerState->viewAngleClampBase[0],
+            pitchClampRange);
+    const float clampedYaw =
+        CG_ClampVrMountedTurretWorldAngle(
+            controllerYaw,
+            playerState->viewAngleClampBase[1],
+            yawClampRange);
+
+    aimAngles[0] = AngleDelta(clampedPitch, pose->angles[0]);
+    aimAngles[1] = AngleDelta(clampedYaw, pose->angles[1]);
+    aimAngles[2] = 0.0f;
+
+    static bool loggedVrMountedTurretModelAim = false;
+
+    if (!loggedVrMountedTurretModelAim)
+    {
+        Com_Printf(
+            0,
+            "[VR][TURRET][V87] Visible mounted-gun tag_aim follows "
+            "the clamped right-controller ray; firing and visual arcs "
+            "share playerState limits.\n");
+
+        loggedVrMountedTurretModelAim = true;
+    }
+
+    return true;
+}
+
 void __cdecl CG_mg42_DoControllers(const cpose_t *pose, const DObj_s *obj, int *partBits)
 {
     bool playerUsing; // r10
@@ -102,15 +196,19 @@ void __cdecl CG_mg42_DoControllers(const cpose_t *pose, const DObj_s *obj, int *
     flashAngles[2] = 0.0;
     if (playerUsing)
     {
-        iassert(pose->turret.viewAngles);
-        turretViewAngles = (float*)pose->turret.viewAngles;
-        v9 = ((*turretViewAngles - pose->angles[0]) * 0.0027777778);
-        v11 = pose->angles[1];
-        aimAngles[0] = (float)((float)v9 - floor((((*turretViewAngles - pose->angles[0]) * 0.0027777778f) + 0.5f))) * (float)360.0;
-        v12 = (float)((float)(turretViewAngles[1] - (float)v11) * (float)0.0027777778);
-        v13 = floor((((turretViewAngles[1] - (float)v11) * (float)0.0027777778) + (float)0.5));
-        flashAngles[0] = 0.0;
-        aimAngles[1] = (float)((float)v12 - (float)*(double *)&v13) * (float)360.0;
+        if (!CG_GetVrMountedTurretModelAim(pose, aimAngles))
+        {
+            // Preserve the native camera-driven behavior whenever VR pose
+            // data is unavailable or the active turret is scope-driven.
+            iassert(pose->turret.viewAngles);
+            turretViewAngles = (float*)pose->turret.viewAngles;
+            v9 = ((*turretViewAngles - pose->angles[0]) * 0.0027777778);
+            v11 = pose->angles[1];
+            aimAngles[0] = (float)((float)v9 - floor((((*turretViewAngles - pose->angles[0]) * 0.0027777778f) + 0.5f))) * (float)360.0;
+            v12 = (float)((float)(turretViewAngles[1] - (float)v11) * (float)0.0027777778);
+            v13 = floor((((turretViewAngles[1] - (float)v11) * (float)0.0027777778) + (float)0.5));
+            aimAngles[1] = (float)((float)v12 - (float)*(double *)&v13) * (float)360.0;
+        }
     }
     else
     {
@@ -377,4 +475,3 @@ DObjAnimMat *__cdecl CG_DObjCalcPose(const cpose_t *pose, const DObj_s *obj, int
 
     return boneMatrix;
 }
-

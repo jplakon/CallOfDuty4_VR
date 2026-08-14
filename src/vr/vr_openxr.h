@@ -239,6 +239,13 @@ bool VR_GetTrackedLeftControllerPalmQuaternionWorld(
     float palmOrigin[3],
     float palmOrientationHeadLocalOpenXr[4]);
 
+// KISAK_SP_VR_PIMAX_FREE_HAND_BASIS_V86
+// True only while the OpenXR runtime/system identifies as Pimax and no valid
+// palm-surface pose is available. The standalone free hand uses this to
+// interpret Pimax's Oculus-profile grip fallback without changing weapon,
+// support-grip, magazine, grenade, Quest, or OpenVR controller frames.
+bool VR_UsesPimaxGripPoseFallback();
+
 // KISAK_SP_VR_TRACKED_HANDS_V22_CONTROLLER_SPACE_DIAGNOSTICS
 // Enables the temporary in-game transform measurements and the compositor-
 // true off-hand grip origin/axis overlay. KISAK_VR_HAND_DIAGNOSTICS=0 disables

@@ -14,15 +14,40 @@ copy of the original game.
 
 ## Current status
 
-The current public beta is `v0.10.0-beta.12`.
+The current public beta is `v0.10.0-beta.13`.
 
-Beta.12 adds one physical night-vision visor gesture shared by OpenXR and
-OpenVR, repairs the tested Quest 3 SteamVR/OpenVR rendering and controller-pose
-path, and makes the physical right grip the default grenade-launcher shortcut
-for fresh profiles. Existing personal settings and Controller Input V4
-bindings remain unchanged during an update.
+Beta.13 improves HUD and menu placement, updates the SteamVR OpenXR graphics
+path, adds a dedicated Pimax Crystal Light packed layout and guarded runtime
+handling, and makes a mounted machine gun's visible aim follow the same tracked
+right-controller direction as its bullets. Existing LocalAppData profiles and
+Controller Input V4 bindings remain unchanged during an update.
 
-### Beta.12 fixes
+### Beta.13 fixes
+
+- Uses one canonical HUD transform for the real compass ticker/objectives and
+  their editor rectangle, and corrects normal-notification bounds so saved
+  layouts and live artwork stay aligned.
+- Samples frontend and pause menus once into the centered headset view while
+  keeping controller cursor hit testing in eye-local coordinates. The normal
+  COD4 crosshair now defaults to Off only for new or reset profiles.
+- Uses the DXGI 1.1 factory/adapter interfaces required by the SteamVR OpenXR
+  D3D11 interoperability path while retaining adapter-LUID and sync-texture
+  guards.
+- Adds a `7684x3128` Pimax Crystal Light layout: two `3330x3128` eyes plus the
+  existing 1024-pixel physical-scope panel. Quest Native and Performance modes
+  are unchanged.
+- Selects Pimax's 32-bit OpenXR manifest only when Pimax is the active runtime,
+  preserves an explicit `XR_RUNTIME_JSON`, and adds a Pimax-only grip-pose
+  fallback plus magazine/support/grenade interaction ownership guards.
+- Drives mounted-machine-gun `tag_aim` and `tag_aim_animated` from the tracked
+  right-controller ray, clamped by COD4's replicated mechanical pitch/yaw
+  limits. HMD look remains independent and the fixed scoped Barrett keeps its
+  HMD-centered path.
+- Retains all 142 configurator settings checks. The new source/runtime contracts
+  pass; real Pimax Crystal Light and Bog mounted-gun headset confirmation are
+  still requested from testers.
+
+### Beta.12 fixes retained
 
 - Corrects direct OpenVR projection, color transfer, compositor submission,
   and semantic grip/aim controller poses. The complete path was verified on

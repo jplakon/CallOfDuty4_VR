@@ -664,21 +664,29 @@ void __cdecl CG_CompassCalcDimensions(
         {
             kisak::vr::hud::Layout layout;
             VR_GetActiveHudLayout(&layout);
-            *w = rect->w * layout.compassScale;
-            *h = rect->h * layout.compassScale;
-            *x -= layout.compassInsetX;
-            *y -= layout.compassInsetY;
+            const kisak::vr::hud::Rect transformed =
+                kisak::vr::hud::TransformCompassRect(
+                    layout,
+                    {*x, *y, rect->w, rect->h});
+            *x = transformed.x;
+            *y = transformed.y;
+            *w = transformed.width;
+            *h = transformed.height;
 
             static bool loggedVrCompassSafeArea = false;
 
             if (!loggedVrCompassSafeArea)
             {
+                const kisak::vr::hud::Point center =
+                    kisak::vr::hud::ElementCenter(
+                        layout,
+                        kisak::vr::hud::Element::Compass);
                 Com_Printf(
                     0,
-                    "[VR] Inset the SP partial compass by "
-                    "%.1f left and %.1f up at %.2f scale.\n",
-                    layout.compassInsetX,
-                    layout.compassInsetY,
+                    "[VR][HUD] SP compass and editor share center "
+                    "%.1f/%.1f at %.2f scale.\n",
+                    center.x,
+                    center.y,
                     layout.compassScale);
 
                 loggedVrCompassSafeArea = true;

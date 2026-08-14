@@ -54,7 +54,7 @@ constexpr wchar_t kHudEditorClass[] =
 constexpr wchar_t kWeaponEditorClass[] =
     L"KisakCODVrWeaponCalibrationEditorV65";
 constexpr wchar_t kWindowTitle[] =
-    L"KisakCOD VR Configurator - v0.10.0-beta.12";
+    L"KisakCOD VR Configurator - v0.10.0-beta.13";
 
 constexpr int kWindowWidth = 1160;
 constexpr int kWindowHeight = 790;
@@ -982,6 +982,38 @@ std::wstring CompatibilityDetailsText(const vrc::Report& report)
     return output.str();
 }
 
+std::string GraphicsModeForProfile(
+    const std::string& profile)
+{
+    if (profile == "performance")
+    {
+        return "4768x2016";
+    }
+    if (profile == "pimax_crystal_light")
+    {
+        return "7684x3128";
+    }
+    if (profile == "native")
+    {
+        return "6016x2688";
+    }
+    return {};
+}
+
+std::wstring GraphicsProfileLabel(
+    const std::string& profile)
+{
+    if (profile == "performance")
+    {
+        return L"Performance";
+    }
+    if (profile == "pimax_crystal_light")
+    {
+        return L"Pimax Crystal Light";
+    }
+    return L"Native";
+}
+
 void RefreshCompatibility(
     AppState& state,
     const bool showWriteError)
@@ -1038,13 +1070,15 @@ void RefreshCompatibility(
         !state.compatibilityReport.recommendedBackend.empty() &&
         state.compatibilityReport.recommendedBackend !=
             StringValue(state.values, "KISAK_VR_BACKEND", "auto");
+    const std::string recommendedMode =
+        GraphicsModeForProfile(
+            state.compatibilityReport.recommendedGraphicsProfile);
     const bool graphicsChange =
-        (state.compatibilityReport.recommendedGraphicsProfile == "native" &&
-         StringValue(state.values, "VR_CUSTOM_MODE", "6016x2688") !=
-             "6016x2688") ||
-        (state.compatibilityReport.recommendedGraphicsProfile == "performance" &&
-         StringValue(state.values, "VR_CUSTOM_MODE", "6016x2688") !=
-             "4768x2016");
+        !recommendedMode.empty() &&
+        StringValue(
+            state.values,
+            "VR_CUSTOM_MODE",
+            "6016x2688") != recommendedMode;
     if (state.setupApplyRecommended != nullptr)
     {
         EnableWindow(
@@ -1087,15 +1121,20 @@ void ApplyRecommendedCompatibility(AppState& state)
     }
 
     const std::string recommendedMode =
-        recommendedGraphics == "performance"
-            ? "4768x2016"
-            : "6016x2688";
-    if (recommendedMode != currentMode)
+        GraphicsModeForProfile(
+            recommendedGraphics);
+    if (!recommendedMode.empty() &&
+        recommendedMode != currentMode)
     {
         changes << L"Graphics profile: "
-                << (currentMode == "4768x2016" ? L"Performance" : L"Native")
+                << (currentMode == "4768x2016"
+                        ? L"Performance"
+                        : currentMode == "7684x3128"
+                            ? L"Pimax Crystal Light"
+                            : L"Native")
                 << L" -> "
-                << (recommendedGraphics == "performance" ? L"Performance" : L"Native")
+                << GraphicsProfileLabel(
+                       recommendedGraphics)
                 << L"\r\n";
     }
 
@@ -1137,6 +1176,13 @@ void ApplyRecommendedCompatibility(AppState& state)
     else if (recommendedGraphics == "native")
     {
         state.values["VR_CUSTOM_MODE"] = "6016x2688";
+        state.values["KISAK_VR_OUTPUT_SCALE"] = "1.00";
+        state.values["KISAK_VR_FSR"] = "0";
+        state.values["KISAK_VR_SCOPE_CAPTURE_SIZE"] = "1024";
+    }
+    else if (recommendedGraphics == "pimax_crystal_light")
+    {
+        state.values["VR_CUSTOM_MODE"] = "7684x3128";
         state.values["KISAK_VR_OUTPUT_SCALE"] = "1.00";
         state.values["KISAK_VR_FSR"] = "0";
         state.values["KISAK_VR_SCOPE_CAPTURE_SIZE"] = "1024";
@@ -1335,9 +1381,18 @@ void SynchronizePackedMode(AppState& state, const std::string& changedKey)
             state.values,
             "KISAK_VR_OUTPUT_SCALE",
             "1.00") == "0.75";
-        state.values["VR_CUSTOM_MODE"] = performance
-            ? "4768x2016"
-            : "6016x2688";
+        const std::string currentMode = StringValue(
+            state.values,
+            "VR_CUSTOM_MODE",
+            "6016x2688");
+        if (performance)
+        {
+            state.values["VR_CUSTOM_MODE"] = "4768x2016";
+        }
+        else if (currentMode != "7684x3128")
+        {
+            state.values["VR_CUSTOM_MODE"] = "6016x2688";
+        }
         state.values["KISAK_VR_FSR"] = performance ? "1" : "0";
         UpdateAllControls(state);
         return;
@@ -1350,6 +1405,12 @@ void SynchronizePackedMode(AppState& state, const std::string& changedKey)
     {
         state.values["KISAK_VR_OUTPUT_SCALE"] = "0.75";
         state.values["KISAK_VR_FSR"] = "1";
+    }
+    else if (mode == "7684x3128")
+    {
+        state.values["KISAK_VR_OUTPUT_SCALE"] = "1.00";
+        state.values["KISAK_VR_FSR"] = "0";
+        state.values["KISAK_VR_SCOPE_CAPTURE_SIZE"] = "1024";
     }
     else
     {

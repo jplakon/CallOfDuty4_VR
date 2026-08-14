@@ -487,8 +487,10 @@ ComPtr<ID3D11InputLayout> g_vrBlitInputLayout;
 std::array<ComPtr<ID3D11Buffer>, 2>
     g_vrBlitVertexBuffers;
 
-// Both eyes use this full-texture buffer while a UI menu is active.
-// A centered viewport preserves the captured desktop aspect ratio.
+// KISAK_SP_VR_EYE_LOCAL_MENU_AND_CURSOR_V83
+// V82 authors ordinary UI in one-eye pixels.  Frontend/start menus therefore
+// use the completed left-eye source instead of squeezing the full side-by-side
+// frame (and both stereo copies) into each headset eye.
 ComPtr<ID3D11Buffer> g_vrMenuBlitVertexBuffer;
 
 // Active SP pause UI is painted into the right half of the SBS
@@ -1728,7 +1730,7 @@ const VrConfiguratorSettings& VR_GetConfiguratorSettings()
 
         Com_Printf(
             0,
-            "[VR][CONFIG] beta.12 customization loaded: snap %.0f, turn "
+            "[VR][CONFIG] beta.13 customization loaded: snap %.0f, turn "
             "deadzone %.2f, movement deadzone %.2f, two-hand %.2f; "
             "belt forward %.1f, height %.1f, hip %.1f +/- %.1f %s.\n",
             loaded.snapTurnAngleDegrees,
@@ -2541,25 +2543,31 @@ bool VR_LuidMatches(const LUID& left, const LUID& right)
 bool VR_CreateD3D11Device(
     const XrGraphicsRequirementsD3D11KHR& requirements)
 {
-    ComPtr<IDXGIFactory> factory;
+    // KISAK_SP_VR_OPENXR_DXGI_1_1_FACTORY_V84
+    // SteamVR's x86 OpenXR compositor imports submitted D3D11 eye textures
+    // through DXGI 1.1. Create the OpenXR device from the matching factory
+    // and adapter interfaces so the compositor can create its sync texture.
+    ComPtr<IDXGIFactory1> factory;
 
     HRESULT hr =
-        CreateDXGIFactory(
+        CreateDXGIFactory1(
             IID_PPV_ARGS(factory.GetAddressOf()));
 
     if (FAILED(hr))
     {
-        VR_LogHrFailure("CreateDXGIFactory", hr);
+        VR_LogHrFailure(
+            "CreateDXGIFactory1(OpenXR)",
+            hr);
         return false;
     }
 
-    ComPtr<IDXGIAdapter> selectedAdapter;
+    ComPtr<IDXGIAdapter1> selectedAdapter;
 
     for (UINT adapterIndex = 0; ; ++adapterIndex)
     {
-        ComPtr<IDXGIAdapter> candidateAdapter;
+        ComPtr<IDXGIAdapter1> candidateAdapter;
 
-        hr = factory->EnumAdapters(
+        hr = factory->EnumAdapters1(
             adapterIndex,
             candidateAdapter.GetAddressOf());
 
@@ -2570,17 +2578,21 @@ bool VR_CreateD3D11Device(
 
         if (FAILED(hr))
         {
-            VR_LogHrFailure("IDXGIFactory::EnumAdapters", hr);
+            VR_LogHrFailure(
+                "IDXGIFactory1::EnumAdapters1(OpenXR)",
+                hr);
             return false;
         }
 
-        DXGI_ADAPTER_DESC description = {};
+        DXGI_ADAPTER_DESC1 description = {};
 
-        hr = candidateAdapter->GetDesc(&description);
+        hr = candidateAdapter->GetDesc1(&description);
 
         if (FAILED(hr))
         {
-            VR_LogHrFailure("IDXGIAdapter::GetDesc", hr);
+            VR_LogHrFailure(
+                "IDXGIAdapter1::GetDesc1(OpenXR)",
+                hr);
             return false;
         }
 
@@ -2643,7 +2655,8 @@ bool VR_CreateD3D11Device(
 
     Com_Printf(
         0,
-        "[VR] Created OpenXR D3D11 device at feature level 0x%X.\n",
+        "[VR][OPENXR] V84 created the D3D11 device through "
+        "DXGI 1.1 at feature level 0x%X.\n",
         static_cast<unsigned int>(createdFeatureLevel));
 
     return true;
@@ -4556,9 +4569,9 @@ float4 PSScope(PixelInput input) : SV_TARGET
 
     static const VrBlitVertex menuVertices[4] = {
         {{-1.0f,  1.0f}, {0.0f, 0.0f}},
-        {{ 1.0f,  1.0f}, {1.0f, 0.0f}},
+        {{ 1.0f,  1.0f}, {0.5f, 0.0f}},
         {{-1.0f, -1.0f}, {0.0f, 1.0f}},
-        {{ 1.0f, -1.0f}, {1.0f, 1.0f}},
+        {{ 1.0f, -1.0f}, {0.5f, 1.0f}},
     };
 
     D3D11_SUBRESOURCE_DATA menuVertexData = {};
@@ -4575,7 +4588,7 @@ float4 PSScope(PixelInput input) : SV_TARGET
     if (FAILED(hr))
     {
         VR_LogHrFailure(
-            "CreateBuffer(menu comfort blit)",
+            "CreateBuffer(eye-local frontend menu blit)",
             hr);
 
         return false;
@@ -12138,6 +12151,59 @@ void VR_ResolveOffhandGripModes(
 // Both runtime backends publish the semantic weapon-hand and off-hand poses
 // into the same guarded state. Keep the two-hand qualification and blend in a
 // backend-neutral step so OpenXR and the legacy OpenVR fallback cannot drift.
+// Caller must hold g_vrWeaponControllerPoseMutex.
+bool VR_IsSupportGripCandidateLocked()
+{
+    if (!g_vrLeftControllerForegripPoseValid ||
+        !g_vrRightControllerWeaponPoseValid)
+    {
+        return false;
+    }
+
+    const float handDelta[3] = {
+        g_vrLeftControllerForegripPosition[0] -
+            g_vrRightControllerWeaponPosition[0],
+        g_vrLeftControllerForegripPosition[1] -
+            g_vrRightControllerWeaponPosition[1],
+        g_vrLeftControllerForegripPosition[2] -
+            g_vrRightControllerWeaponPosition[2],
+    };
+
+    const float handDistance =
+        std::sqrt(
+            handDelta[0] * handDelta[0] +
+            handDelta[1] * handDelta[1] +
+            handDelta[2] * handDelta[2]);
+
+    const float forwardDistance =
+        handDelta[0] *
+            g_vrRightControllerWeaponAxis[0][0] +
+        handDelta[1] *
+            g_vrRightControllerWeaponAxis[0][1] +
+        handDelta[2] *
+            g_vrRightControllerWeaponAxis[0][2];
+
+    const float minimumDistance =
+        g_vrTwoHandWeaponTargetActive
+            ? 3.0f
+            : 4.0f;
+
+    const float maximumDistance =
+        g_vrTwoHandWeaponTargetActive
+            ? 36.0f
+            : 32.0f;
+
+    const float minimumForwardDistance =
+        g_vrTwoHandWeaponTargetActive
+            ? -1.0f
+            : 1.0f;
+
+    return
+        handDistance >= minimumDistance &&
+        handDistance <= maximumDistance &&
+        forwardDistance >= minimumForwardDistance;
+}
+
 void VR_UpdateTwoHandWeaponTargetFromPublishedPoses()
 {
     bool logTwoHandEngaged = false;
@@ -12149,53 +12215,10 @@ void VR_UpdateTwoHandWeaponTargetFromPublishedPoses()
 
         bool targetActive = false;
 
-        if (g_vrLeftControllerForegripPoseValid &&
-            g_vrLeftControllerForegripPressed &&
-            g_vrRightControllerWeaponPoseValid)
+        if (g_vrLeftControllerForegripPressed)
         {
-            const float handDelta[3] = {
-                g_vrLeftControllerForegripPosition[0] -
-                    g_vrRightControllerWeaponPosition[0],
-                g_vrLeftControllerForegripPosition[1] -
-                    g_vrRightControllerWeaponPosition[1],
-                g_vrLeftControllerForegripPosition[2] -
-                    g_vrRightControllerWeaponPosition[2],
-            };
-
-            const float handDistance =
-                std::sqrt(
-                    handDelta[0] * handDelta[0] +
-                    handDelta[1] * handDelta[1] +
-                    handDelta[2] * handDelta[2]);
-
-            const float forwardDistance =
-                handDelta[0] *
-                    g_vrRightControllerWeaponAxis[0][0] +
-                handDelta[1] *
-                    g_vrRightControllerWeaponAxis[0][1] +
-                handDelta[2] *
-                    g_vrRightControllerWeaponAxis[0][2];
-
-            const float minimumDistance =
-                g_vrTwoHandWeaponTargetActive
-                    ? 3.0f
-                    : 4.0f;
-
-            const float maximumDistance =
-                g_vrTwoHandWeaponTargetActive
-                    ? 36.0f
-                    : 32.0f;
-
-            const float minimumForwardDistance =
-                g_vrTwoHandWeaponTargetActive
-                    ? -1.0f
-                    : 1.0f;
-
             targetActive =
-                handDistance >= minimumDistance &&
-                handDistance <= maximumDistance &&
-                forwardDistance >=
-                    minimumForwardDistance;
+                VR_IsSupportGripCandidateLocked();
         }
 
         logTwoHandEngaged =
@@ -13595,7 +13618,7 @@ void VR_SendMenuKeyTap(
 void VR_UpdateMenuControllerNavigation()
 {
     static bool menuWasActive = false;
-    static bool rightEyeMenuWasActive = false;
+    static bool eyeLocalMenuWasActive = false;
     static bool confirmWasHeld = false;
     static bool backWasHeld = false;
     static bool loggedMenuCursor = false;
@@ -13616,7 +13639,7 @@ void VR_UpdateMenuControllerNavigation()
     if (!menuActive)
     {
         menuWasActive = false;
-        rightEyeMenuWasActive = false;
+        eyeLocalMenuWasActive = false;
         confirmWasHeld = false;
         backWasHeld = false;
         lastUpdateTime = currentTime;
@@ -13659,9 +13682,14 @@ void VR_UpdateMenuControllerNavigation()
     const bool centeredModalMenu =
         VR_IsCenteredMonoscopicMenuActive();
 
-    const bool rightEyeGameplayMenu =
+    const bool activeGameplayMenu =
         clientUIActives[0].connectionState ==
             CA_ACTIVE &&
+        !centeredModalMenu;
+
+    // V82's ScreenPlacement is eye-local for ordinary frontend and pause UI.
+    // Centered script modals remain the only full-canvas hit-testing mode.
+    const bool eyeLocalMenu =
         !centeredModalMenu;
 
     const std::uint32_t capturedWidth =
@@ -13670,38 +13698,27 @@ void VR_UpdateMenuControllerNavigation()
             : 640u;
 
     const std::uint32_t cursorWidth =
-        rightEyeGameplayMenu &&
+        eyeLocalMenu &&
         capturedWidth >= 2u
             ? capturedWidth / 2u
             : capturedWidth;
-
-    // UI_MouseEvent consumes coordinates in the complete D3D9
-    // backbuffer. The active pause UI is painted into the right
-    // half of the side-by-side frame, so retain an eye-local
-    // controller cursor but add the right-eye viewport origin
-    // before passing it into CoD's UI hit-testing path.
-    const std::uint32_t cursorOriginX =
-        rightEyeGameplayMenu &&
-        capturedWidth >= 2u
-            ? capturedWidth / 2u
-            : 0u;
 
     const std::uint32_t cursorHeight =
         g_vrCapturedStereoHeight > 0u
             ? g_vrCapturedStereoHeight
             : 480u;
 
-    static bool loggedActivePauseCursorOffset = false;
+    static bool loggedEyeLocalMenuCursor = false;
 
-    if (rightEyeGameplayMenu &&
-        !loggedActivePauseCursorOffset)
+    if (eyeLocalMenu &&
+        !loggedEyeLocalMenuCursor)
     {
         Com_Printf(
             0,
-            "[VR] Offset the active pause cursor into the right "
-            "stereo viewport for UI hit testing.\n");
+            "[VR][UI] V83 routes ordinary frontend/pause cursor "
+            "coordinates through one-eye ScreenPlacement space.\n");
 
-        loggedActivePauseCursorOffset = true;
+        loggedEyeLocalMenuCursor = true;
     }
 
     static bool loggedCenteredModalCursor = false;
@@ -13725,21 +13742,21 @@ void VR_UpdateMenuControllerNavigation()
 
     const bool cursorCoordinateModeChanged =
         menuWasActive &&
-        rightEyeGameplayMenu !=
-            rightEyeMenuWasActive;
+        eyeLocalMenu !=
+            eyeLocalMenuWasActive;
 
     if (!menuWasActive ||
         cursorCoordinateModeChanged)
     {
         cursorX =
-            (rightEyeGameplayMenu
+            (activeGameplayMenu
                 ? 0.25f
                 : 0.5f) *
             static_cast<float>(
                 cursorWidth);
 
         cursorY =
-            (rightEyeGameplayMenu
+            (activeGameplayMenu
                 ? 0.26f
                 : 0.5f) *
             static_cast<float>(
@@ -13747,18 +13764,15 @@ void VR_UpdateMenuControllerNavigation()
 
         UI_MouseEvent(
             0,
-            static_cast<int>(
-                cursorOriginX) +
-                static_cast<int>(
-                    cursorX),
+            static_cast<int>(cursorX),
             static_cast<int>(cursorY));
 
         menuWasActive = true;
         lastUpdateTime = currentTime;
     }
 
-    rightEyeMenuWasActive =
-        rightEyeGameplayMenu;
+    eyeLocalMenuWasActive =
+        eyeLocalMenu;
 
     std::uint32_t elapsedMilliseconds =
         currentTime - lastUpdateTime;
@@ -13841,10 +13855,7 @@ void VR_UpdateMenuControllerNavigation()
     {
         UI_MouseEvent(
             0,
-            static_cast<int>(
-                cursorOriginX) +
-                static_cast<int>(
-                    cursorX),
+            static_cast<int>(cursorX),
             static_cast<int>(cursorY));
     }
 
@@ -14320,11 +14331,12 @@ bool VR_RenderSolidColorFrame(
             g_vrCapturedStereoWidth > 0u &&
             g_vrCapturedStereoHeight > 0u)
         {
+            // Every V82-authored menu source occupies one eye. Centered
+            // modals use a center crop; ordinary frontend and pause menus use
+            // their completed left/right eye respectively.
+            // V83_EYE_LOCAL_MENU_SOURCE_OPENXR
             const std::uint32_t menuSourceWidth =
-                (activePauseComfortMode ||
-                 centeredModalComfortMode)
-                    ? VR_GetCapturedMainStereoWidth() / 2u
-                    : VR_GetCapturedMainStereoWidth();
+                VR_GetCapturedMainStereoWidth() / 2u;
 
             const float sourceAspect =
                 static_cast<float>(
@@ -14924,11 +14936,9 @@ bool VR_RenderOpenVrEye(
         g_vrCapturedStereoWidth > 0u &&
         g_vrCapturedStereoHeight > 0u)
     {
+        // V83_EYE_LOCAL_MENU_SOURCE_OPENVR
         const std::uint32_t menuSourceWidth =
-            (activePauseComfortMode ||
-             centeredModalComfortMode)
-                ? VR_GetCapturedMainStereoWidth() / 2u
-                : VR_GetCapturedMainStereoWidth();
+            VR_GetCapturedMainStereoWidth() / 2u;
 
         const float sourceAspect =
             static_cast<float>(menuSourceWidth) /
@@ -15836,6 +15846,80 @@ bool VR_GetTrackedLeftControllerGripQuaternionWorld(
         orientation.w;
 
     return true;
+}
+
+
+bool VR_UsesPimaxGripPoseFallback()
+{
+    if (g_vrRuntimeBackend !=
+        VrRuntimeBackend::OpenXr)
+    {
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(
+            g_vrWeaponControllerPoseMutex);
+
+        if (g_vrLeftControllerPalmPoseValid)
+        {
+            return false;
+        }
+    }
+
+    const auto containsCaseInsensitive = [](
+        const char* const value,
+        const char* const needle)
+    {
+        if (value == nullptr || needle == nullptr ||
+            needle[0] == '\0')
+        {
+            return false;
+        }
+
+        const std::size_t needleLength =
+            std::strlen(needle);
+        for (const char* cursor = value;
+             *cursor != '\0';
+             ++cursor)
+        {
+            if (_strnicmp(
+                    cursor,
+                    needle,
+                    needleLength) == 0)
+            {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    const bool pimaxIdentity =
+        containsCaseInsensitive(
+            g_vrCompatibilityRuntimeName.data(),
+            "pimax") ||
+        containsCaseInsensitive(
+            g_vrCompatibilityRuntimeName.data(),
+            "piopenxr") ||
+        containsCaseInsensitive(
+            g_vrCompatibilityHeadsetName.data(),
+            "pimax");
+
+    if (pimaxIdentity)
+    {
+        static bool loggedPimaxFreeHandBasis = false;
+        if (!loggedPimaxFreeHandBasis)
+        {
+            Com_Printf(
+                0,
+                "[VR][HANDS][V86] Pimax grip/pose fallback uses "
+                "the dedicated free-hand anatomical basis; weapon, "
+                "support-grip, magazine, and grenade frames are unchanged.\n");
+            loggedPimaxFreeHandBasis = true;
+        }
+    }
+
+    return pimaxIdentity;
 }
 
 
@@ -16776,6 +16860,66 @@ static void VR_ResetManualGrenadeInteractionLocked()
 }
 
 
+// KISAK_SP_VR_OFFHAND_INTERACTION_PRIORITY_V86
+// Caller must hold g_vrWeaponControllerPoseMutex. Existing magazine ownership
+// always wins. In the Ready stage, also reserve the same squeeze edge when it
+// is already a valid pull-to-eject grab at the last published magazine well;
+// this makes the decision independent of client/cgame update order.
+static bool VR_ManualMagazineOwnsOrClaimsLeftGripLocked(
+    const float cameraOrigin[3],
+    const float cameraAxis[3][3])
+{
+    if (g_vrManualMagazineReload.stage !=
+        VrManualMagazineReloadStage::Ready)
+    {
+        return true;
+    }
+
+    if (!g_vrManualMagazineReload.enabled ||
+        !g_vrManualMagazineReload.supported ||
+        !g_vrManualMagazineReload.canReload ||
+        !g_vrLeftControllerForegripPoseValid ||
+        VR_GetConfiguratorSettings().reloadEjectMode !=
+            VrInteractions::ReloadEjectMode::Pull)
+    {
+        return false;
+    }
+
+    float leftGripWorld[3] = {};
+    for (int worldComponent = 0;
+         worldComponent < 3;
+         ++worldComponent)
+    {
+        leftGripWorld[worldComponent] =
+            cameraOrigin[worldComponent] +
+            g_vrLeftControllerForegripPosition[0] *
+                cameraAxis[0][worldComponent] +
+            g_vrLeftControllerForegripPosition[1] *
+                cameraAxis[1][worldComponent] +
+            g_vrLeftControllerForegripPosition[2] *
+                cameraAxis[2][worldComponent];
+    }
+
+    const float magazineDelta[3] = {
+        leftGripWorld[0] -
+            g_vrManualMagazineReload.magazineWellOrigin[0],
+        leftGripWorld[1] -
+            g_vrManualMagazineReload.magazineWellOrigin[1],
+        leftGripWorld[2] -
+            g_vrManualMagazineReload.magazineWellOrigin[2],
+    };
+
+    const float magazineDistance =
+        std::sqrt(
+            magazineDelta[0] * magazineDelta[0] +
+            magazineDelta[1] * magazineDelta[1] +
+            magazineDelta[2] * magazineDelta[2]);
+
+    return magazineDistance <=
+        VR_GetConfiguratorSettings().reloadInsertRadius;
+}
+
+
 bool VR_UpdateManualGrenadeInput(
     const int fragWeaponIndex,
     const int tacticalWeaponIndex,
@@ -16807,6 +16951,8 @@ bool VR_UpdateManualGrenadeInput(
     bool logRelease = false;
     bool logEmptySlot = false;
     bool logPendingTimeout = false;
+    bool logMagazinePriority = false;
+    bool logSupportGripPriority = false;
     bool loggedUsedPalmPose = false;
     VrManualGrenadeSlot loggedSlot =
         VrManualGrenadeSlot::None;
@@ -17035,14 +17181,34 @@ bool VR_UpdateManualGrenadeInput(
                 localLeft >= -hipMaximum;
 
             const bool magazineOwnsLeftGrip =
-                g_vrManualMagazineReload.stage !=
-                    VrManualMagazineReloadStage::Ready;
+                VR_ManualMagazineOwnsOrClaimsLeftGripLocked(
+                    cameraOrigin,
+                    cameraAxis);
 
-            if (g_vrManualGrenade.stage ==
+            const bool supportGripCandidate =
+                g_vrLeftControllerForegripPressed &&
+                VR_IsSupportGripCandidateLocked();
+
+            const bool beltGrabPressed =
+                g_vrManualGrenade.stage ==
                     VrManualGrenadeStage::Ready &&
                 squeezePressedEdge &&
+                (insideLeftHip || insideRightHip);
+
+            if (beltGrabPressed &&
+                (magazineOwnsLeftGrip ||
+                 supportGripCandidate))
+            {
+                logMagazinePriority =
+                    magazineOwnsLeftGrip;
+                logSupportGripPriority =
+                    !magazineOwnsLeftGrip &&
+                    supportGripCandidate;
+            }
+
+            if (beltGrabPressed &&
                 !magazineOwnsLeftGrip &&
-                (insideLeftHip || insideRightHip))
+                !supportGripCandidate)
             {
                 const bool fragUsesLeftHip =
                     VrInteractions::FragUsesLeftHip(
@@ -17233,13 +17399,26 @@ bool VR_UpdateManualGrenadeInput(
     {
         Com_Printf(
             0,
-            "[VR][GRENADE] beta.12 handed manual hip grenades are %s. "
+            "[VR][GRENADE] beta.13 handed manual hip grenades are %s. "
             "Belt layout %s; release/toggle the off-hand grip to throw.\n",
             *manualModeEnabled
                 ? "enabled"
                 : "disabled",
             VrInteractions::GrenadeBeltLayoutId(
                 VR_GetConfiguratorSettings().grenadeBeltLayout));
+    }
+
+    if (logMagazinePriority ||
+        logSupportGripPriority)
+    {
+        Com_Printf(
+            0,
+            "[VR][GRENADE][V86] Belt grab suppressed: the off-hand "
+            "squeeze belongs to %s. Release before deliberately "
+            "drawing a grenade.\n",
+            logMagazinePriority
+                ? "physical magazine/reload interaction"
+                : "the valid weapon support-grip candidate");
     }
 
     const char* loggedSlotName =
@@ -17571,7 +17750,7 @@ void VR_EnsureWeaponProfilesLoaded()
     {
         Com_Printf(
             0,
-                "[VR][WEAPON PROFILE] beta.12 loaded revision %s; %u weapon "
+                "[VR][WEAPON PROFILE] beta.13 loaded revision %s; %u weapon "
             "override(s), %u gunstock profile(s), active '%s'.\n",
             g_vrWeaponProfilesRevision.c_str(),
             static_cast<unsigned int>(g_vrWeaponProfiles.weapons.size()),
@@ -21100,7 +21279,7 @@ bool VR_ApplyHeadOrientation(
     return true;
 }
 
-// KISAK_SP_VR_PACKED_UI_SCREEN_PLACEMENT_FIX_V1
+// KISAK_SP_VR_EYE_LOCAL_HUD_ALIGNMENT_V82
 void VR_UpdatePackedUiScreenPlacement()
 {
 #ifdef KISAK_SP
@@ -21116,24 +21295,37 @@ void VR_UpdatePackedUiScreenPlacement()
         return;
     }
 
-    int mainStereoWidth = 0;
+    int mainStereoWidth = displayWidth;
+    int scopePanelSize = 0;
 
-    if (!VR_GetPhysicalSniperScopeCaptureLayout(
+    const bool packedScopeLayout =
+        VR_GetPhysicalSniperScopeCaptureLayout(
             displayWidth,
             displayHeight,
             &mainStereoWidth,
             nullptr,
             nullptr,
-            nullptr) ||
-        mainStereoWidth <= 0 ||
-        mainStereoWidth >= displayWidth)
+            &scopePanelSize);
+
+    // One 2D command list is replayed in each eye's viewport.  It therefore
+    // must be authored in one-eye pixels.  Beta.12 used the combined stereo
+    // width here, placing logical x=320 near an eye edge and making the live
+    // editor disagree with the image seen through the headset.
+    if (mainStereoWidth < 2)
+    {
+        return;
+    }
+
+    const int uiEyeWidth =
+        mainStereoWidth / 2;
+
+    if (uiEyeWidth <= 0)
     {
         return;
     }
 
     const float uiWidth =
-        static_cast<float>(
-            mainStereoWidth);
+        static_cast<float>(uiEyeWidth);
 
     const float uiHeight =
         static_cast<float>(
@@ -21167,33 +21359,36 @@ void VR_UpdatePackedUiScreenPlacement()
         &scrPlaceFullUnsafe,
         0,
         0,
-        mainStereoWidth,
+        uiEyeWidth,
         displayHeight);
 
     ScrPlace_SetupViewport(
         &scrPlaceFull,
         0,
         0,
-        mainStereoWidth,
+        uiEyeWidth,
         displayHeight);
 
     ScrPlace_SetupViewport(
         &scrPlaceView[0],
         0,
         0,
-        mainStereoWidth,
+        uiEyeWidth,
         displayHeight);
 
     appliedHudLayoutRevision = hudLayoutRevision;
 
     Com_Printf(
         0,
-        "[VR][UI] Constrained 2D screen placement to the "
-        "%d x %d stereo region; the %d px dedicated scope "
-        "panel remains outside UI layout.\n",
-        mainStereoWidth,
+        "[VR][HUD] V82 authored the shared 2D command list in "
+        "one %d x %d eye; it is replayed identically in both eyes. "
+        "Companion eye: %d px. Dedicated scope panel: %s (%d px). "
+        "Neither is part of the eye-local HUD layout.\n",
+        uiEyeWidth,
         displayHeight,
-        displayWidth - mainStereoWidth);
+        mainStereoWidth - uiEyeWidth,
+        packedScopeLayout ? "active" : "inactive",
+        scopePanelSize);
 #endif
 }
 

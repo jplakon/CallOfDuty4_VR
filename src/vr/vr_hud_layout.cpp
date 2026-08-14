@@ -17,6 +17,19 @@ namespace
 
 constexpr float kElementMargin = 16.0f;
 
+// The stock SP compass ticker is centered horizontally and anchored to the
+// bottom of the 640x480 HUD.  Its widest background is 124x13 at local
+// -62/-34 after the menu's 0/-10 origin.  Objective icons extend the useful
+// selection area to 144x40.  Keep that source-space center here so both the
+// real ownerdraws and the visual editor use exactly the same group transform.
+constexpr Point kCompassSourceCenter = {0.0f, -27.5f};
+constexpr Size kCompassEditorSize = {144.0f, 40.0f};
+
+// Keep beta.12's editor rectangle as the canonical target.  Users have already
+// positioned that rectangle, and its lower-right inset formula is the public
+// meaning of the saved controls.  V82 moves the real center/bottom-aligned
+// ownerdraw group onto this target instead of making saved layouts jump.
+
 float Clamp(const float value, const float minimum, const float maximum)
 {
     return (std::clamp)(value, minimum, maximum);
@@ -371,8 +384,11 @@ Point ElementCenter(const Layout& layout, const Element element)
         };
     case Element::Notifications:
         return {
-            320.0f + layout.notificationOffsetX,
-            76.0f + layout.notificationOffsetY,
+            safeMinimum.x + 6.0f +
+                135.0f * layout.notificationScale +
+                layout.notificationOffsetX,
+            10.0f + layout.notificationOffsetY +
+                27.0f * layout.notificationScale,
         };
     case Element::ObjectiveBanner:
         return {
@@ -395,12 +411,36 @@ Size ElementSize(const Layout& layout, const Element element)
     switch (element)
     {
     case Element::AmmoEquipment: return {180.0f * scale, 76.0f * scale};
-    case Element::Compass: return {116.0f * scale, 116.0f * scale};
+    case Element::Compass:
+        return {
+            kCompassEditorSize.width * scale,
+            kCompassEditorSize.height * scale,
+        };
     case Element::Notifications: return {270.0f * scale, 54.0f * scale};
     case Element::ObjectiveBanner: return {350.0f * scale, 68.0f * scale};
     case Element::Subtitles: return {500.0f * scale, 72.0f * scale};
     default: return {};
     }
+}
+
+Rect TransformCompassRect(
+    const Layout& layout,
+    const Rect sourceRect)
+{
+    const Point center = ElementCenter(layout, Element::Compass);
+    const float scale = layout.compassScale;
+    const Point targetLocalCenter = {
+        center.x - kCanvasWidth * 0.5f,
+        center.y - kCanvasHeight,
+    };
+    return {
+        targetLocalCenter.x +
+            (sourceRect.x - kCompassSourceCenter.x) * scale,
+        targetLocalCenter.y +
+            (sourceRect.y - kCompassSourceCenter.y) * scale,
+        sourceRect.width * scale,
+        sourceRect.height * scale,
+    };
 }
 
 float ElementScale(const Layout& layout, const Element element)
@@ -552,8 +592,11 @@ void MoveElement(
             72.0f * layout->compassScale - center.y;
         break;
     case Element::Notifications:
-        layout->notificationOffsetX = center.x - 320.0f;
-        layout->notificationOffsetY = center.y - 76.0f;
+        layout->notificationOffsetX = center.x -
+            (safeMinimum.x + 6.0f +
+             135.0f * layout->notificationScale);
+        layout->notificationOffsetY = center.y -
+            (10.0f + 27.0f * layout->notificationScale);
         break;
     case Element::ObjectiveBanner:
         layout->objectiveOffsetX = center.x - 320.0f;
