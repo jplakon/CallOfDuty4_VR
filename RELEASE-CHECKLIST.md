@@ -1,6 +1,6 @@
 # Release checklist
 
-This checklist is for `v0.10.0-beta.13` over `v0.10.0-beta.12`.
+This checklist is for `v0.10.0-beta.14` over `v0.10.0-beta.13`.
 
 ## Documentation blockers
 
@@ -41,7 +41,7 @@ This checklist is for `v0.10.0-beta.13` over `v0.10.0-beta.12`.
   `KisakCOD-VR-Input-Mapper`, and `KisakCOD-VR-Configurator-Tests` in Win32
   Release configuration from the committed source.
 - Run the settings tests against `release/package/VR-Settings.bat` and require
-  all 142 catalog settings plus beta.13 compatibility, launcher, runtime,
+  all 142 catalog settings plus beta.14 compatibility, launcher, runtime,
   configurator, HUD/menu, Pimax, and mounted-gun contracts to pass.
 - Confirm `git status --porcelain --untracked-files=no` remains empty.
 - Copy nothing from `bin/Debug` into the player package.
@@ -49,9 +49,21 @@ This checklist is for `v0.10.0-beta.13` over `v0.10.0-beta.12`.
 
 ## Runtime test
 
+- Open Mission Select and require its artwork and text to share the same
+  eye-local geometry. Open Quit Game and Quit Mission and require a centered
+  dialog in both eyes. Load an old profile with `cg_drawCrosshair 1` and require
+  the legacy flat crosshair to remain suppressed in VR.
+- In Safehouse and Heat, require the air-support ray, marker, and strike point
+  to follow the tracked right controller. Confirm the normal right glove stays
+  stable, the broken canned arms stay hidden, and the still-invisible handheld
+  device is reported as a cosmetic limitation rather than claimed as fixed.
+- Resize, maximize, restore, and DPI-check the Configurator. Require a full
+  `1160x750` client area and prevent resizing below the point where rightmost or
+  bottom controls would be clipped.
+
 - Open **Setup & Compatibility** on the primary VDXR/Quest 3/RTX 3080 Ti
   system. Require file, DirectX, OS, GPU, and 32-bit OpenXR checks to pass;
-  before the first beta.13 run, require honest headset/controller warnings.
+  before the first beta.14 run, require honest headset/controller warnings.
 - Apply the recommendation only after verifying its confirmation lists the
   exact backend/graphics delta. Snapshot all other settings before/after and
   require handedness, units, comfort, input, HUD, height, interactions, and
@@ -119,11 +131,13 @@ This checklist is for `v0.10.0-beta.13` over `v0.10.0-beta.12`.
 - In Bog, equip a mounted machine gun and sweep to every mechanical pitch/yaw
   limit. Require the visible gun, muzzle direction, and bullets to follow the
   right controller together while HMD look remains independent.
-- On Pimax Crystal Light, verify `7684x3128` contains both `3330x3128` eyes and
-  the 1024-pixel physical-scope panel, and verify active-runtime selection,
-  free-hand fallback, support grip, magazine, and grenade ownership. If
-  hardware is unavailable for this experimental beta, mark the release notes
-  and announcements as pending instead of claiming validation.
+- On Pimax Crystal Light Full FOV, verify the runtime's uncropped
+  `4312x5102` recommendation at output scale `0.80` produces two `3450x4082`
+  eyes plus the 1024-pixel scope panel in a `7924x4082` packed surface. Also
+  verify the retained `7684x3128` / `1.00` cropped preset, active-runtime
+  selection, free-hand fallback, support grip, magazine, and grenade ownership.
+  If hardware is unavailable, mark the release notes and announcements as
+  pending instead of claiming validation.
 - After the detonator test, recheck rifle/pistol fire, muzzle obstruction,
   ordinary grenades, manual reload, Hold-mode two-hand aim, and OpenXR.
 - Test all four first-gameplay modes: Off, Position only, Direction / level
@@ -218,15 +232,27 @@ This checklist is for `v0.10.0-beta.13` over `v0.10.0-beta.12`.
 
 ## Tag and package
 
-- Create annotated tag `v0.10.0-beta.13` only after the compatibility,
+- Create annotated tag `v0.10.0-beta.14` only after the compatibility,
   Metric/Imperial, per-weapon/gunstock, handed-interaction, controller, menu,
   rendering, crash-diagnostic, tracked-hand, reload, grenade, OpenVR two-hand,
   Automatic-proximity release, detonator, and campaign state is validated.
-- Run `tools/package_release.py`.
+- Install Inno Setup 6 or 7 and make `ISCC.exe` available through
+  `INNO_SETUP_COMPILER`, `PATH`, a standard install location, or `--iscc`.
+- Run `python tests/installer_builder_tests.py` and require all tests to pass.
+- Run `tools/package_release.py` without `--portable-only` so the portable ZIP
+  and guarded Setup are generated from the same staged payload.
 - The packager must refuse to run if any documentation placeholder or
   controller-map `VERIFY` marker remains.
 - Inspect the ZIP inventory.
 - Verify the ZIP on a second clean COD4 directory or Windows account.
+- Verify the Setup payload count/manifest receipt, install receipt, Start Menu
+  shortcuts, optional desktop shortcut, and post-install Configurator launch.
+- Exercise Setup against the registered Steam path, a secondary Steam library,
+  manual Browse, and an invalid/incomplete directory. The invalid case must
+  exit before changing any game or mod file.
+- On a disposable COD4 copy, hash pre-existing `steam_api.dll`, `binkw32.dll`,
+  `mss32.dll`, and `miles` files; install, update/repair, and uninstall. Require
+  every original hash to be restored and LocalAppData settings to survive.
 - Confirm `SOURCE.txt` points to the exact tag and commit.
 - Confirm `SHA256SUMS.txt` matches all package files.
 - Confirm the package contains only the allowlisted Steamworks, Bink, and
@@ -239,8 +265,9 @@ This checklist is for `v0.10.0-beta.13` over `v0.10.0-beta.12`.
 - Push `main` and the annotated tag to the public GitHub repository.
 - Create a GitHub release entry containing release notes, source tag, Patreon
   link, requirements, and known issues.
-- Attach the verified Windows ZIP and `.sha256` sidecar to the GitHub
-  release.
+- Attach the verified Windows Setup, Setup `.sha256`, portable ZIP, and ZIP
+  `.sha256` sidecars to the GitHub release. Identify Setup as recommended and
+  the ZIP as the manual fallback.
 - Link the GitHub release and exact public source tag from Discord and Patreon.
 - Keep an offline copy of the exact ZIP, checksum, commit, tag, and permission
   correspondence.

@@ -71,7 +71,8 @@ jobs:
           cmake --build build-${{ matrix.config }} --config ${{ matrix.config }} --target "KisakCOD-VR-Configurator"
           cmake --build build-${{ matrix.config }} --config ${{ matrix.config }} --target "KisakCOD-VR-Input-Mapper"
           cmake --build build-${{ matrix.config }} --config ${{ matrix.config }} --target "KisakCOD-VR-Configurator-Tests"
-          .\bin\${{ matrix.config }}\KisakCOD-VR-Configurator-Tests.exe .\release\package\VR-Settings.bat .\release\package\Launch-KisakCOD-VR.bat .\src\vr\vr_openxr.cpp .\tools\configurator\configurator.cpp
+          .\bin\${{ matrix.config }}\KisakCOD-VR-Configurator-Tests.exe .\release\package\VR-Settings.bat .\release\package\Launch-KisakCOD-VR.bat .\src\vr\vr_openxr.cpp .\tools\configurator\configurator.cpp .\src\cgame\cg_pose.cpp .\release\installer\KisakCOD-VR.iss .\tools\package_release.py .\tools\build_installer.py
+          python .\tests\installer_builder_tests.py
           cmake --build build-${{ matrix.config }} --config ${{ matrix.config }} --target "KisakCOD-mp"
           cmake --build build-${{ matrix.config }} --config ${{ matrix.config }} --target "KisakCOD-dedi"
           popd

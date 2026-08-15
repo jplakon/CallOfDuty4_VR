@@ -182,7 +182,7 @@ if not exist "%KISAK_VR_CRASH_DIR%\" (
   exit /b 1
 )
 
-rem KISAK_SP_VR_PIMAX_SCOPE_LAUNCH_PREFLIGHT_V86
+rem KISAK_SP_VR_PIMAX_FULL_FOV_SCOPE_LAUNCH_PREFLIGHT_V89
 if /I "%VR_CUSTOM_MODE%"=="3072x1536" (
   echo ERROR: VR_CUSTOM_MODE=3072x1536 is incompatible with the packed renderer.
   echo It cannot hold two rectangular eye images plus the dedicated scope panel.
@@ -194,12 +194,13 @@ if /I "%VR_CUSTOM_MODE%"=="3072x1536" (
   exit /b 1
 )
 
-if /I not "%VR_CUSTOM_MODE%"=="6016x2688" if /I not "%VR_CUSTOM_MODE%"=="4768x2016" if /I not "%VR_CUSTOM_MODE%"=="7684x3128" (
+if /I not "%VR_CUSTOM_MODE%"=="6016x2688" if /I not "%VR_CUSTOM_MODE%"=="4768x2016" if /I not "%VR_CUSTOM_MODE%"=="7924x4082" if /I not "%VR_CUSTOM_MODE%"=="7684x3128" (
   echo ERROR: Unsupported VR_CUSTOM_MODE=%VR_CUSTOM_MODE%.
-  echo Use one of the three verified packed renderer pairs:
+  echo Use one of the four guarded packed renderer pairs:
   echo   VR_CUSTOM_MODE=6016x2688 with KISAK_VR_OUTPUT_SCALE=1.00
   echo   VR_CUSTOM_MODE=4768x2016 with KISAK_VR_OUTPUT_SCALE=0.75
-  echo   VR_CUSTOM_MODE=7684x3128 with KISAK_VR_OUTPUT_SCALE=1.00
+  echo   VR_CUSTOM_MODE=7924x4082 with KISAK_VR_OUTPUT_SCALE=0.80 ^(Pimax full FOV^)
+  echo   VR_CUSTOM_MODE=7684x3128 with KISAK_VR_OUTPUT_SCALE=1.00 ^(Pimax cropped FOV^)
   pause
   exit /b 1
 )
@@ -218,9 +219,16 @@ if /I "%VR_CUSTOM_MODE%"=="4768x2016" if not "%KISAK_VR_OUTPUT_SCALE%"=="0.75" (
   exit /b 1
 )
 
+if /I "%VR_CUSTOM_MODE%"=="7924x4082" if not "%KISAK_VR_OUTPUT_SCALE%"=="0.80" (
+  echo ERROR: 7924x4082 requires KISAK_VR_OUTPUT_SCALE=0.80.
+  echo Select Pimax Crystal Light in KisakCOD-VR-Configurator.exe.
+  pause
+  exit /b 1
+)
+
 if /I "%VR_CUSTOM_MODE%"=="7684x3128" if not "%KISAK_VR_OUTPUT_SCALE%"=="1.00" (
   echo ERROR: 7684x3128 requires KISAK_VR_OUTPUT_SCALE=1.00.
-  echo Select Pimax Crystal Light in KisakCOD-VR-Configurator.exe.
+  echo Select Pimax Cropped FOV in the Configurator's packed rendering mode.
   pause
   exit /b 1
 )

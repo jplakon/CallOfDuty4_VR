@@ -45,7 +45,8 @@ namespace wc = kisak::configurator::win32_compatibility;
 namespace
 {
 
-constexpr wchar_t kWindowClass[] = L"KisakCODVrConfiguratorV65";
+constexpr wchar_t kWindowClass[] =
+    L"KisakCODVrConfiguratorResizableV96";
 constexpr wchar_t kPreviewClass[] = L"KisakCODVrPreviewV65";
 constexpr wchar_t kChordEditorClass[] =
     L"KisakCODVrBindingChordEditorV65";
@@ -54,10 +55,19 @@ constexpr wchar_t kHudEditorClass[] =
 constexpr wchar_t kWeaponEditorClass[] =
     L"KisakCODVrWeaponCalibrationEditorV65";
 constexpr wchar_t kWindowTitle[] =
-    L"KisakCOD VR Configurator - v0.10.0-beta.13";
+    L"KisakCOD VR Configurator - v0.10.0-beta.14";
 
-constexpr int kWindowWidth = 1160;
-constexpr int kWindowHeight = 790;
+// KISAK_VR_CONFIGURATOR_RESIZABLE_WINDOW_V96
+// The original fixed outer size was only barely larger than the rightmost
+// and bottom controls.  Non-client metrics at some Windows DPI settings could
+// therefore clip those controls with no way to reveal them.  Define the
+// required client area explicitly and give the main window a normal resizing
+// frame while preserving that full layout as its minimum tracking size.
+constexpr int kWindowClientWidth = 1160;
+constexpr int kWindowClientHeight = 750;
+constexpr DWORD kMainWindowStyle =
+    WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU |
+    WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
 constexpr int kTabLeft = 18;
 constexpr int kTabTop = 108;
 constexpr int kTabWidth = 744;
@@ -144,6 +154,33 @@ const std::array<const wchar_t*, 9> kPageNames = {
     L"Controls",
     L"Advanced",
 };
+
+SIZE MainWindowOuterSize()
+{
+    RECT bounds = {
+        0,
+        0,
+        kWindowClientWidth,
+        kWindowClientHeight,
+    };
+
+    if (AdjustWindowRectEx(
+            &bounds,
+            kMainWindowStyle,
+            FALSE,
+            0) == FALSE)
+    {
+        SIZE fallback = {};
+        fallback.cx = kWindowClientWidth;
+        fallback.cy = kWindowClientHeight;
+        return fallback;
+    }
+
+    SIZE result = {};
+    result.cx = bounds.right - bounds.left;
+    result.cy = bounds.bottom - bounds.top;
+    return result;
+}
 
 std::wstring ToWide(const std::string& value)
 {
@@ -991,7 +1028,7 @@ std::string GraphicsModeForProfile(
     }
     if (profile == "pimax_crystal_light")
     {
-        return "7684x3128";
+        return "7924x4082";
     }
     if (profile == "native")
     {
@@ -1009,7 +1046,7 @@ std::wstring GraphicsProfileLabel(
     }
     if (profile == "pimax_crystal_light")
     {
-        return L"Pimax Crystal Light";
+        return L"Pimax Crystal Light (full FOV)";
     }
     return L"Native";
 }
@@ -1129,9 +1166,11 @@ void ApplyRecommendedCompatibility(AppState& state)
         changes << L"Graphics profile: "
                 << (currentMode == "4768x2016"
                         ? L"Performance"
-                        : currentMode == "7684x3128"
-                            ? L"Pimax Crystal Light"
-                            : L"Native")
+                        : currentMode == "7924x4082"
+                            ? L"Pimax Crystal Light (full FOV)"
+                            : currentMode == "7684x3128"
+                                ? L"Pimax Crystal Light (cropped FOV)"
+                                : L"Native")
                 << L" -> "
                 << GraphicsProfileLabel(
                        recommendedGraphics)
@@ -1182,8 +1221,9 @@ void ApplyRecommendedCompatibility(AppState& state)
     }
     else if (recommendedGraphics == "pimax_crystal_light")
     {
-        state.values["VR_CUSTOM_MODE"] = "7684x3128";
-        state.values["KISAK_VR_OUTPUT_SCALE"] = "1.00";
+        // KISAK_SP_VR_PIMAX_FULL_FOV_SCOPE_LAYOUT_V89
+        state.values["VR_CUSTOM_MODE"] = "7924x4082";
+        state.values["KISAK_VR_OUTPUT_SCALE"] = "0.80";
         state.values["KISAK_VR_FSR"] = "0";
         state.values["KISAK_VR_SCOPE_CAPTURE_SIZE"] = "1024";
     }
@@ -1377,10 +1417,11 @@ void SynchronizePackedMode(AppState& state, const std::string& changedKey)
 
     if (changedKey == "KISAK_VR_OUTPUT_SCALE")
     {
-        const bool performance = StringValue(
+        const std::string outputScale = StringValue(
             state.values,
             "KISAK_VR_OUTPUT_SCALE",
-            "1.00") == "0.75";
+            "1.00");
+        const bool performance = outputScale == "0.75";
         const std::string currentMode = StringValue(
             state.values,
             "VR_CUSTOM_MODE",
@@ -1388,6 +1429,10 @@ void SynchronizePackedMode(AppState& state, const std::string& changedKey)
         if (performance)
         {
             state.values["VR_CUSTOM_MODE"] = "4768x2016";
+        }
+        else if (outputScale == "0.80")
+        {
+            state.values["VR_CUSTOM_MODE"] = "7924x4082";
         }
         else if (currentMode != "7684x3128")
         {
@@ -1405,6 +1450,12 @@ void SynchronizePackedMode(AppState& state, const std::string& changedKey)
     {
         state.values["KISAK_VR_OUTPUT_SCALE"] = "0.75";
         state.values["KISAK_VR_FSR"] = "1";
+    }
+    else if (mode == "7924x4082")
+    {
+        state.values["KISAK_VR_OUTPUT_SCALE"] = "0.80";
+        state.values["KISAK_VR_FSR"] = "0";
+        state.values["KISAK_VR_SCOPE_CAPTURE_SIZE"] = "1024";
     }
     else if (mode == "7684x3128")
     {
@@ -6705,15 +6756,16 @@ bool BuildMainWindow(AppState& state)
     state.backgroundBrush = CreateSolidBrush(RGB(246, 248, 251));
     state.previewBrush = CreateSolidBrush(RGB(255, 255, 255));
 
+    const SIZE mainWindowSize = MainWindowOuterSize();
     state.window = CreateWindowExW(
         0,
         kWindowClass,
         kWindowTitle,
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+        kMainWindowStyle,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
-        kWindowWidth,
-        kWindowHeight,
+        mainWindowSize.cx,
+        mainWindowSize.cy,
         nullptr,
         nullptr,
         state.instance,
@@ -6933,6 +6985,22 @@ LRESULT CALLBACK MainWindowProc(
             window,
             GWLP_USERDATA,
             reinterpret_cast<LONG_PTR>(state));
+    }
+
+    if (message == WM_GETMINMAXINFO)
+    {
+        auto* constraints = reinterpret_cast<MINMAXINFO*>(lParam);
+        if (constraints != nullptr)
+        {
+            const SIZE minimumSize = MainWindowOuterSize();
+            constraints->ptMinTrackSize.x = std::max(
+                constraints->ptMinTrackSize.x,
+                minimumSize.cx);
+            constraints->ptMinTrackSize.y = std::max(
+                constraints->ptMinTrackSize.y,
+                minimumSize.cy);
+        }
+        return 0;
     }
 
     if (state == nullptr)

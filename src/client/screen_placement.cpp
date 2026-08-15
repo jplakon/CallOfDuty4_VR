@@ -20,6 +20,17 @@ void VR_ApplyHudSafeArea(
     float viewportWidth,
     float viewportHeight)
 {
+    // KISAK_SP_VR_MENU_SAFE_AREA_ISOLATION_V88
+    // The configurable safe rectangle belongs to the in-mission HUD only.
+    // Frontend, pause, and popup menus also draw through scrPlaceView, so
+    // applying the HUD inset while the UI catcher is active makes fullscreen
+    // artwork and safely aligned menu text use different coordinate spaces.
+    // That mismatch caused issue #51's Mission Select overlap in beta.13.
+    if (Key_IsCatcherActive(0, 0x10))
+    {
+        return;
+    }
+
     kisak::vr::hud::Layout layout;
     VR_GetActiveHudLayout(&layout);
     const float horizontalFraction = layout.safeX;

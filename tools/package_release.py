@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a strict, source-linked KisakCOD VR Windows release ZIP."""
+"""Build source-linked KisakCOD VR portable ZIP and guarded Setup artifacts."""
 
 from __future__ import annotations
 
@@ -108,8 +108,9 @@ def zip_info(name: str) -> zipfile.ZipInfo:
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Create an allowlisted KisakCOD VR ZIP from bin/Release and link it "
-            "to the exact public Git tag."
+            "Create allowlisted KisakCOD VR portable ZIP and guarded Windows "
+            "installer artifacts from bin/Release, linked to the exact public "
+            "Git tag."
         )
     )
     parser.add_argument("--version", required=True, help="Example: 0.9.0-beta.1")
@@ -119,6 +120,22 @@ def main() -> int:
         "--output-directory",
         default="releases",
         help="Path relative to the repository root (default: releases)",
+    )
+    parser.add_argument(
+        "--iscc",
+        help=(
+            "Path to Inno Setup's ISCC.exe. When omitted, the installer "
+            "builder checks INNO_SETUP_COMPILER, PATH, and standard install "
+            "locations."
+        ),
+    )
+    parser.add_argument(
+        "--portable-only",
+        action="store_true",
+        help=(
+            "Create only the manual ZIP. Public releases should omit this "
+            "flag so Setup.exe remains the recommended artifact."
+        ),
     )
     args = parser.parse_args()
 
@@ -317,21 +334,38 @@ Input mapper SHA-256: {sha256(input_mapper)}
 
     archive = output_dir / f"KisakCOD-VR-v{args.version}.zip"
     sidecar = archive.with_suffix(archive.suffix + ".sha256")
-    if archive.exists() or sidecar.exists():
-        fail(f"release output already exists; move or remove it first: {archive}")
+    setup = output_dir / f"KisakCOD-VR-v{args.version}-Setup.exe"
+    setup_sidecar = setup.with_suffix(setup.suffix + ".sha256")
+    required_outputs = [archive, sidecar]
+    if not args.portable_only:
+        required_outputs.extend((setup, setup_sidecar))
+    collisions = [path for path in required_outputs if path.exists()]
+    if collisions:
+        fail(
+            "release output already exists; move or remove it first: "
+            + ", ".join(str(path) for path in collisions)
+        )
 
-    temporary_name: str | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            prefix=archive.name + ".",
-            suffix=".tmp",
-            dir=output_dir,
-            delete=False,
-        ) as temporary:
-            temporary_name = temporary.name
+    # KISAKCOD_VR_SHARED_ZIP_INSTALLER_PAYLOAD_V97: both public artifacts are
+    # produced from these exact bytes inside one temporary transaction.
+    with tempfile.TemporaryDirectory(
+        prefix=f"KisakCOD-VR-v{args.version}-",
+        dir=output_dir,
+    ) as temporary_directory:
+        temporary_root = Path(temporary_directory)
+        payload_directory = temporary_root / "payload"
+        artifact_directory = temporary_root / "artifacts"
+        payload_directory.mkdir()
+        artifact_directory.mkdir()
 
+        for name, data in sorted(payload.items()):
+            destination = payload_directory / Path(name)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(data)
+
+        temporary_archive = artifact_directory / archive.name
         with zipfile.ZipFile(
-            temporary_name,
+            temporary_archive,
             mode="w",
             compression=zipfile.ZIP_DEFLATED,
             compresslevel=9,
@@ -340,7 +374,7 @@ Input mapper SHA-256: {sha256(input_mapper)}
             for name, data in sorted(payload.items()):
                 package.writestr(zip_info(name), data)
 
-        with zipfile.ZipFile(temporary_name, mode="r") as package:
+        with zipfile.ZipFile(temporary_archive, mode="r") as package:
             actual_names = set(package.namelist())
             if actual_names != expected_names:
                 fail(
@@ -351,21 +385,71 @@ Input mapper SHA-256: {sha256(input_mapper)}
             if corrupt:
                 fail(f"ZIP CRC test failed for {corrupt}")
 
-        os.replace(temporary_name, archive)
-        temporary_name = None
-        archive_hash = sha256(archive.read_bytes())
-        sidecar.write_text(
+        archive_hash = sha256(temporary_archive.read_bytes())
+        temporary_sidecar = artifact_directory / sidecar.name
+        temporary_sidecar.write_text(
             f"{archive_hash} *{archive.name}\n",
             encoding="ascii",
             newline="\n",
         )
-    finally:
-        if temporary_name:
-            Path(temporary_name).unlink(missing_ok=True)
+
+        if not args.portable_only:
+            installer_command = [
+                sys.executable,
+                str(root / "tools" / "build_installer.py"),
+                "--version",
+                args.version,
+                "--payload-directory",
+                str(payload_directory),
+                "--output-directory",
+                str(artifact_directory),
+            ]
+            if args.iscc:
+                installer_command.extend(("--iscc", args.iscc))
+            installer_result = subprocess.run(
+                installer_command,
+                cwd=root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if installer_result.returncode != 0:
+                detail = (
+                    installer_result.stdout + "\n" + installer_result.stderr
+                ).strip()
+                fail(
+                    "guarded installer build failed"
+                    + (f":\n{detail}" if detail else "")
+                )
+
+            temporary_setup = artifact_directory / setup.name
+            temporary_setup_sidecar = artifact_directory / setup_sidecar.name
+            if not temporary_setup.is_file() or not temporary_setup_sidecar.is_file():
+                fail("installer builder did not produce both required artifacts")
+
+        staged_outputs = [
+            (temporary_archive, archive),
+            (temporary_sidecar, sidecar),
+        ]
+        if not args.portable_only:
+            staged_outputs.extend(
+                (
+                    (artifact_directory / setup.name, setup),
+                    (artifact_directory / setup_sidecar.name, setup_sidecar),
+                )
+            )
+        for temporary_output, final_output in staged_outputs:
+            os.replace(temporary_output, final_output)
 
     print(f"Created: {archive}")
     print(f"Created: {sidecar}")
     print(f"Archive SHA-256: {archive_hash}")
+    if args.portable_only:
+        print("Installer: skipped by explicit --portable-only request")
+    else:
+        print(f"Created: {setup}")
+        print(f"Created: {setup_sidecar}")
+        print(f"Installer SHA-256: {sha256(setup.read_bytes())}")
     print("Package inventory:")
     for name in sorted(expected_names):
         print(f"  {name}")

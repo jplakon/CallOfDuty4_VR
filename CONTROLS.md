@@ -60,7 +60,7 @@ the requested direction to the configured stick or trackpad label.
 
 Full-screen COD4 keyboard menus still show keyboard bindings. If VR is not
 initialized, a command has no unambiguous VR equivalent, or its semantic VR
-action is unbound, the original keyboard label is preserved. Beta.13 uses text
+action is unbound, the original keyboard label is preserved. Beta.14 uses text
 labels; controller artwork is a separate future phase.
 
 F.N.G.'s scripted training gates receive the same command semantics as the

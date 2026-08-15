@@ -1,15 +1,25 @@
 # Known issues
 
-This list applies to `v0.10.0-beta.13`.
+This list applies to `v0.10.0-beta.14`.
 
 ## Setup and compatibility
 
+- The guided installer currently recognizes the complete classic-compatible
+  layout and automatically searches Steam's registered and additional library
+  folders. The Microsoft/Xbox PC app can expose a different raw layout;
+  automatic normalization is intentionally disabled until a verified
+  before/after map is available. Setup rejects that layout before writing and
+  never guesses, downloads, or moves original COD4 assets.
+- Release installers are not code-signed yet, so Windows may identify the
+  publisher as unknown. Download only from the project's GitHub release (or
+  the linked Patreon post) and verify the adjacent `.sha256` file. This is
+  separate from the installer's internal payload-manifest verification.
 - Registry/file detection is an offline preflight, not a synthetic VR session.
   The first scan correctly warns that headset/controller proof is missing.
   Connect and wake the headset, run **Save & Launch Diagnostics**, then rescan
   to import the live backend/runtime/system/interaction-profile receipt.
 - KisakCOD and COD4 are 32-bit processes. A valid 64-bit OpenXR registration
-  does not prove that the 32-bit loader can start. Beta.13 reports both registry
+  does not prove that the 32-bit loader can start. Beta.14 reports both registry
   views independently and blocks an OpenXR-only launch when the 32-bit manifest
   is absent or missing on disk.
 - The automatic backend may continue through the experimental x86 OpenVR path
@@ -20,7 +30,7 @@ This list applies to `v0.10.0-beta.13`.
   rendering cannot maintain headset cadence even when the scan passes.
 - **Apply recommended** changes only the runtime backend and the coupled
   graphics profile. Runtime registration remains owned by the headset software;
-  Beta.13 never writes OpenXR registry values or silently starts SteamVR/VDXR.
+  Beta.14 never writes OpenXR registry values or silently starts SteamVR/VDXR.
 - `Compatibility-Report.txt` contains mod-relevant paths and hardware/runtime
   identities for support. Review it before posting publicly if the Windows
   installation path itself is sensitive.
@@ -52,11 +62,12 @@ This list applies to `v0.10.0-beta.13`.
 - The beta.12 OpenVR projection, color, compositor, semantic pose, and
   controller-selector path was verified on Quest 3 through SteamVR. This does
   not by itself prove the same driver behavior on PSVR2 or Index.
-- Beta.13 can select Pimax's `PiOpenXR_32.json` when Pimax is the active
-  runtime, adds a Pimax-only grip-pose fallback, and exposes the dedicated
-  `7684x3128` packed layout. Real Pimax Crystal Light hardware validation is
-  still pending; do not treat a passing desktop compatibility scan as headset
-  proof.
+- Beta.14 can select Pimax's `PiOpenXR_32.json` when Pimax is the active
+  runtime, retains the Pimax-only grip-pose fallback, and adds the recommended
+  Full FOV `7924x4082` / output-scale `0.80` layout. The earlier
+  `7684x3128` / `1.00` cropped preset remains available. Real Pimax Crystal
+  Light hardware validation is still pending; do not treat a passing desktop
+  compatibility scan as headset proof.
 - The default `6016x2688` / output-scale `1.0` mode is demanding. The supported
   lower preset is `4768x2016` / output-scale `0.75`.
 - `3072x1536` is incompatible with the packed renderer because it cannot hold
@@ -65,10 +76,11 @@ This list applies to `v0.10.0-beta.13`.
 ## Rendering
 
 - Synchronized dynamic shadows can have a significant performance cost.
-- Pimax Crystal Light's reported `3330x3128` per-eye mode uses beta.13's
-  `7684x3128` packed capture so both eyes and the 1024-pixel scope panel fit.
-  Magnified M21/SVD scope output still needs confirmation on real Pimax
-  hardware; report any crop, fallback, or missing scope output.
+- Pimax Crystal Light Full FOV uses the runtime's uncropped `4312x5102`
+  recommendation at output scale `0.80`, producing two `3450x4082` eyes plus
+  the 1024-pixel scope panel in beta.14's `7924x4082` packed surface. Magnified
+  M21/SVD scope output still needs confirmation on real Pimax hardware; report
+  any crop, fallback, or missing scope output.
 - Physical scope alignment can require small headset-specific calibration
   changes in `KisakCOD-VR-Configurator.exe`.
 - Some original flat-screen post-processing and camera animation has been
@@ -91,9 +103,9 @@ This list applies to `v0.10.0-beta.13`.
   position only. The weapon editor's **Apply live** and guided capture
   also update a running SP mission; other settings take effect on next launch.
 - Automatic standing measurement requires an OpenXR `STAGE` space or OpenVR's
-  standing universe. If the runtime has no usable floor reference, beta.13 says so
+  standing universe. If the runtime has no usable floor reference, beta.14 says so
   and applies the saved manual height; it does not guess a floor.
-- Every beta.13 save performs an exact byte and 142-value read-back before it can
+- Every beta.14 save performs an exact byte and 142-value read-back before it can
   report success. The launcher then records the effective profile under
   `%LOCALAPPDATA%\KisakCOD-VR\Active-VR-Settings.txt`, and the game appends
   `STATUS=RUNTIME_ACCEPTED` after parsing the inherited settings. The runtime appends
@@ -105,7 +117,7 @@ This list applies to `v0.10.0-beta.13`.
   first-gameplay recenter values `0` and `1` migrate to explicit Off and Full.
   Missing
   calibration or visual-HUD fields use tested defaults until the profile is
-  saved once by beta.13. Profiles without a unit selector open in Metric mode; the
+  saved once by beta.14. Profiles without a unit selector open in Metric mode; the
   underlying canonical calibration values are not rewritten unless edited.
 - Press-to-bind briefly starts a separate black VR scene. COD4 must be closed,
   and the configured runtime and controllers must already be active.
@@ -127,7 +139,7 @@ This list applies to `v0.10.0-beta.13`.
 
 ## Dynamic prompt labels
 
-- Beta.13 supplies text labels, not controller-button artwork. Quest, PICO, Index,
+- Beta.14 supplies text labels, not controller-button artwork. Quest, PICO, Index,
   Vive, and Mixed Reality glyph packs remain a future controller-specific phase.
 - Hybrid PC commands that combine two semantic actions, and physical grenade or
   magazine instructions whose grammar cannot be replaced safely inside a
@@ -169,7 +181,11 @@ This list applies to `v0.10.0-beta.13`.
 - COD4 contains mission events that use the original flat-screen view ray,
   attack state, or scripted weapon state. Many known cases are bridged, but an
   untested checkpoint can still expose a mission-specific issue.
-- Beta.13 makes mounted-machine-gun visuals follow the right-controller firing
+- Safehouse and Heat air-support targeting now follows the tracked right
+  controller and is functionally usable. The physical handheld targeting
+  device is still invisible; beta.14 keeps the normal right glove and hides the
+  broken canned arms, so this remains a cosmetic limitation.
+- Beta.14 makes mounted-machine-gun visuals follow the right-controller firing
   ray inside the replicated mechanical arc. Automated contracts pass, but the
   Bog emplacement still needs headset confirmation; report whether the model,
   muzzle, and bullets remain aligned at the horizontal and vertical limits.

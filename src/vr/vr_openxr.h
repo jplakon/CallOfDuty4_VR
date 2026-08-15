@@ -51,10 +51,10 @@ bool VR_VerboseDiagnosticsEnabled();
 bool VR_IsQuitConfirmationMenuActive();
 
 // KISAK_SP_VR_CENTERED_SCRIPT_MODAL_V75
-// True while the active UI is a centered modal that must be painted once on
-// the packed 2D canvas and sampled identically for both HMD eyes. This keeps
-// active-mission confirmations and F.N.G.'s difficulty recommendation from
-// inheriting the ordinary right-eye pause-menu render/input path.
+// True while the active UI is a centered modal that must be painted once in
+// the shared command list and sampled identically for both HMD eyes. V82/V88
+// author the shared list in one-eye coordinates; the classifier now controls
+// paint ownership without returning cursor input to full-canvas coordinates.
 bool VR_IsCenteredMonoscopicMenuActive();
 
 // KISAK_SP_VR_FIXED_SCOPED_TURRET_VIEW_FIX_V1

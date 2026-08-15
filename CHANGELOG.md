@@ -1,5 +1,79 @@
 # Changelog
 
+## Unreleased
+
+_No changes yet._
+
+## v0.10.0-beta.14
+
+Stereo UI/crosshair repair, Pimax Full FOV scope support, controller-driven
+air support, a resizable Configurator, and guarded Windows Setup over
+`v0.10.0-beta.13`.
+
+### Stereo menus and crosshair
+
+- Uses the same eye-local geometry for Mission Select artwork and text.
+- Centers Quit Game and Quit Mission confirmation dialogs in both eyes.
+- Suppresses the legacy flat COD4 crosshair whenever VR is active, including
+  profiles that explicitly retained `cg_drawCrosshair 1` from an older beta.
+
+### Pimax Crystal Light Full FOV
+
+- Adds a `7924x4082` packed preset for the runtime's uncropped `4312x5102`
+  recommendation at output scale `0.80`: two `3450x4082` eyes plus the existing
+  1024-pixel physical-scope panel.
+- Retains the earlier `7684x3128` / output-scale `1.00` cropped preset and leaves
+  Quest Native and Performance modes unchanged.
+- Keeps Pimax runtime selection and hand-interaction guards from beta.13. Real
+  Pimax Crystal Light Full FOV and magnified-scope confirmation remain pending.
+
+### Safehouse and Heat air support
+
+- Routes the air-support targeting ray, target marker, and strike placement to
+  the tracked right controller instead of the original flat-screen view ray.
+- Keeps the normal right glove stable and suppresses the broken canned
+  binocular/device arms that produced severe visual garbling.
+- Functional controller targeting was confirmed. The physical handheld device
+  model remains invisible and is documented as a cosmetic limitation.
+
+### Resizable Configurator
+
+- Requests a full `1160x750` client area rather than assuming an outer-window
+  size that can clip controls under Windows DPI and theme metrics.
+- Adds resize, maximize, and restore support plus a minimum tracking size that
+  keeps every rightmost and bottom control accessible.
+
+### Guided Windows installer
+
+- Adds `KisakCOD-VR-v…-Setup.exe` as the recommended artifact while retaining
+  the portable ZIP. Both come from one deterministic case-insensitive
+  allowlisted payload and receive SHA-256 sidecars.
+- Finds Steam App 7940 in the registered/default location and additional
+  `libraryfolders.vdf` libraries, with a manual Browse fallback.
+- Requires `iw3sp.exe`, `localization.txt`, `main\*.iwd`, and the matching
+  `zone\<language>\code_post_gfx.ff` before it writes anything. Unsupported
+  Microsoft/Xbox raw layouts are rejected safely rather than rearranged.
+- Before first overwrite, backs up and SHA-256-verifies every existing managed
+  file. Update/repair preserves those originals; uninstall restores them and
+  leaves game data, saves, and LocalAppData settings untouched.
+- Adds Start Menu shortcuts, an optional desktop shortcut, and optional
+  post-install Configurator launch.
+
+### Publisher and validation corrections
+
+- Makes manifest ordering deterministic and case-insensitive.
+- Corrects Inno preprocessor line breaks, literal `/DName=Value` path
+  definitions, Inno 6/7 close-app API compatibility, and smoke AppId brace
+  escaping.
+- Preserves native Setup switches under Git Bash with
+  `MSYS2_ARG_CONV_EXCL=*`, verifies exact compact-JSON argument transport, and
+  waits for Inno's second uninstall phase and `Log closed.` before validating
+  restoration.
+- Passes Python 3.13.13, Inno Setup 6.7.3, all 142 settings/source checks, all
+  seven installer-builder tests, and the final R8 disposable
+  reject/install/repair/uninstall suite with exact sentinel restoration and
+  fake game-data retention.
+
 ## v0.10.0-beta.13
 
 HUD/menu alignment, SteamVR and Pimax compatibility, and mounted-gun visual

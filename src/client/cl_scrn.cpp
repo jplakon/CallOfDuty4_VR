@@ -97,10 +97,10 @@ int __cdecl CL_CGameRendering()
     DemoType = CL_GetDemoType();
     if (!CG_DrawActiveFrame(0, clients[0].serverTime, DemoType, CUBEMAPSHOT_NONE, 0, animFrametime))
         return 0;
-    // KISAK_SP_VR_CENTERED_SCRIPT_MODAL_V75
-    // The final shared command list below already paints centered modal UI.
-    // Do not also attach that dialog to both stereo view lists: the two
-    // passes use different viewports and become visibly separated in VR.
+    // KISAK_SP_VR_EYE_LOCAL_SHARED_MODAL_V88
+    // The final shared command list below already paints centered modal UI in
+    // one-eye coordinates. Do not also attach that dialog to both stereo view
+    // lists; V88 samples the single shared copy identically for both HMD eyes.
     if ((clientUIActives[0].keyCatchers & 0x10) != 0 &&
         !VR_IsCenteredMonoscopicMenuActive())
         UI_Refresh();

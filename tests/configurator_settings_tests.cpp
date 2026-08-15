@@ -1290,23 +1290,40 @@ int main(const int argumentCount, char** arguments)
                     vrc::RuntimeFamily::Pimax &&
                 pimaxNeedsLayout.recommendedGraphicsProfile ==
                     "pimax_crystal_light",
-            "issue #41 V85 should recommend the scope-safe packed mode after a Pimax Crystal Light runtime receipt");
+            "issue #41 V89 should recommend the full-FOV scope-safe packed mode after a Pimax Crystal Light runtime receipt");
 
         pimax.currentPackedMode = "7684x3128";
-        const vrc::Report pimaxScopeReady =
+        const vrc::Report pimaxCroppedLayout =
             vrc::Evaluate(pimax);
         Check(
-            pimaxScopeReady.status == vrc::Status::Ready &&
-                pimaxScopeReady.recommendedGraphicsProfile ==
+            pimaxCroppedLayout.status == vrc::Status::Warning &&
+                pimaxCroppedLayout.recommendedGraphicsProfile ==
                     "pimax_crystal_light" &&
                 vrc::SerializeReport(
                     pimax,
-                    pimaxScopeReady,
+                    pimaxCroppedLayout,
                     "2026-08-13T22:00:00-0300")
+                        .find(
+                            "CHECK_pimax_scope_layout=WARNING") !=
+                    std::string::npos,
+            "issue #41 V89 should identify the old 7684 x 3128 mode as cropped-FOV-only");
+
+        pimax.currentPackedMode = "7924x4082";
+        pimax.currentOutputScale = "0.80";
+        const vrc::Report pimaxFullFovScopeReady =
+            vrc::Evaluate(pimax);
+        Check(
+            pimaxFullFovScopeReady.status == vrc::Status::Ready &&
+                pimaxFullFovScopeReady.recommendedGraphicsProfile ==
+                    "pimax_crystal_light" &&
+                vrc::SerializeReport(
+                    pimax,
+                    pimaxFullFovScopeReady,
+                    "2026-08-14T15:00:00-0300")
                         .find(
                             "CHECK_pimax_scope_layout=READY") !=
                     std::string::npos,
-            "issue #41 V85 should report two 3330 px eyes plus the 1024 px scope panel as ready only in 7684 x 3128 mode");
+            "issue #41 V89 should reserve 3450 + 3450 + 1024 pixels for uncropped Pimax eyes and the dedicated scope camera");
     }
 
     {
@@ -1788,7 +1805,7 @@ int main(const int argumentCount, char** arguments)
                 launcher.find("compatibility preflight found a launch blocker") !=
                     std::string::npos &&
                 launcher.find("--validate") != std::string::npos,
-            "the launcher should validate overrides, run beta.13 preflight, and publish every guarded state path");
+            "the launcher should validate overrides, run beta.14 preflight, and publish every guarded state path");
         Check(
             launcher.find(
                 "KISAK_SP_VR_PIMAX_X86_RUNTIME_V86") !=
@@ -1808,14 +1825,19 @@ int main(const int argumentCount, char** arguments)
                     "if /I not \"%KISAK_VR_BACKEND%\"==\"openvr\"") !=
                     std::string::npos &&
                 launcher.find(
-                    "KISAK_SP_VR_PIMAX_SCOPE_LAUNCH_PREFLIGHT_V86") !=
+                    "KISAK_SP_VR_PIMAX_FULL_FOV_SCOPE_LAUNCH_PREFLIGHT_V89") !=
+                    std::string::npos &&
+                launcher.find("7924x4082") !=
+                    std::string::npos &&
+                launcher.find(
+                    "7924x4082 requires KISAK_VR_OUTPUT_SCALE=0.80") !=
                     std::string::npos &&
                 launcher.find("7684x3128") !=
                     std::string::npos &&
                 launcher.find(
                     "7684x3128 requires KISAK_VR_OUTPUT_SCALE=1.00") !=
                     std::string::npos,
-            "issues #11/#41 V86 launcher must preserve explicit/non-Pimax runtime choices, select Pimax's x86 manifest only for an active Pimax runtime, and accept the V85 Crystal Light packed mode");
+            "issues #11/#41 V89 launcher must preserve explicit/non-Pimax runtime choices, select Pimax's x86 manifest only for an active Pimax runtime, and guard both full-FOV and cropped-FOV Crystal Light packed modes");
         Check(
             runtime.find("STATUS=RUNTIME_ACCEPTED") != std::string::npos &&
                 runtime.find("RUNTIME_MEASUREMENT_UNITS") !=
@@ -2006,6 +2028,8 @@ int main(const int argumentCount, char** arguments)
             root / "src/gfx_d3d/r_scene.cpp");
         const std::string draw = Read(
             root / "src/cgame/cg_draw.cpp");
+        const std::string reticles = Read(
+            root / "src/cgame/cg_draw_reticles.cpp");
         const std::string cgameMain = Read(
             root / "src/cgame/cg_main.cpp");
         const std::string cgameView = Read(
@@ -2033,6 +2057,8 @@ int main(const int argumentCount, char** arguments)
             root / "src/game/g_scr_main.cpp");
         const std::string gameClientScript = Read(
             root / "src/game/g_client_script_cmd.cpp");
+        const std::string gamePlayerUse = Read(
+            root / "src/game/player_use.cpp");
         const std::string qcommonCommandHeader = Read(
             root / "src/qcommon/cmd.h");
         const std::string qcommonCommands = Read(
@@ -2290,9 +2316,9 @@ int main(const int argumentCount, char** arguments)
                     "eyeLocalMenuWasActive") !=
                     std::string::npos &&
                 runtime.find(
-                    "V75 centered modal cursor uses the full") !=
+                    "V88 shared modal cursor uses the one-eye") !=
                     std::string::npos,
-            "V75/V83 centered modals must retain full-canvas hit testing while ordinary menus reset into eye-local cursor space");
+            "V88 must retain one-pass modal ownership while routing every menu through the same eye-local cursor space");
         Check(
             runtime.find(
                 "KISAK_SP_VR_EYE_LOCAL_MENU_AND_CURSOR_V83") !=
@@ -2321,6 +2347,319 @@ int main(const int argumentCount, char** arguments)
                     "V83 routes ordinary frontend/pause cursor") !=
                     std::string::npos,
             "V83 must sample one completed eye for ordinary menus and keep frontend/pause cursor hit testing in eye-local ScreenPlacement coordinates");
+        Check(
+            screenPlacement.find(
+                "KISAK_SP_VR_MENU_SAFE_AREA_ISOLATION_V88") !=
+                    std::string::npos &&
+                screenPlacement.find(
+                    "Key_IsCatcherActive(0, 0x10)") !=
+                    std::string::npos &&
+                runtime.find(
+                    "KISAK_SP_VR_EYE_LOCAL_SHARED_MODAL_V88") !=
+                    std::string::npos &&
+                runtime.find(
+                    "const bool eyeLocalMenu =\n        true;") !=
+                    std::string::npos &&
+                runtime.find(
+                    "{{-1.0f,  1.0f}, {0.25f, 0.0f}}") ==
+                    std::string::npos &&
+                runtime.find(
+                    "{{ 1.0f,  1.0f}, {0.75f, 0.0f}}") ==
+                    std::string::npos &&
+                runtime.find(
+                    "V88 shared modal mono: retained") !=
+                    std::string::npos &&
+                runtime.find(
+                    "V88 isolated menu ScreenPlacement") !=
+                    std::string::npos &&
+                runtime.find(
+                    "appliedMenuActive == menuActive") !=
+                    std::string::npos &&
+                clientScreen.find(
+                    "KISAK_SP_VR_EYE_LOCAL_SHARED_MODAL_V88") !=
+                    std::string::npos,
+            "issue #51 V88 must isolate menus from HUD safe-area transforms and sample shared dialogs from their eye-local source");
+        Check(
+            reticles.find(
+                "KISAK_SP_VR_FLAT_CROSSHAIR_SUPPRESSION_V88") !=
+                    std::string::npos &&
+                reticles.find(
+                    "if (VR_IsInitialized())") !=
+                    std::string::npos &&
+                reticles.find(
+                    "V88 suppressed the legacy flat weapon") !=
+                    std::string::npos &&
+                reticles.find(
+                    "return true;",
+                    reticles.find(
+                        "KISAK_SP_VR_FLAT_CROSSHAIR_SUPPRESSION_V88")) !=
+                    std::string::npos,
+            "issue #51 V88 must suppress the legacy center-screen weapon crosshair whenever VR is active, including old profiles");
+        Check(
+            gameClientScript.find(
+                "KISAK_SP_VR_AIR_SUPPORT_WEAPON_IDENTITY_V91") !=
+                    std::string::npos &&
+                gameClientScript.find(
+                    "KISAK_SP_VR_AIR_SUPPORT_SCRIPT_AIM_V91") !=
+                    std::string::npos &&
+                gameClientScript.find(
+                    "\"cobra_air_support\"") !=
+                    std::string::npos &&
+                gameClientScript.find(
+                    "\"airstrike_support\"") !=
+                    std::string::npos &&
+                gameClientScript.find(
+                    "G_VR_IsStockAirSupportDesignator(") !=
+                    std::string::npos &&
+                gameClientScript.find(
+                    "VR_GetRightControllerWeaponCommand(") !=
+                    std::string::npos &&
+                gameClientScript.find(
+                    "Scr_AddVector(vrAirSupportAngles);") !=
+                    std::string::npos &&
+                gameClientScript.find(
+                    "[VR][ISSUE45][AIR SUPPORT]") !=
+                    std::string::npos,
+            "issue #45 V91 must identify Safehouse/Heat's exact stock non-binocular support assets and expose the final tracked designator ray through getplayerangles");
+        Check(
+            gamePlayerUse.find(
+                "KISAK_SP_VR_AIR_SUPPORT_WEAPON_IDENTITY_V91") !=
+                    std::string::npos &&
+                gamePlayerUse.find(
+                    "KISAK_SP_VR_AIR_SUPPORT_LOOKAT_AIM_V91") !=
+                    std::string::npos &&
+                gamePlayerUse.find(
+                    "\"cobra_air_support\"") !=
+                    std::string::npos &&
+                gamePlayerUse.find(
+                    "\"airstrike_support\"") !=
+                    std::string::npos &&
+                gamePlayerUse.find(
+                    "G_VR_IsStockAirSupportDesignator(") !=
+                    std::string::npos &&
+                gamePlayerUse.find(
+                    "VR_GetRightControllerWeaponCommand(") !=
+                    std::string::npos &&
+                gamePlayerUse.find(
+                    "AngleVectors(") !=
+                    std::string::npos &&
+                gamePlayerUse.find(
+                    "Native look-at now") !=
+                    std::string::npos,
+            "issue #45 V91 must keep the native look-at fallback on the same exact support assets and tracked designator direction");
+        Check(
+            weapons.find(
+                "KISAK_SP_VR_AIR_SUPPORT_HAND_GEOMETRY_V91") !=
+                    std::string::npos &&
+                weapons.find(
+                    "VR_BuildHiddenWeaponHandModel(") !=
+                    std::string::npos &&
+                weapons.find(
+                    "VR_CreateDegenerateSurfaceIndexList(") !=
+                    std::string::npos &&
+                weapons.find(
+                    "\"cobra_air_support\"") !=
+                    std::string::npos &&
+                weapons.find(
+                    "\"airstrike_support\"") !=
+                    std::string::npos &&
+                CountOccurrences(
+                    weapons,
+                    "VR_GetViewmodelHandModel(") == 3u &&
+                weapons.find(
+                    "return VR_GetRightOnlyWeaponHandModel(") !=
+                    std::string::npos,
+            "issue #45 V91 must hide the canned hand surfaces only for Safehouse/Heat's exact support assets at both DObj creation sites while retaining ordinary tracked-hand fallback for every other weapon");
+        Check(
+            weapons.find(
+                "KISAK_SP_VR_AIR_SUPPORT_RIGHT_HAND_V92") !=
+                    std::string::npos &&
+                CountOccurrences(
+                    weapons,
+                    "VR_IsStockAirSupportDesignator(") == 4u &&
+                weapons.find(
+                    "VR_BuildAirSupportRightHandModel(") !=
+                    std::string::npos &&
+                weapons.find(
+                    "\"j_shoulder_ri\"") !=
+                    std::string::npos &&
+                weapons.find(
+                    "\"j_wristtwist_ri\"") !=
+                    std::string::npos &&
+                weapons.find(
+                    "VR_WeaponUsesHiddenAirSupportHandModel(") !=
+                    std::string::npos &&
+                weapons.find(
+                    "CG_DObjGetWorldTagMatrix(",
+                    weapons.find(
+                        "VR_AddAirSupportRightHandToScene(")) !=
+                    std::string::npos &&
+                weapons.find(
+                    "(void)airSupportRightHandRendered;") !=
+                    std::string::npos,
+            "issue #45 V92/V93/V94/V95 must preserve the exact V91 designator classifier, right-glove extraction, and live right-wrist submission scaffolding");
+        const std::size_t v93AirSupportSceneStart =
+            weapons.find(
+                "static bool VR_AddAirSupportRightHandToScene(");
+        const std::size_t v93AirSupportSceneEnd =
+            weapons.find(
+                "static void VR_HandQuaternionToAxis(",
+                v93AirSupportSceneStart);
+        const std::string v93AirSupportScene =
+            v93AirSupportSceneStart != std::string::npos &&
+                    v93AirSupportSceneEnd > v93AirSupportSceneStart
+                ? weapons.substr(
+                      v93AirSupportSceneStart,
+                      v93AirSupportSceneEnd -
+                          v93AirSupportSceneStart)
+                : std::string();
+        Check(
+            weapons.find(
+                "KISAK_SP_VR_AIR_SUPPORT_STABLE_GLOVE_V93") !=
+                    std::string::npos &&
+                weapons.find(
+                    "s_vrAirSupportStableRightHandDonorModel") !=
+                    std::string::npos &&
+                weapons.find(
+                    "weaponDef->weapType == WEAPTYPE_BULLET") !=
+                    std::string::npos &&
+                weapons.find(
+                    "KISAK_SP_VR_AIR_SUPPORT_NO_POSE_BAKE_V93") !=
+                    std::string::npos &&
+                CountOccurrences(
+                    weapons,
+                    "VR_BakeAirSupportRightHandGripPose(") == 1u &&
+                v93AirSupportScene.find(
+                    "VR_BakeAirSupportRightHandGripPose(") ==
+                    std::string::npos &&
+                v93AirSupportScene.find(
+                    "R_SkinXSurfaceWeight(") ==
+                    std::string::npos &&
+                v93AirSupportScene.find(
+                    "stableGloveSourceModel") !=
+                    std::string::npos &&
+                v93AirSupportScene.find(
+                    "V93 submitted an unskinned") !=
+                    std::string::npos &&
+                v93AirSupportScene.find(
+                    "no support hand skinning or canned arm geometry") !=
+                    std::string::npos,
+            "issue #45 V93 must use an unskinned bind-pose right-glove donor at the proven live wrist and must never invoke V92's corrupt support-animation bake");
+        const std::size_t v94AirSupportDeviceStart =
+            weapons.find(
+                "static bool VR_AddAirSupportDeviceToScene(");
+        const std::size_t v94AirSupportDeviceEnd =
+            weapons.find(
+                "static bool VR_CreateAirSupportRightHandObject(",
+                v94AirSupportDeviceStart);
+        const std::string v94AirSupportDeviceScene =
+            v94AirSupportDeviceStart != std::string::npos &&
+                    v94AirSupportDeviceEnd > v94AirSupportDeviceStart
+                ? weapons.substr(
+                      v94AirSupportDeviceStart,
+                      v94AirSupportDeviceEnd -
+                          v94AirSupportDeviceStart)
+                : std::string();
+        Check(
+            weapons.find(
+                "KISAK_SP_VR_AIR_SUPPORT_DEVICE_RESTORE_V94") !=
+                    std::string::npos &&
+                weapons.find(
+                    "struct VrAirSupportDeviceAsset") !=
+                    std::string::npos &&
+                weapons.find(
+                    "s_vrAirSupportDeviceAssets") !=
+                    std::string::npos &&
+                v94AirSupportDeviceScene.find(
+                    "VR_IsStockAirSupportDesignator(") !=
+                    std::string::npos &&
+                v94AirSupportDeviceScene.find(
+                    "DObjGetNumModels(") !=
+                    std::string::npos &&
+                v94AirSupportDeviceScene.find(
+                    "DObjGetModel(") !=
+                    std::string::npos &&
+                v94AirSupportDeviceScene.find(
+                    "scr_const.tag_weapon") !=
+                    std::string::npos &&
+                v94AirSupportDeviceScene.find(
+                    "CG_DObjGetWorldTagMatrix(") !=
+                    std::string::npos &&
+                v94AirSupportDeviceScene.find(
+                    "R_AddDObjToSceneUntracked(") !=
+                    std::string::npos &&
+                v94AirSupportDeviceScene.find(
+                    "V94 restored standalone") !=
+                    std::string::npos &&
+                weapons.find(
+                    "const bool airSupportDeviceRendered =") !=
+                    std::string::npos &&
+                weapons.find(
+                    "(void)airSupportDeviceRendered;") !=
+                    std::string::npos &&
+                weapons.find(
+                    "for (VrAirSupportDeviceAsset& asset") !=
+                    std::string::npos,
+            "issue #45 V94 must preserve its model-slot-1 tag_weapon fallback without changing V93's stable glove or tracked targeting");
+        const std::size_t v95EmbeddedDeviceStart =
+            weapons.find(
+                "static bool VR_BuildHiddenWeaponHandModel(");
+        const std::size_t v95EmbeddedDeviceEnd =
+            weapons.find(
+                "static XModel* VR_GetHiddenWeaponHandModel(",
+                v95EmbeddedDeviceStart);
+        const std::string v95EmbeddedDeviceBuilder =
+            v95EmbeddedDeviceStart != std::string::npos &&
+                    v95EmbeddedDeviceEnd > v95EmbeddedDeviceStart
+                ? weapons.substr(
+                      v95EmbeddedDeviceStart,
+                      v95EmbeddedDeviceEnd -
+                          v95EmbeddedDeviceStart)
+                : std::string();
+        Check(
+            weapons.find(
+                "KISAK_SP_VR_AIR_SUPPORT_EMBEDDED_DEVICE_V95") !=
+                    std::string::npos &&
+                weapons.find(
+                    "VR_SelectNonArmDeviceTriangle(") !=
+                    std::string::npos &&
+                weapons.find(
+                    "combinedArmWeightSum < 0.50f") !=
+                    std::string::npos &&
+                weapons.find(
+                    "VR_CreateNonArmDeviceIndexList(") !=
+                    std::string::npos &&
+                v95EmbeddedDeviceBuilder.find(
+                    "\"j_shoulder_le\"") !=
+                    std::string::npos &&
+                v95EmbeddedDeviceBuilder.find(
+                    "\"j_shoulder_ri\"") !=
+                    std::string::npos &&
+                v95EmbeddedDeviceBuilder.find(
+                    "if (!sourceSurface.deformed)") !=
+                    std::string::npos &&
+                CountOccurrences(
+                    v95EmbeddedDeviceBuilder,
+                    "VR_CalculateSplitHandVertexWeights(") == 2u &&
+                v95EmbeddedDeviceBuilder.find(
+                    "VR_CreateNonArmDeviceIndexList(") !=
+                    std::string::npos &&
+                v95EmbeddedDeviceBuilder.find(
+                    "preservedRigidTriangleCount") !=
+                    std::string::npos &&
+                v95EmbeddedDeviceBuilder.find(
+                    "preservedWeightedTriangleCount") !=
+                    std::string::npos &&
+                v95EmbeddedDeviceBuilder.find(
+                    "suppressedArmTriangleCount") !=
+                    std::string::npos &&
+                v95EmbeddedDeviceBuilder.find(
+                    "V95 preserved %u embedded") !=
+                    std::string::npos &&
+                weapons.find(
+                    "R_AddDObjToScene(weapInfo->viewModelDObj") !=
+                    std::string::npos,
+            "issue #45 V95 must preserve rigid and non-arm device triangles embedded in composite slot 0 while suppressing both canned arms and retaining the authored viewmodel submission");
         Check(
             runtime.find(
                 "KISAK_SP_VR_OPENXR_DXGI_1_1_FACTORY_V84") !=
@@ -2496,16 +2835,62 @@ int main(const int argumentCount, char** arguments)
     if (argumentCount >= 5)
     {
         const std::string configurator = Read(arguments[4]);
+        const std::size_t v96MainWindowStart =
+            configurator.find("LRESULT CALLBACK MainWindowProc(");
+        const std::size_t v96MainWindowSwitch =
+            configurator.find("switch (message)", v96MainWindowStart);
+        const std::string v96MainWindowSetup =
+            v96MainWindowStart != std::string::npos &&
+                    v96MainWindowSwitch > v96MainWindowStart
+                ? configurator.substr(
+                      v96MainWindowStart,
+                      v96MainWindowSwitch - v96MainWindowStart)
+                : std::string();
+        Check(
+            configurator.find(
+                "KISAK_VR_CONFIGURATOR_RESIZABLE_WINDOW_V96") !=
+                    std::string::npos &&
+                configurator.find(
+                    "KisakCODVrConfiguratorResizableV96") !=
+                    std::string::npos &&
+                configurator.find(
+                    "constexpr int kWindowClientWidth = 1160;") !=
+                    std::string::npos &&
+                configurator.find(
+                    "constexpr int kWindowClientHeight = 750;") !=
+                    std::string::npos &&
+                configurator.find("WS_THICKFRAME") !=
+                    std::string::npos &&
+                configurator.find("WS_MAXIMIZEBOX") !=
+                    std::string::npos &&
+                configurator.find("AdjustWindowRectEx(") !=
+                    std::string::npos &&
+                CountOccurrences(
+                    configurator,
+                    "WM_GETMINMAXINFO") == 1u &&
+                v96MainWindowSetup.find("WM_GETMINMAXINFO") !=
+                    std::string::npos &&
+                v96MainWindowSetup.find("ptMinTrackSize.x") !=
+                    std::string::npos &&
+                v96MainWindowSetup.find("ptMinTrackSize.y") !=
+                    std::string::npos &&
+                configurator.find("mainWindowSize.cx") !=
+                    std::string::npos &&
+                configurator.find("mainWindowSize.cy") !=
+                    std::string::npos,
+            "issue #53 V96 must make the Configurator resizable and guarantee enough initial/minimum client area for every rightmost and bottom control");
         Check(
             configurator.find("Setup & Compatibility") !=
                     std::string::npos &&
-                configurator.find("v0.10.0-beta.13") !=
+                configurator.find("v0.10.0-beta.14") !=
                     std::string::npos &&
                 configurator.find("Rescan system") !=
                     std::string::npos &&
                 configurator.find("Apply recommended") !=
                     std::string::npos &&
                 configurator.find("pimax_crystal_light") !=
+                    std::string::npos &&
+                configurator.find("7924x4082") !=
                     std::string::npos &&
                 configurator.find("7684x3128") !=
                     std::string::npos &&
@@ -2570,7 +2955,7 @@ int main(const int argumentCount, char** arguments)
                     std::string::npos &&
                 configurator.find("*.vrstock") !=
                     std::string::npos,
-            "the beta.13 menu should retain compatibility, handed interactions, weapon/gunstock, metric, calibration, and both visual HUD workflows");
+            "the beta.14 menu should retain compatibility, handed interactions, weapon/gunstock, metric, calibration, and both visual HUD workflows");
     }
 
     if (argumentCount >= 6)
@@ -2611,6 +2996,110 @@ int main(const int argumentCount, char** arguments)
                     "pose->turret.viewAngles") !=
                     std::string::npos,
             "V87 must expose a diagnostic marker and retain the native camera-angle fallback when VR aim is unavailable");
+    }
+
+    if (argumentCount >= 9)
+    {
+        const std::string installer = Read(arguments[6]);
+        const std::string packager = Read(arguments[7]);
+        const std::string installerBuilder = Read(arguments[8]);
+        Check(
+            installer.find(
+                "KISAKCOD_VR_GUARDED_CLASSIC_INSTALLER_V97") !=
+                    std::string::npos &&
+                installer.find(
+                    "#define MyAppId \"{{8A7413D7-9D08-4C56-8E75-9C2E6F4D1701}\"") !=
+                    std::string::npos &&
+                installer.find("AppId={#MyAppId}") !=
+                    std::string::npos &&
+                installer.find("PrivilegesRequired=admin") !=
+                    std::string::npos &&
+                installer.find(
+                    "PrivilegesRequiredOverridesAllowed=commandline") !=
+                    std::string::npos &&
+                installer.find("UsePreviousAppDir=yes") !=
+                    std::string::npos &&
+                installer.find("FindGameInSteamLibraryFile") !=
+                    std::string::npos &&
+                installer.find("libraryfolders.vdf") !=
+                    std::string::npos &&
+                installer.find("Steam App 7940") !=
+                    std::string::npos,
+            "V97 installer must retain one stable upgrade identity, elevate for Program Files, and detect both the registered and additional Steam libraries");
+        Check(
+            installer.find("IsValidClassicInstall") !=
+                    std::string::npos &&
+                installer.find("iw3sp.exe") != std::string::npos &&
+                installer.find("localization.txt") !=
+                    std::string::npos &&
+                installer.find("main\\*.iwd") !=
+                    std::string::npos &&
+                installer.find("\\code_post_gfx.ff") !=
+                    std::string::npos &&
+                installer.find(
+                    "Microsoft/Xbox automatic raw-layout") !=
+                    std::string::npos &&
+                installer.find("No game or mod files were changed.") !=
+                    std::string::npos,
+            "V97 installer must reject incomplete, wrong-language, and not-yet-mapped Microsoft layouts before changing the game folder");
+        Check(
+            installer.find("PreparePayloadBackups") !=
+                    std::string::npos &&
+                installer.find("original-files.txt") !=
+                    std::string::npos &&
+                installer.find("managed-files.txt") !=
+                    std::string::npos &&
+                installer.find("backup-complete.txt") !=
+                    std::string::npos &&
+                installer.find("GetSHA256OfFile(TargetPath)") !=
+                    std::string::npos &&
+                installer.find("GetSHA256OfFile(TemporaryBackup)") !=
+                    std::string::npos &&
+                installer.find("RestoreOriginalFiles") !=
+                    std::string::npos &&
+                installer.find("usPostUninstall") !=
+                    std::string::npos &&
+                installer.find("install-receipt.txt") !=
+                    std::string::npos &&
+                installer.find("[InstallDelete]") ==
+                    std::string::npos,
+            "V97 install, update/repair, and uninstall must preserve every pre-existing managed path through verified incremental backups without broad deletion");
+        Check(
+            packager.find(
+                "KISAKCOD_VR_SHARED_ZIP_INSTALLER_PAYLOAD_V97") !=
+                    std::string::npos &&
+                packager.find("--portable-only") !=
+                    std::string::npos &&
+                packager.find("tools\" / \"build_installer.py") !=
+                    std::string::npos &&
+                packager.find("-Setup.exe") !=
+                    std::string::npos &&
+                packager.find("installer builder did not produce") !=
+                    std::string::npos &&
+                packager.find(
+                    "Path(name).name.lower() == \"iw3sp.exe\"") !=
+                    std::string::npos,
+            "V97 publisher must build the portable ZIP and Setup from the exact same allowlisted payload while continuing to forbid original COD4 data");
+        Check(
+            installerBuilder.find("safe_payload_inventory") !=
+                    std::string::npos &&
+                installerBuilder.find("case-insensitive payload collision") !=
+                    std::string::npos &&
+                installerBuilder.find("INNO_SETUP_COMPILER") !=
+                    std::string::npos &&
+                installerBuilder.find("Inno Setup 7") !=
+                    std::string::npos &&
+                installerBuilder.find("Inno Setup 6") !=
+                    std::string::npos &&
+                installerBuilder.find("payload-manifest.txt") !=
+                    std::string::npos &&
+                installerBuilder.find("/DMyManifestSha256=") !=
+                    std::string::npos &&
+                installerBuilder.find("executable.read(2) != b\"MZ\"") !=
+                    std::string::npos &&
+                installerBuilder.find(".sha256") !=
+                    std::string::npos,
+            "V97 installer builder must validate the payload namespace, compile through a discovered ISCC, and verify the resulting Windows executable and checksum sidecar");
     }
 
     const std::string mixed =
@@ -2669,18 +3158,37 @@ int main(const int argumentCount, char** arguments)
     messages = kc::ValidateSettings(values);
     Check(
         messages.empty(),
-        "issue #41 V85 Pimax Crystal Light packed mode should validate with 1.00 output and a 1024 px scope panel");
+        "issue #41 cropped-FOV Pimax mode should remain available with 1.00 output and a 1024 px scope panel");
     values["KISAK_VR_OUTPUT_SCALE"] = "0.75";
     messages = kc::ValidateSettings(values);
     Check(
         HasError(messages, "KISAK_VR_OUTPUT_SCALE"),
-        "issue #41 V85 Pimax Crystal Light mode must reject the 0.75 output pair");
+        "issue #41 cropped-FOV Pimax mode must reject the 0.75 output pair");
     values["KISAK_VR_OUTPUT_SCALE"] = "1.00";
     values["KISAK_VR_SCOPE_CAPTURE_SIZE"] = "1280";
     messages = kc::ValidateSettings(values);
     Check(
         HasError(messages, "KISAK_VR_SCOPE_CAPTURE_SIZE"),
-        "issue #41 V85 Pimax Crystal Light mode must keep the scope panel within its reserved 1024 px region");
+        "issue #41 cropped-FOV Pimax mode must keep the scope panel within its reserved 1024 px region");
+
+    values = kc::BuiltInDefaults();
+    values["VR_CUSTOM_MODE"] = "7924x4082";
+    values["KISAK_VR_OUTPUT_SCALE"] = "0.80";
+    messages = kc::ValidateSettings(values);
+    Check(
+        messages.empty(),
+        "issue #41 V89 Pimax full-FOV mode should validate with 0.80 output and a 1024 px scope panel");
+    values["KISAK_VR_OUTPUT_SCALE"] = "1.00";
+    messages = kc::ValidateSettings(values);
+    Check(
+        HasError(messages, "KISAK_VR_OUTPUT_SCALE"),
+        "issue #41 V89 Pimax full-FOV mode must reject the 1.00 output pair");
+    values["KISAK_VR_OUTPUT_SCALE"] = "0.80";
+    values["KISAK_VR_SCOPE_CAPTURE_SIZE"] = "1280";
+    messages = kc::ValidateSettings(values);
+    Check(
+        HasError(messages, "KISAK_VR_SCOPE_CAPTURE_SIZE"),
+        "issue #41 V89 Pimax full-FOV mode must keep the scope panel within its reserved 1024 px region");
 
     values = kc::BuiltInDefaults();
     values["KISAK_VR_BIND_USE"] = "left.secondary";
@@ -2773,17 +3281,17 @@ int main(const int argumentCount, char** arguments)
     values["KISAK_VR_HUD_SAFE_X"] = "0.75";
     Check(
         kc::ApplyPreset("Pimax Crystal Light", &values),
-        "issue #41 V85 Pimax Crystal Light preset should exist");
+        "issue #41 V89 Pimax Crystal Light preset should exist");
     Check(
-        values["VR_CUSTOM_MODE"] == "7684x3128" &&
-            values["KISAK_VR_OUTPUT_SCALE"] == "1.00" &&
+        values["VR_CUSTOM_MODE"] == "7924x4082" &&
+            values["KISAK_VR_OUTPUT_SCALE"] == "0.80" &&
             values["KISAK_VR_FSR"] == "0" &&
             values["KISAK_VR_SCOPE_CAPTURE_SIZE"] == "1024" &&
             values["KISAK_VR_HUD_SAFE_X"] == "0.75",
-        "issue #41 V85 Pimax preset should reserve 3330 + 3330 + 1024 pixels without replacing personal HUD settings");
+        "issue #41 V89 Pimax preset should reserve 3450 + 3450 + 1024 full-FOV pixels without replacing personal HUD settings");
     Check(
         kc::ValidateSettings(values).empty(),
-        "issue #41 V85 Pimax Crystal Light preset should validate cleanly");
+        "issue #41 V89 Pimax Crystal Light preset should validate cleanly");
 
     values = kc::BuiltInDefaults();
     Check(kc::ApplyPreset("Seated", &values), "seated preset should exist");
@@ -3158,7 +3666,7 @@ int main(const int argumentCount, char** arguments)
     Check(
         preservedV4.values.at("KISAK_VR_BIND_GRENADE_LAUNCHER") ==
             "right.thumbrest_touch+left.primary_axis.up",
-        "beta.13 should not overwrite an existing V4 grenade-launcher binding");
+        "beta.14 should not overwrite an existing V4 grenade-launcher binding");
     Check(
         preservedV4.messages.empty(),
         "an existing V4 grenade-launcher binding should remain valid");
@@ -3183,9 +3691,9 @@ int main(const int argumentCount, char** arguments)
     Check(saved.backupPath.empty(), "first save should not create a backup");
     Check(Read(userFile).find("\r\n") != std::string::npos, "saved batch file should use CRLF");
     Check(
-        Read(userFile).find("generated by beta.13 Configurator (Unified Setup/Compatibility)") !=
+        Read(userFile).find("generated by beta.14 Configurator (Unified Setup/Compatibility)") !=
             std::string::npos,
-        "saved settings should identify the beta.13 unified-compatibility schema");
+        "saved settings should identify the beta.14 unified-compatibility schema");
     Check(
         Read(userFile).find("KISAK_VR_SETTINGS_REVISION=" + saved.revision) !=
             std::string::npos,

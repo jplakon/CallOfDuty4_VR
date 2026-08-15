@@ -497,10 +497,10 @@ ComPtr<ID3D11Buffer> g_vrMenuBlitVertexBuffer;
 // backbuffer. Sample only that completed eye for a clean mono screen.
 ComPtr<ID3D11Buffer> g_vrPauseMenuBlitVertexBuffer;
 
-// KISAK_SP_VR_QUIT_CONFIRMATION_CENTER_CROP_V46
-// V45 paints the nested confirmation once across the complete main stereo
-// canvas. A centered, one-eye-wide crop contains that single shared dialog
-// without also squeezing both gameplay eyes into each headset eye.
+// KISAK_SP_VR_EYE_LOCAL_SHARED_MODAL_V88
+// Centered script modals remain a one-pass shared command list so they cannot
+// appear twice, but V82 now authors that list in one-eye coordinates. Sample
+// the completed left-eye region instead of beta.13's obsolete center crop.
 ComPtr<ID3D11Buffer> g_vrCenteredModalBlitVertexBuffer;
 
 ComPtr<ID3D11SamplerState> g_vrBlitSampler;
@@ -4622,10 +4622,10 @@ float4 PSScope(PixelInput input) : SV_TARGET
     }
 
     static const VrBlitVertex centeredModalVertices[4] = {
-        {{-1.0f,  1.0f}, {0.25f, 0.0f}},
-        {{ 1.0f,  1.0f}, {0.75f, 0.0f}},
-        {{-1.0f, -1.0f}, {0.25f, 1.0f}},
-        {{ 1.0f, -1.0f}, {0.75f, 1.0f}},
+        {{-1.0f,  1.0f}, {0.0f, 0.0f}},
+        {{ 1.0f,  1.0f}, {0.5f, 0.0f}},
+        {{-1.0f, -1.0f}, {0.0f, 1.0f}},
+        {{ 1.0f, -1.0f}, {0.5f, 1.0f}},
     };
 
     D3D11_SUBRESOURCE_DATA centeredModalVertexData = {};
@@ -4642,7 +4642,7 @@ float4 PSScope(PixelInput input) : SV_TARGET
     if (FAILED(hr))
     {
         VR_LogHrFailure(
-            "CreateBuffer(centered modal mono blit)",
+            "CreateBuffer(eye-local shared modal blit)",
             hr);
 
         return false;
@@ -13676,9 +13676,9 @@ void VR_UpdateMenuControllerNavigation()
     }
 
     // KISAK_SP_VR_CENTERED_SCRIPT_MODAL_V75
-    // Ordinary active-game pause UI is painted in the right stereo viewport.
-    // Centered modals are painted once across the full packed canvas, so they
-    // must use full-canvas coordinates for hit testing as well as rendering.
+    // These dialogs still need one-pass shared painting to prevent duplicate
+    // stereo copies. V82/V88 author every menu, including shared modals, in
+    // the same one-eye coordinate space for rendering and hit testing.
     const bool centeredModalMenu =
         VR_IsCenteredMonoscopicMenuActive();
 
@@ -13687,10 +13687,12 @@ void VR_UpdateMenuControllerNavigation()
             CA_ACTIVE &&
         !centeredModalMenu;
 
-    // V82's ScreenPlacement is eye-local for ordinary frontend and pause UI.
-    // Centered script modals remain the only full-canvas hit-testing mode.
+    // KISAK_SP_VR_EYE_LOCAL_SHARED_MODAL_V88
+    // V82's ScreenPlacement is now authoritative for every UI menu. The
+    // centered-modal classifier controls command-list ownership only; it no
+    // longer changes cursor coordinates back to the packed two-eye canvas.
     const bool eyeLocalMenu =
-        !centeredModalMenu;
+        true;
 
     const std::uint32_t capturedWidth =
         g_vrCapturedStereoWidth > 0u
@@ -13731,8 +13733,8 @@ void VR_UpdateMenuControllerNavigation()
 
         Com_Printf(
             0,
-            "[VR][UI] V75 centered modal cursor uses the full "
-            "packed canvas (top menu '%s').\n",
+            "[VR][UI] V88 shared modal cursor uses the one-eye "
+            "ScreenPlacement (top menu '%s').\n",
             topMenuName != nullptr
                 ? topMenuName
                 : "unknown");
@@ -14106,10 +14108,10 @@ bool VR_RenderSolidColorFrame(
             0,
             0x10);
 
-    // KISAK_SP_VR_CENTERED_SCRIPT_MODAL_V75
-    // Centered dialogs are painted once across the main stereo canvas. Sample
-    // its centered one-eye-wide region; the full canvas would squeeze both
-    // gameplay eyes, while an ordinary right-eye crop cuts through the dialog.
+    // KISAK_SP_VR_EYE_LOCAL_SHARED_MODAL_V88
+    // Centered dialogs are still painted once in the shared list, but V82
+    // authors that list in the left eye. The dedicated modal buffer therefore
+    // samples the same left-eye region as frontend UI instead of 25%-75%.
     const bool centeredModalComfortMode =
         menuComfortMode &&
         VR_IsCenteredMonoscopicMenuActive();
@@ -14225,9 +14227,9 @@ bool VR_RenderSolidColorFrame(
 
         Com_Printf(
             0,
-            "[VR][UI] V75 centered modal mono: retained "
-            "one-pass painting and sampled the "
-            "center 25%%-75%% of the main stereo canvas for "
+            "[VR][UI] V88 shared modal mono: retained "
+            "one-pass painting and sampled the authored "
+            "left-eye region for "
             "both eyes (top menu '%s').\n",
             topMenuName != nullptr
                 ? topMenuName
@@ -14331,9 +14333,9 @@ bool VR_RenderSolidColorFrame(
             g_vrCapturedStereoWidth > 0u &&
             g_vrCapturedStereoHeight > 0u)
         {
-            // Every V82-authored menu source occupies one eye. Centered
-            // modals use a center crop; ordinary frontend and pause menus use
-            // their completed left/right eye respectively.
+            // Every V82/V88-authored menu source occupies one eye. Shared
+            // modals and frontend menus use the completed left eye; ordinary
+            // active pause menus use the completed right eye.
             // V83_EYE_LOCAL_MENU_SOURCE_OPENXR
             const std::uint32_t menuSourceWidth =
                 VR_GetCapturedMainStereoWidth() / 2u;
@@ -15265,10 +15267,10 @@ bool VR_IsQuitConfirmationMenuActive()
         {
             Com_Printf(
                 0,
-                "[VR][UI] V47 active-mission Pause -> Quit "
+                "[VR][UI] V88 active-mission Pause -> Quit "
                 "confirmation mono: detected '%s'; suppressing "
-                "the stereo-list UI copy and using the centered "
-                "one-eye source for both eyes.\n",
+                "the stereo-list UI copy and using the shared "
+                "eye-local source for both eyes.\n",
                 topMenuName);
 
             loggedActiveMissionQuitConfirmation = true;
@@ -15305,8 +15307,8 @@ bool VR_IsCenteredMonoscopicMenuActive()
     // KISAK_SP_VR_FNG_DIFFICULTY_MODAL_V75
     // COD4's original F.N.G. flow opens select_difficulty as a script popup.
     // Selecting a non-recommended level can nest one of four diff_con_*
-    // confirmations. All five are centered on one shared packed UI canvas,
-    // not independently inside the left and right gameplay viewports.
+    // confirmations. All five retain one shared paint pass, now authored in
+    // V82/V88's eye-local ScreenPlacement rather than the packed canvas.
     const bool fngDifficultyModal =
         I_stricmp(topMenuName, "select_difficulty") == 0 ||
         I_stricmp(topMenuName, "diff_con_easy") == 0 ||
@@ -21334,8 +21336,15 @@ void VR_UpdatePackedUiScreenPlacement()
     const std::uint64_t hudLayoutRevision =
         VR_GetHudLayoutRevision();
     static std::uint64_t appliedHudLayoutRevision = 0u;
+    static bool placementConfigured = false;
+    static bool appliedMenuActive = false;
+
+    const bool menuActive =
+        Key_IsCatcherActive(0, 0x10);
 
     const bool alreadyConfigured =
+        placementConfigured &&
+        appliedMenuActive == menuActive &&
         scrPlaceFull.realViewportSize[0] ==
             uiWidth &&
         scrPlaceFull.realViewportSize[1] ==
@@ -21377,18 +21386,43 @@ void VR_UpdatePackedUiScreenPlacement()
         displayHeight);
 
     appliedHudLayoutRevision = hudLayoutRevision;
+    appliedMenuActive = menuActive;
+    placementConfigured = true;
 
-    Com_Printf(
-        0,
-        "[VR][HUD] V82 authored the shared 2D command list in "
-        "one %d x %d eye; it is replayed identically in both eyes. "
-        "Companion eye: %d px. Dedicated scope panel: %s (%d px). "
-        "Neither is part of the eye-local HUD layout.\n",
-        uiEyeWidth,
-        displayHeight,
-        mainStereoWidth - uiEyeWidth,
-        packedScopeLayout ? "active" : "inactive",
-        scopePanelSize);
+    static bool loggedGameplayPlacement = false;
+    static bool loggedMenuPlacement = false;
+
+    if (menuActive)
+    {
+        if (!loggedMenuPlacement)
+        {
+            Com_Printf(
+                0,
+                "[VR][UI] V88 isolated menu ScreenPlacement from "
+                "the configurable gameplay HUD safe area in one "
+                "%d x %d eye.\n",
+                uiEyeWidth,
+                displayHeight);
+
+            loggedMenuPlacement = true;
+        }
+    }
+    else if (!loggedGameplayPlacement)
+    {
+        Com_Printf(
+            0,
+            "[VR][HUD] V82 authored the shared 2D command list in "
+            "one %d x %d eye; it is replayed identically in both eyes. "
+            "Companion eye: %d px. Dedicated scope panel: %s (%d px). "
+            "Neither is part of the eye-local HUD layout.\n",
+            uiEyeWidth,
+            displayHeight,
+            mainStereoWidth - uiEyeWidth,
+            packedScopeLayout ? "active" : "inactive",
+            scopePanelSize);
+
+        loggedGameplayPlacement = true;
+    }
 #endif
 }
 

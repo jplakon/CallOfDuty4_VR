@@ -195,6 +195,112 @@ struct VrSplitHandAsset
 static VrSplitHandAsset
     s_vrSplitHandAssets[kVrSplitHandAssetCapacity] = {};
 
+// KISAK_SP_VR_AIR_SUPPORT_HAND_GEOMETRY_V90
+// The stock binocular/designator viewmodel contains a canned two-arm pose.
+// Rigidly moving that flat-screen pose with a tracked controller piles several
+// oversized gloves over the designator.  Preserve its complete bone/tag
+// hierarchy for the attached weapon model.  V91-V94 submitted only degenerate
+// slot-0 triangles, which also removed any support-device geometry embedded in
+// that model.  V95 retains rigid and non-arm triangles while suppressing both
+// authored arms.  The normal standalone tracked hands remain independent.
+static constexpr int
+    kVrHiddenWeaponHandAssetCapacity = 4;
+
+struct VrHiddenWeaponHandAsset
+{
+    XModel* sourceModel = nullptr;
+    XModel hiddenModel = {};
+    XSurface* hiddenSurfaces = nullptr;
+    uint32_t preservedDeviceTriangleCount = 0u;
+    bool ready = false;
+    bool failed = false;
+};
+
+static VrHiddenWeaponHandAsset
+    s_vrHiddenWeaponHandAssets[
+        kVrHiddenWeaponHandAssetCapacity] = {};
+
+// KISAK_SP_VR_AIR_SUPPORT_RIGHT_HAND_V92
+// V91 removed the malformed canned two-arm mesh while retaining its complete
+// animated skeleton, which fixed the controller ray and separately attached
+// designator but also made the stock right hand invisible.  V92 introduced a
+// standalone right glove/cuff at the hidden skeleton's live j_wrist_ri tag.
+// V93 below keeps that anchor but prevents the corrupt support animation from
+// ever deforming the standalone geometry.
+static constexpr int
+    kVrAirSupportRightHandAssetCapacity = 4;
+
+struct VrAirSupportRightHandAsset
+{
+    XModel* sourceModel = nullptr;
+    XModel gloveModel = {};
+    XSurface* gloveSurfaces = nullptr;
+    DObjAnimMat* rootBaseMat = nullptr;
+    DObj_s object = {};
+    cpose_t pose = {};
+    int rightWristIndex = -1;
+    int weaponIndex = -1;
+    uint32_t visibleTriangleCount = 0u;
+    uint32_t stableIdlePoseFrames = 0u;
+    bool ready = false;
+    bool failed = false;
+    bool objectCreated = false;
+    bool gripPoseBaked = false;
+    bool bakeFailureLogWritten = false;
+    bool wristTagFailureLogWritten = false;
+    bool submissionLogWritten = false;
+};
+
+static VrAirSupportRightHandAsset
+    s_vrAirSupportRightHandAssets[
+        kVrAirSupportRightHandAssetCapacity] = {};
+
+// KISAK_SP_VR_AIR_SUPPORT_STABLE_GLOVE_V93
+// V92 proved the animated j_wrist_ri anchor, but its attempt to CPU-skin the
+// support weapon's authored grip reproduced the same corrupt stock hand pose.
+// Keep a normal bullet weapon's hand model as a geometry donor and use only
+// its unskinned, wrist-local bind glove.  If no donor has registered yet, the
+// support model's unskinned bind glove is still safer than its animation.
+static XModel*
+    s_vrAirSupportStableRightHandDonorModel = nullptr;
+
+// KISAK_SP_VR_AIR_SUPPORT_DEVICE_RESTORE_V94
+// V91's hidden hand clone preserved the support DObj skeleton but the real
+// Safehouse/Heat device did not survive the composite viewmodel submission.
+// Cache the already-loaded gun model as its own one-model DObj and submit it
+// at the composite skeleton's animated tag_weapon.  This leaves V93's stable
+// unskinned glove and every controller/targeting decision unchanged.
+static constexpr int
+    kVrAirSupportDeviceAssetCapacity = 4;
+
+struct VrAirSupportDeviceAsset
+{
+    XModel* sourceModel = nullptr;
+    DObj_s object = {};
+    cpose_t pose = {};
+    bool objectCreated = false;
+    bool tagFailureLogWritten = false;
+    bool submissionLogWritten = false;
+};
+
+static VrAirSupportDeviceAsset
+    s_vrAirSupportDeviceAssets[
+        kVrAirSupportDeviceAssetCapacity] = {};
+
+static bool VR_IsStockAirSupportDesignator(
+    const WeaponDef* weaponDef)
+{
+    return
+        weaponDef != nullptr &&
+        weaponDef->szInternalName != nullptr &&
+        (!I_stricmp(
+             weaponDef->szInternalName,
+             "cobra_air_support") ||
+         !I_stricmp(
+             weaponDef->szInternalName,
+             "airstrike_support"));
+}
+
 static const dvar_t*
     s_vrLeftHandOffsetForward = nullptr;
 
@@ -1002,6 +1108,190 @@ static uint16_t* VR_CreateSplitHandIndexList(
         visibleTriangleCount;
 
     return outputIndices;
+}
+
+static bool VR_SelectNonArmDeviceTriangle(
+    const uint16_t triangleIndices[3],
+    const uint16_t vertexCount,
+    const float* leftArmWeights,
+    const float* rightArmWeights)
+{
+    if (triangleIndices == nullptr ||
+        leftArmWeights == nullptr ||
+        rightArmWeights == nullptr)
+    {
+        return false;
+    }
+
+    float combinedArmWeightSum = 0.0f;
+
+    for (int cornerIndex = 0;
+         cornerIndex < 3;
+         ++cornerIndex)
+    {
+        const uint16_t vertexIndex =
+            triangleIndices[cornerIndex];
+
+        if (vertexIndex >= vertexCount)
+        {
+            return false;
+        }
+
+        combinedArmWeightSum +=
+            leftArmWeights[vertexIndex] +
+            rightArmWeights[vertexIndex];
+    }
+
+    // Arm, sleeve, cuff, and glove vertices inherit meaningful weight from a
+    // shoulder hierarchy.  The embedded designator is rigid or belongs to a
+    // separate root branch, so its triangles carry effectively no arm weight.
+    return combinedArmWeightSum < 0.50f;
+}
+
+static uint16_t* VR_CreateNonArmDeviceIndexList(
+    const XSurface& sourceSurface,
+    const float* leftArmWeights,
+    const float* rightArmWeights,
+    uint16_t* outputTriangleCount,
+    uint32_t* outputVisibleTriangleCount)
+{
+    if (sourceSurface.triIndices == nullptr ||
+        sourceSurface.triCount == 0u ||
+        outputTriangleCount == nullptr ||
+        outputVisibleTriangleCount == nullptr)
+    {
+        return nullptr;
+    }
+
+    uint32_t visibleTriangleCount = 0u;
+
+    for (uint32_t triangleIndex = 0u;
+         triangleIndex < sourceSurface.triCount;
+         ++triangleIndex)
+    {
+        if (VR_SelectNonArmDeviceTriangle(
+                &sourceSurface.triIndices[
+                    triangleIndex * 3u],
+                sourceSurface.vertCount,
+                leftArmWeights,
+                rightArmWeights))
+        {
+            ++visibleTriangleCount;
+        }
+    }
+
+    uint32_t storedTriangleCount =
+        visibleTriangleCount;
+
+    if (storedTriangleCount < 2u)
+    {
+        storedTriangleCount = 2u;
+    }
+    else if ((storedTriangleCount & 1u) != 0u)
+    {
+        ++storedTriangleCount;
+    }
+
+    if (storedTriangleCount > 65535u)
+    {
+        return nullptr;
+    }
+
+    uint16_t* outputIndices =
+        reinterpret_cast<uint16_t*>(
+            Hunk_Alloc(
+                storedTriangleCount *
+                    3u *
+                    sizeof(uint16_t),
+                "VR embedded air-support device indices",
+                21));
+
+    if (outputIndices == nullptr)
+    {
+        return nullptr;
+    }
+
+    uint32_t outputIndex = 0u;
+
+    for (uint32_t triangleIndex = 0u;
+         triangleIndex < sourceSurface.triCount;
+         ++triangleIndex)
+    {
+        const uint16_t* sourceIndices =
+            &sourceSurface.triIndices[
+                triangleIndex * 3u];
+
+        if (!VR_SelectNonArmDeviceTriangle(
+                sourceIndices,
+                sourceSurface.vertCount,
+                leftArmWeights,
+                rightArmWeights))
+        {
+            continue;
+        }
+
+        outputIndices[outputIndex++] =
+            sourceIndices[0];
+        outputIndices[outputIndex++] =
+            sourceIndices[1];
+        outputIndices[outputIndex++] =
+            sourceIndices[2];
+    }
+
+    const uint16_t degenerateVertex =
+        visibleTriangleCount > 0u
+            ? outputIndices[0]
+            : sourceSurface.triIndices[0];
+
+    while (outputIndex <
+           storedTriangleCount * 3u)
+    {
+        outputIndices[outputIndex++] =
+            degenerateVertex;
+    }
+
+    *outputTriangleCount =
+        static_cast<uint16_t>(
+            storedTriangleCount);
+    *outputVisibleTriangleCount =
+        visibleTriangleCount;
+
+    return outputIndices;
+}
+
+static uint16_t* VR_CreateDegenerateSurfaceIndexList(
+    const XSurface& sourceSurface)
+{
+    if (sourceSurface.triIndices == nullptr ||
+        sourceSurface.triCount == 0u)
+    {
+        return nullptr;
+    }
+
+    uint16_t* hiddenIndices =
+        reinterpret_cast<uint16_t*>(
+            Hunk_Alloc(
+                6u * sizeof(uint16_t),
+                "VR hidden air-support arm indices",
+                21));
+
+    if (hiddenIndices == nullptr)
+    {
+        return nullptr;
+    }
+
+    const uint16_t degenerateVertex =
+        sourceSurface.triIndices[0];
+
+    for (int hiddenIndex = 0;
+         hiddenIndex < 6;
+         ++hiddenIndex)
+    {
+        hiddenIndices[hiddenIndex] =
+            degenerateVertex;
+    }
+
+    return hiddenIndices;
 }
 
 static GfxPackedVertex* VR_CreateWristRootedVertexList(
@@ -2402,6 +2692,1361 @@ static XModel* VR_GetRightOnlyWeaponHandModel(
         : sourceModel;
 }
 
+static bool VR_BuildHiddenWeaponHandModel(
+    VrHiddenWeaponHandAsset* asset,
+    XModel* sourceModel)
+{
+    if (asset == nullptr ||
+        sourceModel == nullptr ||
+        sourceModel->numsurfs == 0u ||
+        sourceModel->surfs == nullptr)
+    {
+        return false;
+    }
+
+    XSurface* hiddenSurfaces =
+        reinterpret_cast<XSurface*>(
+            Hunk_Alloc(
+                sourceModel->numsurfs *
+                    sizeof(XSurface),
+                "VR hidden air-support hand surfaces",
+                21));
+
+    if (hiddenSurfaces == nullptr)
+    {
+        return false;
+    }
+
+    std::memcpy(
+        hiddenSurfaces,
+        sourceModel->surfs,
+        sourceModel->numsurfs *
+            sizeof(XSurface));
+
+    // KISAK_SP_VR_AIR_SUPPORT_EMBEDDED_DEVICE_V95
+    // The support prop is not guaranteed to live in the separately attached
+    // gunXModel.  Preserve rigid surfaces and weighted triangles outside both
+    // shoulder hierarchies from the original slot-0 model.  This keeps the
+    // embedded designator on its authored skeleton while both canned arms are
+    // still replaced by renderer-safe degenerate triangles.
+    const int leftShoulderIndex =
+        VR_FindModelBoneIndex(
+            sourceModel,
+            "j_shoulder_le");
+    const int leftWristIndex =
+        VR_FindModelBoneIndex(
+            sourceModel,
+            "j_wrist_le");
+    const int leftWristTwistIndex =
+        VR_FindModelBoneIndex(
+            sourceModel,
+            "j_wristtwist_le");
+    const int rightShoulderIndex =
+        VR_FindModelBoneIndex(
+            sourceModel,
+            "j_shoulder_ri");
+    const int rightWristIndex =
+        VR_FindModelBoneIndex(
+            sourceModel,
+            "j_wrist_ri");
+    const int rightWristTwistIndex =
+        VR_FindModelBoneIndex(
+            sourceModel,
+            "j_wristtwist_ri");
+
+    const bool armHierarchiesReady =
+        leftShoulderIndex >= 0 &&
+        leftWristIndex >= 0 &&
+        leftWristTwistIndex >= 0 &&
+        rightShoulderIndex >= 0 &&
+        rightWristIndex >= 0 &&
+        rightWristTwistIndex >= 0 &&
+        VR_ModelBoneDescendsFrom(
+            sourceModel,
+            leftWristIndex,
+            leftShoulderIndex) &&
+        VR_ModelBoneDescendsFrom(
+            sourceModel,
+            leftWristTwistIndex,
+            leftShoulderIndex) &&
+        VR_ModelBoneDescendsFrom(
+            sourceModel,
+            rightWristIndex,
+            rightShoulderIndex) &&
+        VR_ModelBoneDescendsFrom(
+            sourceModel,
+            rightWristTwistIndex,
+            rightShoulderIndex);
+
+    uint32_t preservedRigidTriangleCount = 0u;
+    uint32_t preservedWeightedTriangleCount = 0u;
+    uint32_t suppressedArmTriangleCount = 0u;
+
+    for (int surfaceIndex = 0;
+         surfaceIndex < sourceModel->numsurfs;
+         ++surfaceIndex)
+    {
+        const XSurface& sourceSurface =
+            sourceModel->surfs[surfaceIndex];
+
+        if (sourceSurface.triIndices == nullptr ||
+            sourceSurface.triCount == 0u)
+        {
+            return false;
+        }
+
+        // A rigid surface has no arm skinning at all.  This is the strongest
+        // signal for the device mesh, so retain its original indices and pose.
+        if (!sourceSurface.deformed)
+        {
+            preservedRigidTriangleCount +=
+                sourceSurface.triCount;
+            continue;
+        }
+
+        uint16_t* deviceIndices = nullptr;
+        uint16_t storedTriangleCount = 2u;
+        uint32_t visibleDeviceTriangleCount = 0u;
+
+        if (armHierarchiesReady &&
+            sourceSurface.vertCount > 0u &&
+            sourceSurface.vertInfo.vertsBlend != nullptr)
+        {
+            const uint32_t temporaryWeightBytes =
+                sourceSurface.vertCount *
+                sizeof(float) *
+                4u;
+
+            float* temporaryWeights =
+                reinterpret_cast<float*>(
+                    Z_Malloc(
+                        temporaryWeightBytes,
+                        "VR embedded air-support device weights",
+                        21));
+
+            if (temporaryWeights != nullptr)
+            {
+                std::memset(
+                    temporaryWeights,
+                    0,
+                    temporaryWeightBytes);
+
+                float* leftArmWeights =
+                    temporaryWeights;
+                float* leftHandWeights =
+                    &temporaryWeights[
+                        sourceSurface.vertCount];
+                float* rightArmWeights =
+                    &temporaryWeights[
+                        sourceSurface.vertCount * 2u];
+                float* rightHandWeights =
+                    &temporaryWeights[
+                        sourceSurface.vertCount * 3u];
+
+                const bool leftWeightsValid =
+                    VR_CalculateSplitHandVertexWeights(
+                        sourceModel,
+                        sourceSurface,
+                        leftShoulderIndex,
+                        leftWristIndex,
+                        leftWristTwistIndex,
+                        leftArmWeights,
+                        leftHandWeights);
+                const bool rightWeightsValid =
+                    VR_CalculateSplitHandVertexWeights(
+                        sourceModel,
+                        sourceSurface,
+                        rightShoulderIndex,
+                        rightWristIndex,
+                        rightWristTwistIndex,
+                        rightArmWeights,
+                        rightHandWeights);
+
+                if (leftWeightsValid &&
+                    rightWeightsValid)
+                {
+                    deviceIndices =
+                        VR_CreateNonArmDeviceIndexList(
+                            sourceSurface,
+                            leftArmWeights,
+                            rightArmWeights,
+                            &storedTriangleCount,
+                            &visibleDeviceTriangleCount);
+                }
+
+                Z_Free(
+                    temporaryWeights,
+                    21);
+            }
+        }
+
+        if (deviceIndices == nullptr)
+        {
+            deviceIndices =
+                VR_CreateDegenerateSurfaceIndexList(
+                    sourceSurface);
+            storedTriangleCount = 2u;
+            visibleDeviceTriangleCount = 0u;
+        }
+
+        if (deviceIndices == nullptr)
+        {
+            return false;
+        }
+
+        XSurface& hiddenSurface =
+            hiddenSurfaces[surfaceIndex];
+
+        hiddenSurface.zoneHandle =
+            kVrRuntimeSplitSurfaceZoneHandle;
+
+        hiddenSurface.baseTriIndex = 0u;
+        hiddenSurface.triIndices = deviceIndices;
+        hiddenSurface.triCount =
+            storedTriangleCount;
+
+        preservedWeightedTriangleCount +=
+            visibleDeviceTriangleCount;
+        suppressedArmTriangleCount +=
+            sourceSurface.triCount -
+            visibleDeviceTriangleCount;
+    }
+
+    asset->sourceModel = sourceModel;
+    asset->hiddenModel = *sourceModel;
+    asset->hiddenModel.name = sourceModel->name;
+    asset->hiddenModel.surfs = hiddenSurfaces;
+    asset->hiddenSurfaces = hiddenSurfaces;
+    asset->preservedDeviceTriangleCount =
+        preservedRigidTriangleCount +
+        preservedWeightedTriangleCount;
+    asset->ready = true;
+
+    Com_Printf(
+        0,
+        "[VR][ISSUE45][AIR SUPPORT] V95 preserved %u embedded "
+        "non-arm device triangles from '%s' (%u rigid, %u weighted) "
+        "while suppressing %u canned-arm triangles.\n",
+        asset->preservedDeviceTriangleCount,
+        XModelGetName(sourceModel),
+        preservedRigidTriangleCount,
+        preservedWeightedTriangleCount,
+        suppressedArmTriangleCount);
+
+    return true;
+}
+
+static XModel* VR_GetHiddenWeaponHandModel(
+    XModel* sourceModel)
+{
+    if (!VR_TrackedHandsEnabled() ||
+        sourceModel == nullptr)
+    {
+        return sourceModel;
+    }
+
+    for (VrHiddenWeaponHandAsset& asset :
+         s_vrHiddenWeaponHandAssets)
+    {
+        if (asset.sourceModel == sourceModel)
+        {
+            return asset.ready
+                ? &asset.hiddenModel
+                : sourceModel;
+        }
+    }
+
+    for (VrHiddenWeaponHandAsset& asset :
+         s_vrHiddenWeaponHandAssets)
+    {
+        if (asset.sourceModel != nullptr)
+        {
+            continue;
+        }
+
+        asset.sourceModel = sourceModel;
+        asset.ready =
+            VR_BuildHiddenWeaponHandModel(
+                &asset,
+                sourceModel);
+        asset.failed = !asset.ready;
+
+        if (asset.ready)
+        {
+            Com_Printf(
+                0,
+                "[VR][ISSUE45][AIR SUPPORT] Hid the canned "
+                "stock support hand geometry from model '%s'; the "
+                "tracked designator and free hand remain active.\n",
+                XModelGetName(sourceModel));
+
+            return &asset.hiddenModel;
+        }
+
+        Com_PrintWarning(
+            0,
+            "[VR][ISSUE45][AIR SUPPORT] Could not build the "
+            "device-only support hand model; retaining the "
+            "ordinary split-hand fallback.\n");
+
+        return sourceModel;
+    }
+
+    static bool loggedHiddenHandCapacityFailure =
+        false;
+
+    if (!loggedHiddenHandCapacityFailure)
+    {
+        Com_PrintWarning(
+            0,
+            "[VR][ISSUE45][AIR SUPPORT] Device-only hand cache is "
+            "full; retaining the ordinary split-hand fallback.\n");
+
+        loggedHiddenHandCapacityFailure =
+            true;
+    }
+
+    return sourceModel;
+}
+
+static bool VR_BuildAirSupportRightHandModel(
+    VrAirSupportRightHandAsset* asset,
+    XModel* sourceModel)
+{
+    if (asset == nullptr ||
+        sourceModel == nullptr ||
+        sourceModel->numBones == 0u ||
+        sourceModel->numBones > DOBJ_MAX_PARTS ||
+        sourceModel->numsurfs == 0u ||
+        sourceModel->surfs == nullptr ||
+        sourceModel->baseMat == nullptr)
+    {
+        return false;
+    }
+
+    const int rightShoulderIndex =
+        VR_FindModelBoneIndex(
+            sourceModel,
+            "j_shoulder_ri");
+
+    const int rightWristIndex =
+        VR_FindModelBoneIndex(
+            sourceModel,
+            "j_wrist_ri");
+
+    const int rightWristTwistIndex =
+        VR_FindModelBoneIndex(
+            sourceModel,
+            "j_wristtwist_ri");
+
+    if (rightShoulderIndex < 0 ||
+        rightWristIndex < 0 ||
+        rightWristTwistIndex < 0 ||
+        !VR_ModelBoneDescendsFrom(
+            sourceModel,
+            rightWristIndex,
+            rightShoulderIndex) ||
+        !VR_ModelBoneDescendsFrom(
+            sourceModel,
+            rightWristTwistIndex,
+            rightShoulderIndex))
+    {
+        Com_PrintWarning(
+            0,
+            "[VR][ISSUE45][AIR SUPPORT] Stock hand model '%s' "
+            "lacks the right shoulder/wrist/wrist-twist hierarchy; "
+            "the device remains tracked without a replacement glove.\n",
+            XModelGetName(sourceModel));
+
+        return false;
+    }
+
+    XSurface* gloveSurfaces =
+        reinterpret_cast<XSurface*>(
+            Hunk_Alloc(
+                sourceModel->numsurfs *
+                    sizeof(XSurface),
+                "VR air-support right glove surfaces",
+                21));
+
+    if (gloveSurfaces == nullptr)
+    {
+        return false;
+    }
+
+    std::memcpy(
+        gloveSurfaces,
+        sourceModel->surfs,
+        sourceModel->numsurfs *
+            sizeof(XSurface));
+
+    const DObjAnimMat& baseRightWristPose =
+        sourceModel->baseMat[
+            rightWristIndex];
+
+    float baseRightWristAxis[3][3] = {};
+
+    QuatToAxis(
+        baseRightWristPose.quat,
+        *reinterpret_cast<mat3x3*>(
+            baseRightWristAxis));
+
+    bool boundsInitialized = false;
+    float boundsMins[3] = {};
+    float boundsMaxs[3] = {};
+    float radiusSquared = 0.0f;
+    uint32_t visibleTriangleCount = 0u;
+
+    for (int surfaceIndex = 0;
+         surfaceIndex < sourceModel->numsurfs;
+         ++surfaceIndex)
+    {
+        const XSurface& sourceSurface =
+            sourceModel->surfs[surfaceIndex];
+
+        if (!sourceSurface.deformed ||
+            sourceSurface.vertCount == 0u ||
+            sourceSurface.triCount == 0u ||
+            sourceSurface.triIndices == nullptr ||
+            sourceSurface.verts0 == nullptr ||
+            sourceSurface.vertInfo.vertsBlend == nullptr)
+        {
+            return false;
+        }
+
+        const uint32_t temporaryWeightBytes =
+            sourceSurface.vertCount *
+            sizeof(float) *
+            2u;
+
+        float* temporaryWeights =
+            reinterpret_cast<float*>(
+                Z_Malloc(
+                    temporaryWeightBytes,
+                    "VR air-support right glove weights",
+                    21));
+
+        if (temporaryWeights == nullptr)
+        {
+            return false;
+        }
+
+        std::memset(
+            temporaryWeights,
+            0,
+            temporaryWeightBytes);
+
+        float* rightArmWeights =
+            temporaryWeights;
+
+        float* rightHandWeights =
+            &temporaryWeights[
+                sourceSurface.vertCount];
+
+        const bool weightsValid =
+            VR_CalculateSplitHandVertexWeights(
+                sourceModel,
+                sourceSurface,
+                rightShoulderIndex,
+                rightWristIndex,
+                rightWristTwistIndex,
+                rightArmWeights,
+                rightHandWeights);
+
+        if (!weightsValid)
+        {
+            Z_Free(
+                temporaryWeights,
+                21);
+
+            return false;
+        }
+
+        uint16_t storedTriangleCount = 0u;
+        uint32_t surfaceVisibleTriangleCount = 0u;
+
+        // The selector is weight-based: after supplying the right-side bone
+        // hierarchy, KEEP_LEFT_GLOVE means "keep the weighted glove/cuff"
+        // rather than a literal anatomical side.
+        uint16_t* gloveIndices =
+            VR_CreateSplitHandIndexList(
+                sourceSurface,
+                VR_SPLIT_HAND_KEEP_LEFT_GLOVE,
+                rightArmWeights,
+                rightHandWeights,
+                &storedTriangleCount,
+                &surfaceVisibleTriangleCount);
+
+        Z_Free(
+            temporaryWeights,
+            21);
+
+        if (gloveIndices == nullptr)
+        {
+            return false;
+        }
+
+        GfxPackedVertex* wristRootedVertices =
+            VR_CreateWristRootedVertexList(
+                sourceSurface,
+                baseRightWristPose,
+                baseRightWristAxis);
+
+        uint16_t* rigidRootBlends =
+            VR_CreateRigidRootBlendList(
+                sourceSurface);
+
+        if (wristRootedVertices == nullptr ||
+            rigidRootBlends == nullptr)
+        {
+            return false;
+        }
+
+        for (uint32_t visibleIndex = 0u;
+             visibleIndex <
+                 surfaceVisibleTriangleCount * 3u;
+             ++visibleIndex)
+        {
+            const uint16_t vertexIndex =
+                gloveIndices[visibleIndex];
+
+            if (vertexIndex >=
+                sourceSurface.vertCount)
+            {
+                return false;
+            }
+
+            const float* vertexOrigin =
+                wristRootedVertices[
+                    vertexIndex].xyz;
+
+            if (!boundsInitialized)
+            {
+                for (int component = 0;
+                     component < 3;
+                     ++component)
+                {
+                    boundsMins[component] =
+                        vertexOrigin[component];
+                    boundsMaxs[component] =
+                        vertexOrigin[component];
+                }
+
+                boundsInitialized = true;
+            }
+            else
+            {
+                for (int component = 0;
+                     component < 3;
+                     ++component)
+                {
+                    if (vertexOrigin[component] <
+                        boundsMins[component])
+                    {
+                        boundsMins[component] =
+                            vertexOrigin[component];
+                    }
+
+                    if (vertexOrigin[component] >
+                        boundsMaxs[component])
+                    {
+                        boundsMaxs[component] =
+                            vertexOrigin[component];
+                    }
+                }
+            }
+
+            const float vertexRadiusSquared =
+                vertexOrigin[0] * vertexOrigin[0] +
+                vertexOrigin[1] * vertexOrigin[1] +
+                vertexOrigin[2] * vertexOrigin[2];
+
+            if (vertexRadiusSquared > radiusSquared)
+            {
+                radiusSquared =
+                    vertexRadiusSquared;
+            }
+        }
+
+        XSurface& gloveSurface =
+            gloveSurfaces[surfaceIndex];
+
+        gloveSurface.zoneHandle =
+            kVrRuntimeSplitSurfaceZoneHandle;
+        gloveSurface.baseTriIndex = 0u;
+        gloveSurface.triIndices = gloveIndices;
+        gloveSurface.verts0 = wristRootedVertices;
+        gloveSurface.triCount =
+            storedTriangleCount;
+        gloveSurface.deformed = true;
+        gloveSurface.vertInfo.vertCount[0] =
+            static_cast<int16_t>(
+                sourceSurface.vertCount);
+        gloveSurface.vertInfo.vertCount[1] = 0;
+        gloveSurface.vertInfo.vertCount[2] = 0;
+        gloveSurface.vertInfo.vertCount[3] = 0;
+        gloveSurface.vertInfo.vertsBlend =
+            rigidRootBlends;
+        gloveSurface.vertListCount = 0u;
+        gloveSurface.vertList = nullptr;
+        gloveSurface.partBits[0] =
+            static_cast<int>(0x80000000u);
+        gloveSurface.partBits[1] = 0;
+        gloveSurface.partBits[2] = 0;
+        gloveSurface.partBits[3] = 0;
+
+        visibleTriangleCount +=
+            surfaceVisibleTriangleCount;
+    }
+
+    if (!boundsInitialized ||
+        visibleTriangleCount == 0u)
+    {
+        return false;
+    }
+
+    DObjAnimMat* rootBaseMat =
+        reinterpret_cast<DObjAnimMat*>(
+            Hunk_Alloc(
+                sourceModel->numBones *
+                    sizeof(DObjAnimMat),
+                "VR air-support right glove identity root bind",
+                21));
+
+    if (rootBaseMat == nullptr)
+    {
+        return false;
+    }
+
+    std::memcpy(
+        rootBaseMat,
+        sourceModel->baseMat,
+        sourceModel->numBones *
+            sizeof(DObjAnimMat));
+
+    rootBaseMat[0].quat[0] = 0.0f;
+    rootBaseMat[0].quat[1] = 0.0f;
+    rootBaseMat[0].quat[2] = 0.0f;
+    rootBaseMat[0].quat[3] = 1.0f;
+    rootBaseMat[0].trans[0] = 0.0f;
+    rootBaseMat[0].trans[1] = 0.0f;
+    rootBaseMat[0].trans[2] = 0.0f;
+    rootBaseMat[0].transWeight = 2.0f;
+
+    asset->sourceModel = sourceModel;
+    asset->gloveModel = *sourceModel;
+    asset->gloveModel.name =
+        sourceModel->name;
+    asset->gloveModel.surfs =
+        gloveSurfaces;
+    asset->gloveModel.baseMat =
+        rootBaseMat;
+
+    for (int lodIndex = 0;
+         lodIndex < 4;
+         ++lodIndex)
+    {
+        asset->gloveModel
+            .lodInfo[lodIndex]
+            .partBits[0] =
+                static_cast<int>(0x80000000u);
+        asset->gloveModel
+            .lodInfo[lodIndex]
+            .partBits[1] = 0;
+        asset->gloveModel
+            .lodInfo[lodIndex]
+            .partBits[2] = 0;
+        asset->gloveModel
+            .lodInfo[lodIndex]
+            .partBits[3] = 0;
+    }
+
+    constexpr float kRightGloveBoundsPadding =
+        4.0f;
+
+    for (int component = 0;
+         component < 3;
+         ++component)
+    {
+        asset->gloveModel.mins[component] =
+            boundsMins[component] -
+            kRightGloveBoundsPadding;
+        asset->gloveModel.maxs[component] =
+            boundsMaxs[component] +
+            kRightGloveBoundsPadding;
+    }
+
+    asset->gloveModel.radius =
+        std::sqrt(radiusSquared) +
+        kRightGloveBoundsPadding;
+    asset->gloveSurfaces = gloveSurfaces;
+    asset->rootBaseMat = rootBaseMat;
+    asset->rightWristIndex =
+        rightWristIndex;
+    asset->visibleTriangleCount =
+        visibleTriangleCount;
+    asset->ready = true;
+
+    Com_Printf(
+        0,
+        "[VR][ISSUE45][AIR SUPPORT] Extracted %u rigid right "
+        "glove/cuff triangles from '%s' around j_wrist_ri.\n",
+        visibleTriangleCount,
+        XModelGetName(sourceModel));
+
+    return true;
+}
+
+static VrAirSupportRightHandAsset*
+    VR_GetAirSupportRightHandAsset(
+        XModel* sourceModel)
+{
+    if (!VR_TrackedHandsEnabled() ||
+        sourceModel == nullptr)
+    {
+        return nullptr;
+    }
+
+    for (VrAirSupportRightHandAsset& asset :
+         s_vrAirSupportRightHandAssets)
+    {
+        if (asset.sourceModel == sourceModel)
+        {
+            return asset.ready
+                ? &asset
+                : nullptr;
+        }
+    }
+
+    for (VrAirSupportRightHandAsset& asset :
+         s_vrAirSupportRightHandAssets)
+    {
+        if (asset.sourceModel != nullptr)
+        {
+            continue;
+        }
+
+        asset.sourceModel = sourceModel;
+        asset.ready =
+            VR_BuildAirSupportRightHandModel(
+                &asset,
+                sourceModel);
+        asset.failed = !asset.ready;
+
+        if (!asset.ready)
+        {
+            Com_PrintWarning(
+                0,
+                "[VR][ISSUE45][AIR SUPPORT] Could not extract the "
+                "rigid right glove; the tracked designator remains "
+                "available without hand geometry.\n");
+
+            return nullptr;
+        }
+
+        return &asset;
+    }
+
+    static bool loggedRightHandCapacityFailure =
+        false;
+
+    if (!loggedRightHandCapacityFailure)
+    {
+        Com_PrintWarning(
+            0,
+            "[VR][ISSUE45][AIR SUPPORT] Right-glove cache is full; "
+            "the tracked designator remains available without hand "
+            "geometry.\n");
+
+        loggedRightHandCapacityFailure = true;
+    }
+
+    return nullptr;
+}
+
+static bool VR_WeaponUsesHiddenAirSupportHandModel(
+    const DObj_s* weaponViewModel,
+    const XModel* sourceModel)
+{
+    if (weaponViewModel == nullptr ||
+        sourceModel == nullptr ||
+        DObjGetNumModels(weaponViewModel) <= 0)
+    {
+        return false;
+    }
+
+    const XModel* submittedHandModel =
+        DObjGetModel(
+            weaponViewModel,
+            0);
+
+    for (const VrHiddenWeaponHandAsset& asset :
+         s_vrHiddenWeaponHandAssets)
+    {
+        if (asset.ready &&
+            asset.sourceModel == sourceModel &&
+            submittedHandModel == &asset.hiddenModel)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static VrAirSupportDeviceAsset*
+    VR_GetAirSupportDeviceAsset(
+        XModel* sourceModel)
+{
+    if (!VR_TrackedHandsEnabled() ||
+        sourceModel == nullptr)
+    {
+        return nullptr;
+    }
+
+    for (VrAirSupportDeviceAsset& asset :
+         s_vrAirSupportDeviceAssets)
+    {
+        if (asset.sourceModel == sourceModel)
+        {
+            return asset.objectCreated
+                ? &asset
+                : nullptr;
+        }
+    }
+
+    for (VrAirSupportDeviceAsset& asset :
+         s_vrAirSupportDeviceAssets)
+    {
+        if (asset.sourceModel != nullptr)
+        {
+            continue;
+        }
+
+        asset.sourceModel = sourceModel;
+
+        DObjModel_s modelDescription = {};
+        modelDescription.model = sourceModel;
+        modelDescription.boneName = 0;
+        modelDescription.ignoreCollision = false;
+
+        DObjCreate(
+            &modelDescription,
+            1u,
+            nullptr,
+            &asset.object,
+            0);
+
+        asset.pose.eType = ET_GENERAL;
+
+        if (DObjGetNumModels(
+                &asset.object) != 1 ||
+            DObjGetModel(
+                &asset.object,
+                0) != sourceModel)
+        {
+            Com_PrintWarning(
+                0,
+                "[VR][ISSUE45][AIR SUPPORT] The standalone V94 "
+                "device DObj was created with an unexpected model.\n");
+
+            DObjFree(
+                &asset.object);
+
+            return nullptr;
+        }
+
+        asset.objectCreated = true;
+
+        Com_Printf(
+            0,
+            "[VR][ISSUE45][AIR SUPPORT] V94 prepared standalone "
+            "device model '%s' from composite model slot 1.\n",
+            XModelGetName(sourceModel));
+
+        return &asset;
+    }
+
+    static bool loggedDeviceCapacityFailure = false;
+
+    if (!loggedDeviceCapacityFailure)
+    {
+        Com_PrintWarning(
+            0,
+            "[VR][ISSUE45][AIR SUPPORT] V94 device cache is full; "
+            "the stable glove and tracked target remain active.\n");
+
+        loggedDeviceCapacityFailure = true;
+    }
+
+    return nullptr;
+}
+
+static bool VR_AddAirSupportDeviceToScene(
+    const WeaponDef* weaponDef,
+    DObj_s* weaponViewModel,
+    const cpose_t* weaponPose,
+    const float lightingOrigin[3])
+{
+    if (!VR_TrackedHandsEnabled() ||
+        !VR_IsStockAirSupportDesignator(
+            weaponDef) ||
+        weaponViewModel == nullptr ||
+        weaponPose == nullptr ||
+        lightingOrigin == nullptr ||
+        DObjGetNumModels(
+            weaponViewModel) <= 1)
+    {
+        return false;
+    }
+
+    XModel* deviceModel =
+        DObjGetModel(
+            weaponViewModel,
+            1);
+
+    VrAirSupportDeviceAsset* asset =
+        VR_GetAirSupportDeviceAsset(
+            deviceModel);
+
+    if (asset == nullptr)
+    {
+        return false;
+    }
+
+    float deviceOrigin[3] = {};
+    float deviceAxis[3][3] = {};
+
+    if (!CG_DObjGetWorldTagMatrix(
+            weaponPose,
+            weaponViewModel,
+            scr_const.tag_weapon,
+            deviceAxis,
+            deviceOrigin))
+    {
+        if (!asset->tagFailureLogWritten)
+        {
+            Com_PrintWarning(
+                0,
+                "[VR][ISSUE45][AIR SUPPORT] V94 could not resolve "
+                "the animated tag_weapon device anchor; the stable "
+                "glove and tracked target remain active.\n");
+
+            asset->tagFailureLogWritten = true;
+        }
+
+        return false;
+    }
+
+    asset->pose.origin[0] = deviceOrigin[0];
+    asset->pose.origin[1] = deviceOrigin[1];
+    asset->pose.origin[2] = deviceOrigin[2];
+
+    AxisToAngles(
+        *reinterpret_cast<const mat3x3*>(
+            deviceAxis),
+        asset->pose.angles);
+
+    float mutableLightingOrigin[3] = {
+        lightingOrigin[0],
+        lightingOrigin[1],
+        lightingOrigin[2],
+    };
+
+    R_AddDObjToSceneUntracked(
+        &asset->object,
+        &asset->pose,
+        3u,
+        mutableLightingOrigin,
+        0.0f);
+
+    if (!asset->submissionLogWritten)
+    {
+        Com_Printf(
+            0,
+            "[VR][ISSUE45][AIR SUPPORT] V94 restored standalone "
+            "device model '%s' at animated tag_weapon for %s; "
+            "V93's stable glove and tracked targeting are unchanged.\n",
+            XModelGetName(deviceModel),
+            weaponDef->szInternalName);
+
+        asset->submissionLogWritten = true;
+    }
+
+    return true;
+}
+
+static bool VR_CreateAirSupportRightHandObject(
+    VrAirSupportRightHandAsset* asset)
+{
+    if (asset == nullptr ||
+        !asset->ready)
+    {
+        return false;
+    }
+
+    if (asset->objectCreated)
+    {
+        return true;
+    }
+
+    DObjModel_s modelDescription = {};
+    modelDescription.model =
+        &asset->gloveModel;
+    modelDescription.boneName = 0;
+    modelDescription.ignoreCollision = false;
+
+    DObjCreate(
+        &modelDescription,
+        1u,
+        nullptr,
+        &asset->object,
+        0);
+
+    asset->pose.eType =
+        ET_GENERAL;
+
+    if (DObjGetNumModels(
+            &asset->object) != 1 ||
+        DObjGetModel(
+            &asset->object,
+            0) != &asset->gloveModel)
+    {
+        Com_PrintWarning(
+            0,
+            "[VR][ISSUE45][AIR SUPPORT] The standalone right-glove "
+            "DObj was created with an unexpected model.\n");
+
+        DObjFree(
+            &asset->object);
+
+        return false;
+    }
+
+    asset->objectCreated = true;
+
+    return true;
+}
+
+static bool VR_BakeAirSupportRightHandGripPose(
+    VrAirSupportRightHandAsset* asset,
+    const int weaponIndex,
+    DObj_s* weaponViewModel,
+    const cpose_t* weaponPose,
+    const playerState_s* playerState)
+{
+    if (asset == nullptr ||
+        !asset->ready ||
+        weaponIndex <= 0 ||
+        weaponViewModel == nullptr ||
+        weaponPose == nullptr ||
+        playerState == nullptr)
+    {
+        return false;
+    }
+
+    if (asset->weaponIndex !=
+        weaponIndex)
+    {
+        asset->weaponIndex =
+            weaponIndex;
+        asset->stableIdlePoseFrames = 0u;
+        asset->gripPoseBaked = false;
+        asset->bakeFailureLogWritten = false;
+        asset->wristTagFailureLogWritten = false;
+        asset->submissionLogWritten = false;
+    }
+
+    if (asset->gripPoseBaked)
+    {
+        return true;
+    }
+
+    if (playerState->weaponstate !=
+        WEAPON_READY)
+    {
+        asset->stableIdlePoseFrames = 0u;
+        return false;
+    }
+
+    ++asset->stableIdlePoseFrames;
+
+    constexpr uint32_t kRequiredStableIdlePoseFrames =
+        8u;
+
+    if (asset->stableIdlePoseFrames <
+        kRequiredStableIdlePoseFrames)
+    {
+        return false;
+    }
+
+    if (asset->sourceModel == nullptr ||
+        asset->sourceModel->surfs == nullptr ||
+        asset->sourceModel->baseMat == nullptr ||
+        asset->gloveSurfaces == nullptr ||
+        asset->rightWristIndex < 0 ||
+        asset->sourceModel->numBones == 0u ||
+        asset->sourceModel->numBones > DOBJ_MAX_PARTS ||
+        weaponViewModel->numBones <
+            asset->sourceModel->numBones)
+    {
+        if (!asset->bakeFailureLogWritten)
+        {
+            Com_PrintWarning(
+                0,
+                "[VR][ISSUE45][AIR SUPPORT] The settled right-hand "
+                "grip could not be baked because the source or active "
+                "weapon skeleton was incomplete.\n");
+
+            asset->bakeFailureLogWritten = true;
+        }
+
+        return false;
+    }
+
+    int posePartBits[4] = {};
+
+    for (int boneIndex = 0;
+         boneIndex < asset->sourceModel->numBones;
+         ++boneIndex)
+    {
+        posePartBits[boneIndex >> 5] |=
+            static_cast<int>(
+                0x80000000u >>
+                (boneIndex & 31));
+    }
+
+    DObjAnimMat* posedBones =
+        CG_DObjCalcPose(
+            weaponPose,
+            weaponViewModel,
+            posePartBits);
+
+    if (posedBones == nullptr)
+    {
+        if (!asset->bakeFailureLogWritten)
+        {
+            Com_PrintWarning(
+                0,
+                "[VR][ISSUE45][AIR SUPPORT] The active support "
+                "viewmodel did not expose settled bone matrices; "
+                "the right-glove grip will retry.\n");
+
+            asset->bakeFailureLogWritten = true;
+        }
+
+        return false;
+    }
+
+    alignas(16) DObjSkelMat
+        deformationMatrices[DOBJ_MAX_PARTS] = {};
+
+    for (int boneIndex = 0;
+         boneIndex < asset->sourceModel->numBones;
+         ++boneIndex)
+    {
+        DObjSkelMat inverseBaseMatrix = {};
+        DObjSkelMat posedMatrix = {};
+
+        ConvertQuatToInverseSkelMat(
+            &asset->sourceModel->baseMat[boneIndex],
+            &inverseBaseMatrix);
+
+        ConvertQuatToSkelMat(
+            &posedBones[boneIndex],
+            &posedMatrix);
+
+        VR_MultiplySkelMat(
+            inverseBaseMatrix,
+            posedMatrix,
+            &deformationMatrices[boneIndex]);
+    }
+
+    const DObjAnimMat& posedWrist =
+        posedBones[
+            asset->rightWristIndex];
+
+    float posedWristAxis[3][3] = {};
+
+    QuatToAxis(
+        posedWrist.quat,
+        *reinterpret_cast<mat3x3*>(
+            posedWristAxis));
+
+    uint32_t bakedVertexCount = 0u;
+
+    for (int surfaceIndex = 0;
+         surfaceIndex < asset->sourceModel->numsurfs;
+         ++surfaceIndex)
+    {
+        const XSurface& sourceSurface =
+            asset->sourceModel->surfs[surfaceIndex];
+
+        XSurface& gloveSurface =
+            asset->gloveSurfaces[surfaceIndex];
+
+        if (!sourceSurface.deformed ||
+            sourceSurface.verts0 == nullptr ||
+            sourceSurface.vertInfo.vertsBlend == nullptr ||
+            sourceSurface.vertCount == 0u ||
+            gloveSurface.verts0 == nullptr)
+        {
+            if (!asset->bakeFailureLogWritten)
+            {
+                Com_PrintWarning(
+                    0,
+                    "[VR][ISSUE45][AIR SUPPORT] A stock hand "
+                    "surface lacked CPU skinning data; retaining the "
+                    "bind-pose right glove.\n");
+
+                asset->bakeFailureLogWritten = true;
+            }
+
+            return false;
+        }
+
+        GfxPackedVertex* posedVertices =
+            reinterpret_cast<GfxPackedVertex*>(
+                Z_Malloc(
+                    sourceSurface.vertCount *
+                        sizeof(GfxPackedVertex),
+                    "VR air-support posed right glove vertices",
+                    21));
+
+        if (posedVertices == nullptr)
+        {
+            return false;
+        }
+
+        R_SkinXSurfaceWeight(
+            sourceSurface.verts0,
+            &sourceSurface.vertInfo,
+            deformationMatrices,
+            posedVertices);
+
+        GfxPackedVertex* rigidVertices =
+            gloveSurface.verts0;
+
+        for (uint32_t vertexIndex = 0u;
+             vertexIndex < sourceSurface.vertCount;
+             ++vertexIndex)
+        {
+            const GfxPackedVertex& posedVertex =
+                posedVertices[vertexIndex];
+
+            GfxPackedVertex& rigidVertex =
+                rigidVertices[vertexIndex];
+
+            rigidVertex = posedVertex;
+
+            InvMatrixTransformVectorQuatTrans(
+                posedVertex.xyz,
+                &posedWrist,
+                rigidVertex.xyz);
+
+            float posedNormal[3] = {};
+            float rigidNormal[3] = {};
+
+            Vec3UnpackUnitVec(
+                posedVertex.normal,
+                posedNormal);
+
+            MatrixTransposeTransformVector(
+                posedNormal,
+                *reinterpret_cast<const mat3x3*>(
+                    posedWristAxis),
+                rigidNormal);
+
+            Vec3Normalize(
+                rigidNormal);
+
+            rigidVertex.normal =
+                Vec3PackUnitVec(
+                    rigidNormal);
+
+            float posedTangent[3] = {};
+            float rigidTangent[3] = {};
+
+            Vec3UnpackUnitVec(
+                posedVertex.tangent,
+                posedTangent);
+
+            MatrixTransposeTransformVector(
+                posedTangent,
+                *reinterpret_cast<const mat3x3*>(
+                    posedWristAxis),
+                rigidTangent);
+
+            Vec3Normalize(
+                rigidTangent);
+
+            rigidVertex.tangent =
+                Vec3PackUnitVec(
+                    rigidTangent);
+        }
+
+        Z_Free(
+            posedVertices,
+            21);
+
+        bakedVertexCount +=
+            sourceSurface.vertCount;
+    }
+
+    asset->gripPoseBaked = true;
+    asset->bakeFailureLogWritten = false;
+
+    Com_Printf(
+        0,
+        "[VR][ISSUE45][AIR SUPPORT] Baked the stock support "
+        "weapon's settled right-hand grip into %u rigid "
+        "wrist-local vertices.\n",
+        bakedVertexCount);
+
+    return true;
+}
+
+static XModel* VR_GetViewmodelHandModel(
+    const WeaponDef* weaponDef,
+    XModel* sourceModel)
+{
+    const bool stockAirSupportDesignator =
+        VR_IsStockAirSupportDesignator(
+            weaponDef);
+
+    if (!stockAirSupportDesignator &&
+        VR_TrackedHandsEnabled() &&
+        weaponDef != nullptr &&
+        weaponDef->weapType == WEAPTYPE_BULLET &&
+        sourceModel != nullptr)
+    {
+        // Ordinary bullet weapons use the already-proven hand assets.  Their
+        // bind glove is a stable donor for the support designator and never
+        // consumes the support weapon's malformed canned animation.
+        s_vrAirSupportStableRightHandDonorModel =
+            sourceModel;
+    }
+
+    // KISAK_SP_VR_AIR_SUPPORT_HAND_GEOMETRY_V91
+    // Safehouse and Heat use dedicated non-binocular support weapons.  Hide
+    // their canned flat-screen arm pose, but retain the separately attached
+    // gun/device model and the independent tracked VR hand.
+    if (stockAirSupportDesignator)
+    {
+        XModel* hiddenModel =
+            VR_GetHiddenWeaponHandModel(
+                sourceModel);
+
+        if (hiddenModel != sourceModel)
+        {
+            return hiddenModel;
+        }
+    }
+
+    return VR_GetRightOnlyWeaponHandModel(
+        sourceModel);
+}
+
 static bool VR_CreateFloatingLeftHandObjects(
     VrSplitHandAsset* asset)
 {
@@ -3183,6 +4828,154 @@ static bool VR_SetRigidHandRootPose(
 
     NormalizeQuatTrans(
         &rootPose[0]);
+
+    return true;
+}
+
+static bool VR_AddAirSupportRightHandToScene(
+    const int weaponIndex,
+    const WeaponDef* weaponDef,
+    DObj_s* weaponViewModel,
+    XModel* sourceHandModel,
+    const cpose_t* weaponPose,
+    const playerState_s* playerState,
+    const float lightingOrigin[3])
+{
+    if (!VR_TrackedHandsEnabled() ||
+        !VR_IsStockAirSupportDesignator(
+            weaponDef))
+    {
+        return false;
+    }
+
+    if (weaponIndex <= 0 ||
+        weaponViewModel == nullptr ||
+        sourceHandModel == nullptr ||
+        weaponPose == nullptr ||
+        playerState == nullptr ||
+        lightingOrigin == nullptr)
+    {
+        return false;
+    }
+
+    // If V91's hidden-surface clone could not be installed, registration kept
+    // the ordinary visible right-hand fallback.  Do not double-submit a glove
+    // in that safe fallback case.
+    if (!VR_WeaponUsesHiddenAirSupportHandModel(
+            weaponViewModel,
+            sourceHandModel))
+    {
+        return false;
+    }
+
+    XModel* stableGloveSourceModel =
+        s_vrAirSupportStableRightHandDonorModel != nullptr
+            ? s_vrAirSupportStableRightHandDonorModel
+            : sourceHandModel;
+
+    VrAirSupportRightHandAsset* asset =
+        VR_GetAirSupportRightHandAsset(
+            stableGloveSourceModel);
+
+    if (asset == nullptr &&
+        stableGloveSourceModel != sourceHandModel)
+    {
+        // A donor with an unexpected skeleton must not cost the player the
+        // safe bind-glove fallback from the support model itself.
+        stableGloveSourceModel =
+            sourceHandModel;
+        asset =
+            VR_GetAirSupportRightHandAsset(
+                stableGloveSourceModel);
+    }
+
+    if (asset == nullptr ||
+        !VR_CreateAirSupportRightHandObject(
+            asset))
+    {
+        return false;
+    }
+
+    // KISAK_SP_VR_AIR_SUPPORT_NO_POSE_BAKE_V93
+    // Do not call the V92 pose-bake helper here.  Its eight-frame CPU skinning
+    // step was the direct source of the returning garbled mesh.
+    // The model built above is already wrist-local and rigidly weighted to
+    // root zero, so its stable bind shape can follow the live wrist directly.
+
+    const uint32_t rightWristName =
+        SL_FindString(
+            "j_wrist_ri");
+
+    float rightWristOrigin[3] = {};
+    float rightWristAxis[3][3] = {};
+
+    if (rightWristName == 0u ||
+        !CG_DObjGetWorldTagMatrix(
+            weaponPose,
+            weaponViewModel,
+            rightWristName,
+            rightWristAxis,
+            rightWristOrigin))
+    {
+        if (!asset->wristTagFailureLogWritten)
+        {
+            Com_PrintWarning(
+                0,
+                "[VR][ISSUE45][AIR SUPPORT] The hidden support "
+                "skeleton did not expose j_wrist_ri; the tracked "
+                "designator remains visible without a right glove.\n");
+
+            asset->wristTagFailureLogWritten = true;
+        }
+
+        return false;
+    }
+
+    float unnormalizedRightWristQuaternion[4] = {};
+    float rightWristQuaternion[4] = {};
+
+    AxisToQuat(
+        rightWristAxis,
+        unnormalizedRightWristQuaternion);
+
+    if (!VR_NormalizeHandQuaternion(
+            unnormalizedRightWristQuaternion,
+            rightWristQuaternion) ||
+        !VR_SetRigidHandRootPose(
+            &asset->object,
+            &asset->pose,
+            rightWristOrigin,
+            rightWristQuaternion))
+    {
+        return false;
+    }
+
+    float mutableLightingOrigin[3] = {
+        lightingOrigin[0],
+        lightingOrigin[1],
+        lightingOrigin[2],
+    };
+
+    R_AddDObjToSceneUntracked(
+        &asset->object,
+        &asset->pose,
+        3u,
+        mutableLightingOrigin,
+        0.0f);
+
+    if (!asset->submissionLogWritten)
+    {
+        Com_Printf(
+            0,
+            "[VR][ISSUE45][AIR SUPPORT] V93 submitted an unskinned "
+            "bind-pose right glove from '%s' at animated j_wrist_ri "
+            "for %s; no support hand skinning or canned arm geometry "
+            "is active.\n",
+            XModelGetName(stableGloveSourceModel),
+            weaponDef->szInternalName);
+
+        asset->submissionLogWritten = true;
+    }
 
     return true;
 }
@@ -4403,6 +6196,43 @@ static void VR_FreeFloatingLeftHandRenderObjects()
         // after weapon shutdown.
         asset = VrSplitHandAsset{};
     }
+
+    for (VrAirSupportRightHandAsset& asset :
+         s_vrAirSupportRightHandAssets)
+    {
+        if (asset.objectCreated)
+        {
+            DObjFree(
+                &asset.object);
+        }
+
+        // The copied model, surfaces, indices, vertices, and root bind are
+        // hunk-backed and are released after weapon shutdown.
+        asset = VrAirSupportRightHandAsset{};
+    }
+
+    for (VrAirSupportDeviceAsset& asset :
+         s_vrAirSupportDeviceAssets)
+    {
+        if (asset.objectCreated)
+        {
+            DObjFree(
+                &asset.object);
+        }
+
+        asset = VrAirSupportDeviceAsset{};
+    }
+
+    s_vrAirSupportStableRightHandDonorModel =
+        nullptr;
+
+    for (VrHiddenWeaponHandAsset& asset :
+         s_vrHiddenWeaponHandAssets)
+    {
+        // The copied model headers, surfaces, and degenerate indices are
+        // hunk-backed and are released with the cgame hunk after shutdown.
+        asset = VrHiddenWeaponHandAsset{};
+    }
 }
 
 static void VR_FreeManualReloadClipRenderObjects()
@@ -4849,7 +6679,8 @@ void __cdecl CG_RegisterWeapon(int32_t localClientNum, uint32_t weaponNum)
                 dobjModels[1].ignoreCollision = 0;
 #ifdef KISAK_SP
                 dobjModels[0].model =
-                    VR_GetRightOnlyWeaponHandModel(
+                    VR_GetViewmodelHandModel(
+                        weapDef,
                         weapDef->handXModel);
 #else
                 dobjModels[0].model = weapDef->handXModel;
@@ -5083,7 +6914,8 @@ void __cdecl ChangeViewmodelDobj(
             dobjModels[0].ignoreCollision = 0;
 #ifdef KISAK_SP
             dobjModels[0].model =
-                VR_GetRightOnlyWeaponHandModel(
+                VR_GetViewmodelHandModel(
+                    weapDef,
                     weapInfo->handModel);
 #else
             dobjModels[0].model = weapInfo->handModel;
@@ -5848,6 +7680,23 @@ void __cdecl CG_AddPlayerWeapon(
                         heldOrigin,
                         heldAxis);
 
+                const bool airSupportDeviceRendered =
+                    VR_AddAirSupportDeviceToScene(
+                        weapDef,
+                        weapInfo->viewModelDObj,
+                        &cgameGlob->viewModelPose,
+                        floatingHandLightingOrigin);
+
+                const bool airSupportRightHandRendered =
+                    VR_AddAirSupportRightHandToScene(
+                        weaponNum,
+                        weapDef,
+                        weapInfo->viewModelDObj,
+                        weapInfo->handModel,
+                        &cgameGlob->viewModelPose,
+                        ps,
+                        floatingHandLightingOrigin);
+
                 uint32_t manualHidePartBits[4] = {
                     weapInfo->partBits[0],
                     weapInfo->partBits[1],
@@ -5857,6 +7706,8 @@ void __cdecl CG_AddPlayerWeapon(
 
                 // V2 retargets the original combined hand mesh in place.
                 (void)floatingLeftHandRendered;
+                (void)airSupportDeviceRendered;
+                (void)airSupportRightHandRendered;
 
                 if (hideLoadedMagazine &&
                     foundMagazineWell)

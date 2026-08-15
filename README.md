@@ -14,15 +14,53 @@ copy of the original game.
 
 ## Current status
 
-The current public beta is `v0.10.0-beta.13`.
+The current public beta is `v0.10.0-beta.14`.
 
-Beta.13 improves HUD and menu placement, updates the SteamVR OpenXR graphics
-path, adds a dedicated Pimax Crystal Light packed layout and guarded runtime
-handling, and makes a mounted machine gun's visible aim follow the same tracked
-right-controller direction as its bullets. Existing LocalAppData profiles and
-Controller Input V4 bindings remain unchanged during an update.
+Beta.14 fixes the remaining stereo-menu and legacy-crosshair defects, adds
+a full-FOV Pimax Crystal Light scope layout, routes Safehouse and Heat
+air-support targeting through the right controller, makes the Configurator
+fully resizable, and adds a guarded guided installer beside the portable ZIP.
+Existing LocalAppData profiles and Controller Input V4 bindings remain
+unchanged during an update.
 
-### Beta.13 fixes
+### Beta.14 fixes
+
+- Keeps Mission Select artwork and text in the same eye-local geometry, centers
+  Quit Game and Quit Mission dialogs in both eyes, and suppresses COD4's legacy
+  flat crosshair in VR even when an older profile has `cg_drawCrosshair 1`.
+- Adds the recommended Pimax Crystal Light Full FOV preset: the runtime's
+  uncropped `4312x5102` recommendation at output scale `0.80` becomes two
+  `3450x4082` eyes plus the 1024-pixel scope panel in a `7924x4082` packed
+  surface. The older `7684x3128` / `1.00` cropped preset remains available;
+  Quest modes are unchanged.
+- Makes the Safehouse and Heat air-support ray, target marker, and strike
+  placement follow the tracked right controller. It keeps the normal right
+  glove stable and suppresses broken canned arms; the handheld device model is
+  still invisible, which is cosmetic rather than a targeting blocker.
+- Requests a true `1160x750` Configurator client area and adds resize,
+  maximize, restore, and a minimum tracking size so rightmost and bottom
+  controls cannot be clipped by Windows/DPI non-client metrics.
+- Adds guided Windows Setup as the recommended download while retaining the
+  portable ZIP. Setup finds Steam libraries, accepts manual Browse, validates a
+  classic COD4 layout before writing, and never guesses how to rearrange an
+  unsupported Microsoft/Xbox raw layout.
+- Gives install/update/repair a stable identity, backs up and SHA-256-verifies
+  every pre-existing managed file, restores those originals on uninstall, and
+  preserves COD4 data, saves, and `%LOCALAPPDATA%\KisakCOD-VR` settings.
+- Builds Setup and ZIP from one deterministic case-insensitive allowlisted
+  payload with matching SHA-256 sidecars. Publishing fixes include Inno
+  preprocessor line-break handling, literal `/DName=Value` definitions, Inno
+  6/7 close-app compatibility, and escaped smoke-test AppIds.
+- Preserves native Windows Setup switches under Git Bash, validates their exact
+  JSON argument transport, and waits for Inno's second uninstall phase to write
+  `Log closed.` before checking restoration. The final R8 lifecycle test passed
+  incomplete-layout rejection, install, repair, uninstall, exact sentinel
+  restoration, and game-data retention.
+- Retains all 142 settings checks plus the installer-builder suite and focused
+  source contracts. Real Pimax Full FOV and Bog mounted-gun headset confirmation
+  are still requested from testers.
+
+### Beta.13 fixes retained
 
 - Uses one canonical HUD transform for the real compass ticker/objectives and
   their editor rectangle, and corrects normal-notification bounds so saved
@@ -164,23 +202,36 @@ See [KNOWN-ISSUES.md](KNOWN-ISSUES.md) before downloading.
 - A PC VR headset and motion controllers
 - A VR-capable GPU
 
-The precompiled package is an overlay for an existing COD4 installation. It
-includes the exact 32-bit Steamworks, Bink, and Miles runtime files linked by
-KisakCOD. It does not include `iw3sp.exe`, COD4 maps, fastfiles, saves, or
-other Call of Duty game data.
+The precompiled Setup and portable ZIP are overlays for an existing COD4
+installation. They include the exact 32-bit Steamworks, Bink, and Miles runtime
+files linked by KisakCOD. Neither artifact includes `iw3sp.exe`, COD4 maps,
+fastfiles, saves, or other Call of Duty game data.
 
 ## Install a precompiled build
 
-1. Install and launch the original COD4 once.
-2. In Steam, open **Manage → Browse local files**.
-3. Extract the contents of the KisakCOD VR ZIP into that folder, beside
-   `iw3sp.exe`.
-4. Start the OpenXR runtime you intend to use.
-5. Run `KisakCOD-VR-Configurator.exe`.
-6. On **Setup & Compatibility**, run the scan, resolve every Blocked item, and
+1. Install and launch the original 2007 COD4 once.
+2. Download `KisakCOD-VR-v…-Setup.exe` and its `.sha256` sidecar from the same
+   release, then run Setup.
+3. Confirm the detected COD4 folder, or browse to the folder containing
+   `iw3sp.exe`, `localization.txt`, `main`, and `zone`.
+4. Let Setup open `KisakCOD-VR-Configurator.exe`, then start the OpenXR runtime
+   you intend to use.
+5. On **Setup & Compatibility**, run the scan, resolve every Blocked item, and
    review the exact delta before applying its recommendation.
-7. Choose any remaining comfort/input settings, then click **Save & Launch**.
+6. Choose any remaining comfort/input settings, then click **Save & Launch**.
    The batch launcher reruns the same preflight before starting the game.
+
+Setup detects the registered Steam installation and additional Steam library
+folders. It validates the game executable, localization, archives, and matching
+language fastfile before writing anything. Update/repair uses the same stable
+installer identity. Uninstall restores files that existed before Setup first
+managed each path; LocalAppData settings and original game data are left alone.
+
+The ZIP remains available as a portable/manual alternative: extract all of it
+beside `iw3sp.exe`. Automatic conversion of the Microsoft/Xbox app's different
+raw layout is not enabled until that edition's before/after file map has been
+verified. Setup safely rejects an unrecognized layout instead of guessing or
+moving licensed game files.
 
 Full instructions are in [INSTALL.md](INSTALL.md).
 

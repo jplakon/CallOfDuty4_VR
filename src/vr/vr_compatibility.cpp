@@ -342,9 +342,14 @@ Report Evaluate(const Probe& probe)
 
     if (pimaxCrystalLight)
     {
+        // KISAK_SP_VR_PIMAX_FULL_FOV_SCOPE_LAYOUT_V89
+        // Issue #41's paired logs prove that FOV crop off changes Pimax's
+        // recommendation from 3330 x 3128 to 4312 x 5102 per eye.  At 0.80,
+        // those uncropped eyes become 3450 x 4082 and fit beside the existing
+        // 1024 px weapon-free scope panel in a 7924 x 4082 backbuffer.
         const bool scopeLayoutReady =
-            probe.currentPackedMode == "7684x3128" &&
-            probe.currentOutputScale == "1.00";
+            probe.currentPackedMode == "7924x4082" &&
+            probe.currentOutputScale == "0.80";
 
         AddCheck(
             &report,
@@ -352,11 +357,11 @@ Report Evaluate(const Probe& probe)
             "Pimax Crystal Light scope layout",
             scopeLayoutReady ? Status::Ready : Status::Warning,
             scopeLayoutReady
-                ? "The packed capture reserves two 3330 x 3128 eyes plus the 1024 px dedicated scope panel."
-                : "The selected packed capture cannot preserve the reported 3330 x 3128 eyes and the dedicated scope panel together.",
+                ? "The packed capture reserves two uncropped 3450 x 4082 eyes plus the 1024 px dedicated scope panel."
+                : "The previous 7684 x 3128 Pimax layout only fits the 3330 x 3128 cropped-FOV eyes; it cannot hold the uncropped 4312 x 5102 recommendation and the scope panel together.",
             scopeLayoutReady
                 ? std::string()
-                : "Apply the Pimax Crystal Light graphics recommendation before testing M21 or SVD scopes.");
+                : "Apply the Pimax Crystal Light full-FOV graphics recommendation before testing M21 or SVD scopes with Pimax FOV crop disabled.");
     }
 
     report.recommendedBackend = probe.backendPolicy;
@@ -408,7 +413,7 @@ Report Evaluate(const Probe& probe)
     }
     else if (pimaxCrystalLight)
     {
-        recommendation << "; detected Pimax Crystal Light scope-safe capture";
+        recommendation << "; detected Pimax Crystal Light full-FOV scope-safe capture";
     }
     else if (!openXrReady && probe.openVrInstalled)
     {
@@ -440,7 +445,7 @@ std::string SerializeReport(
     const std::string& generatedAt)
 {
     std::ostringstream output;
-    output << "KisakCOD VR beta.13 unified setup and compatibility report\r\n";
+    output << "KisakCOD VR beta.14 unified setup and compatibility report\r\n";
     output << "STATUS=" << StatusId(report.status) << "\r\n";
     output << "READY_FOR_LAUNCH=" << (report.readyForLaunch ? 1 : 0) << "\r\n";
     output << "HEADSET_TEST_REQUIRED=" << (report.headsetTestRequired ? 1 : 0) << "\r\n";

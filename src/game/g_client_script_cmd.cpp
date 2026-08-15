@@ -75,6 +75,64 @@ static bool G_VR_PlayerUsingFixedScopedTurret(
             WEAPOVERLAYINTERFACE_TURRETSCOPE;
 }
 
+// KISAK_SP_VR_AIR_SUPPORT_WEAPON_IDENTITY_V91
+// The stock scripts use dedicated non-binocular weapons for their continuous
+// target painters: Safehouse uses cobra_air_support and Heat uses
+// airstrike_support.  These internal asset names are the stable contract used
+// by giveWeapon(), getCurrentWeapon(), and SetActionSlot() in those maps; a
+// WEAPTYPE_BINOCULARS test never sees either item.
+static bool G_VR_IsStockAirSupportDesignator(
+    const WeaponDef *weaponDef)
+{
+    if (weaponDef == nullptr ||
+        weaponDef->szInternalName == nullptr)
+    {
+        return false;
+    }
+
+    return
+        !I_stricmp(
+            weaponDef->szInternalName,
+            "cobra_air_support") ||
+        !I_stricmp(
+            weaponDef->szInternalName,
+            "airstrike_support");
+}
+
+// KISAK_SP_VR_AIR_SUPPORT_SCRIPT_AIM_V91
+// Both stock target-painter scripts ask getplayerangles() for their trace ray
+// instead of consuming the gun pitch/yaw carried by ordinary weapon
+// simulation.  Restrict the bridge to the two exact stock weapon assets so
+// ordinary items, localized display names, and unrelated custom weapons keep
+// their original behavior.
+static const WeaponDef *G_VR_GetActiveAirSupportDesignator(
+    const gentity_s *player)
+{
+    if (!VR_IsInitialized() ||
+        player == nullptr ||
+        player->client == nullptr)
+    {
+        return nullptr;
+    }
+
+    const unsigned int weaponIndex =
+        player->client->ps.weapon;
+
+    if (weaponIndex == 0u ||
+        weaponIndex >= BG_GetNumWeapons())
+    {
+        return nullptr;
+    }
+
+    const WeaponDef *weaponDef =
+        BG_GetWeaponDef(weaponIndex);
+
+    return G_VR_IsStockAirSupportDesignator(
+            weaponDef)
+            ? weaponDef
+            : nullptr;
+}
+
 int __cdecl G_GetNeededStartAmmo(gentity_s *pSelf, WeaponDef *weapDef)
 {
     gclient_s *client; // r29
@@ -1031,6 +1089,52 @@ void __cdecl PlayerCmd_getAngles(scr_entref_t entref)
         {
             v2 = va("entity %i is not a player", v3);
             Scr_ObjectError(v2);
+        }
+    }
+
+    // KISAK_SP_VR_AIR_SUPPORT_SCRIPT_AIM_V90
+    // The visible designator already follows the final rendered weapon ray.
+    // Expose that same pitch/yaw to the stock GSC target trace while this
+    // semantic weapon class is active.  The bridge is deliberately independent
+    // of Fire state because the support marker updates continuously before the
+    // player confirms the target.
+    const WeaponDef *vrAirSupportDesignator =
+        G_VR_GetActiveAirSupportDesignator(v1);
+
+    if (vrAirSupportDesignator != nullptr)
+    {
+        float vrAirSupportAngles[3] = {};
+        bool ignoredVrAttackPressed = false;
+
+        if (VR_GetRightControllerWeaponCommand(
+                &vrAirSupportAngles[0],
+                &vrAirSupportAngles[1],
+                &ignoredVrAttackPressed))
+        {
+            vrAirSupportAngles[2] = 0.0f;
+
+            static bool loggedVrAirSupportScriptAim =
+                false;
+
+            if (!loggedVrAirSupportScriptAim)
+            {
+                Com_Printf(
+                    0,
+                    "[VR][ISSUE45][AIR SUPPORT] "
+                    "getplayerangles() now follows the tracked "
+                    "designator ray for %s at pitch %.2f yaw %.2f.\n",
+                    vrAirSupportDesignator->szInternalName != nullptr
+                        ? vrAirSupportDesignator->szInternalName
+                        : "<unnamed air-support weapon>",
+                    vrAirSupportAngles[0],
+                    vrAirSupportAngles[1]);
+
+                loggedVrAirSupportScriptAim =
+                    true;
+            }
+
+            Scr_AddVector(vrAirSupportAngles);
+            return;
         }
     }
 

@@ -11,18 +11,38 @@ REQUIREMENTS
 
 The remastered game is not a substitute.
 
-INSTALL
--------
+GUIDED SETUP (RECOMMENDED)
+--------------------------
+
+1. Download KisakCOD-VR-v@VERSION@-Setup.exe and its .sha256 sidecar from the
+   same release.
+2. Run Setup and confirm the detected COD4 folder, or browse to the folder
+   containing iw3sp.exe, localization.txt, main, and zone.
+3. Setup validates the language fastfiles before writing, preserves every
+   pre-existing file it will replace, and opens the Configurator when done.
+4. Start your OpenXR runtime. On Setup & Compatibility, rescan and resolve
+   every Blocked item; review any recommendation before applying it.
+5. Choose remaining personal settings and click Save & Launch. The launcher
+   reruns the same preflight before starting the game.
+
+Running Setup again performs an update/repair. Windows Installed apps and the
+Start Menu uninstall shortcut remove managed mod files and restore the exact
+files that existed before Setup first managed those paths. Personal settings
+under LocalAppData are preserved.
+
+PORTABLE ZIP (MANUAL ALTERNATIVE)
+---------------------------------
 
 1. In Steam, right-click the original COD4 and choose Manage > Browse local
    files.
-2. Confirm that the folder contains iw3sp.exe.
+2. Confirm that the folder contains iw3sp.exe, localization.txt, main, and
+   zone.
 3. Extract every file from this ZIP into that folder, beside iw3sp.exe.
-4. Start your OpenXR runtime.
-5. Run KisakCOD-VR-Configurator.exe. On Setup & Compatibility, rescan and
-   resolve every Blocked item; review any recommendation before applying it.
-6. Choose remaining personal settings and click Save & Launch. The launcher
-   reruns the same preflight before starting the game.
+4. Start your OpenXR runtime and run KisakCOD-VR-Configurator.exe.
+
+Microsoft/Xbox automatic raw-layout conversion remains disabled until its
+before/after file map is verified. Setup rejects an unrecognized layout before
+changing anything; it never guesses, downloads, or moves original game data.
 
 The configurator covers compatibility, comfort, graphics, visual
 HUD/text/compass placement, weapon and hand fit, belt/reload/grenade

@@ -742,7 +742,7 @@ bool ParseRequest(
     {
         if (error != nullptr)
         {
-            *error = "Invalid beta.13 weapon-calibration request.";
+            *error = "Invalid beta.14 weapon-calibration request.";
         }
         return false;
     }
@@ -841,7 +841,7 @@ bool ParseRuntimeStatus(
     {
         if (error != nullptr)
         {
-            *error = "Invalid beta.13 weapon-calibration runtime status.";
+            *error = "Invalid beta.14 weapon-calibration runtime status.";
         }
         return false;
     }

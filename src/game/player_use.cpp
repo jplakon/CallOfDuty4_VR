@@ -17,6 +17,28 @@
 #include "bullet.h"
 #include "vr/vr_openxr.h"
 
+// KISAK_SP_VR_AIR_SUPPORT_WEAPON_IDENTITY_V91
+// Keep the native look-at fallback on the same two exact stock assets as the
+// getplayerangles() bridge.  Safehouse and Heat do not classify these items as
+// WEAPTYPE_BINOCULARS.
+static bool G_VR_IsStockAirSupportDesignator(
+    const WeaponDef *weaponDef)
+{
+    if (weaponDef == nullptr ||
+        weaponDef->szInternalName == nullptr)
+    {
+        return false;
+    }
+
+    return
+        !I_stricmp(
+            weaponDef->szInternalName,
+            "cobra_air_support") ||
+        !I_stricmp(
+            weaponDef->szInternalName,
+            "airstrike_support");
+}
+
 
 void __cdecl Player_UseEntity(gentity_s *playerEnt, gentity_s *useEnt)
 {
@@ -151,6 +173,7 @@ void __cdecl Player_ActivateHoldCmd(gentity_s *ent)
         }
     }
 }
+
 
 void __cdecl Player_UpdateActivate(gentity_s *ent)
 {
@@ -1063,6 +1086,51 @@ void __cdecl Player_UpdateLookAtEntity(gentity_s *ent)
     }
     weapDef = BG_GetWeaponDef(weapon);
 
+    // KISAK_SP_VR_AIR_SUPPORT_LOOKAT_AIM_V91
+    // Keep the native look-at result aligned with the scripted target painter
+    // for the two dedicated stock support weapons.  Ordinary use, firearms,
+    // Javelin, turrets, and non-VR view directions remain untouched.
+    if (VR_IsInitialized() &&
+        G_VR_IsStockAirSupportDesignator(
+            weapDef))
+    {
+        float vrAirSupportPitch = 0.0f;
+        float vrAirSupportYaw = 0.0f;
+        bool ignoredVrAttackPressed = false;
+
+        if (VR_GetRightControllerWeaponCommand(
+                &vrAirSupportPitch,
+                &vrAirSupportYaw,
+                &ignoredVrAttackPressed))
+        {
+            const float vrAirSupportAngles[3] = {
+                vrAirSupportPitch,
+                vrAirSupportYaw,
+                0.0f,
+            };
+
+            AngleVectors(
+                vrAirSupportAngles,
+                forward,
+                0,
+                0);
+
+            static bool loggedVrAirSupportLookAtAim =
+                false;
+
+            if (!loggedVrAirSupportLookAtAim)
+            {
+                Com_Printf(
+                    0,
+                    "[VR][ISSUE45][AIR SUPPORT] Native look-at now "
+                    "follows the tracked designator direction.\n");
+
+                loggedVrAirSupportLookAtAim =
+                    true;
+            }
+        }
+    }
+
     // KISAK_SP_JAVELIN_VR_USABILITY_FIX
     // The stock look-at trace follows playerState viewangles. In VR those are
     // the body/flat-camera angles, not the visible tracked launcher. Javelin
@@ -1292,4 +1360,3 @@ void __cdecl Player_UpdateLookAtEntity(gentity_s *ent)
         }
     }
 }
-

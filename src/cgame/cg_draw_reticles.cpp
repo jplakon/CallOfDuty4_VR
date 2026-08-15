@@ -740,6 +740,28 @@ bool __cdecl CG_IsReticleTurnedOff()
 #ifdef KISAK_MP
     return !cg_drawCrosshair->current.enabled || !UI_ShouldDrawCrosshair();
 #elif KISAK_SP
+    // KISAK_SP_VR_FLAT_CROSSHAIR_SUPPRESSION_V88
+    // Motion-controller weapon aim and physical scopes replace COD4's flat
+    // center-screen hip reticle. Legacy profiles created before beta.13 can
+    // still contain cg_drawCrosshair=1, so enforce the VR invariant here
+    // instead of relying on a mutable archived dvar or launcher default.
+    if (VR_IsInitialized())
+    {
+        static bool loggedFlatCrosshairSuppression = false;
+
+        if (!loggedFlatCrosshairSuppression)
+        {
+            Com_Printf(
+                0,
+                "[VR][UI] V88 suppressed the legacy flat weapon "
+                "crosshair for VR, including archived profiles.\n");
+
+            loggedFlatCrosshairSuppression = true;
+        }
+
+        return true;
+    }
+
     return !cg_drawCrosshair->current.enabled;
 #endif
 }
