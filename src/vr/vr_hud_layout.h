@@ -115,6 +115,9 @@ Element CycleElement(Element element, int direction);
 
 Point SafeAreaMinimum(const Layout& layout);
 Point SafeAreaMaximum(const Layout& layout);
+bool UsesAmmoEquipmentTransform(
+    int horizontalAlignment,
+    int verticalAlignment);
 Point ElementCenter(const Layout& layout, Element element);
 Size ElementSize(const Layout& layout, Element element);
 Rect TransformCompassRect(

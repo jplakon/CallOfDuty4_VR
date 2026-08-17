@@ -362,6 +362,17 @@ Point SafeAreaMaximum(const Layout& layout)
     };
 }
 
+bool UsesAmmoEquipmentTransform(
+    const int horizontalAlignment,
+    const int verticalAlignment)
+{
+    // COD4 splits the lower HUD across two safe-area anchors: action slots
+    // are left-safe while ammunition and grenade counters are right-safe.
+    // Both halves belong to the Configurator's shared ammo/equipment group.
+    return verticalAlignment == 3 &&
+        (horizontalAlignment == 1 || horizontalAlignment == 3);
+}
+
 Point ElementCenter(const Layout& layout, const Element element)
 {
     const Point safeMinimum = SafeAreaMinimum(layout);

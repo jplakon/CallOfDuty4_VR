@@ -475,6 +475,20 @@ int main(const int argumentCount, char** arguments)
         Check(
             !update.modifierHeld && !selector.armed,
             "V79 should not rearm after turning until right-stick contact is released");
+
+        vi::OpenVrMissionSelectorState openXrSelector;
+        update = vi::UpdateOpenVrMissionSelector(
+            &openXrSelector,
+            true,
+            true,
+            leftUp,
+            true,
+            rightTurn,
+            true);
+        Check(
+            update.available && !update.modifierHeld &&
+                !openXrSelector.armed,
+            "V103 OpenXR should not let walking plus right-stick turning arm a thumbrest mission shortcut");
     }
 
     {
@@ -1059,6 +1073,13 @@ int main(const int argumentCount, char** arguments)
         Check(
             vh::kElementCount == 5u,
             "V61 should expose five independently movable HUD groups");
+        Check(
+            vh::UsesAmmoEquipmentTransform(1, 3) &&
+                vh::UsesAmmoEquipmentTransform(3, 3) &&
+                !vh::UsesAmmoEquipmentTransform(2, 3) &&
+                !vh::UsesAmmoEquipmentTransform(1, 2) &&
+                !vh::UsesAmmoEquipmentTransform(3, 2),
+            "issue #22 V99 should transform both bottom-safe halves of the ammo/equipment HUD without capturing centered or non-bottom UI");
         Check(
             NearlyEqual(
                 vh::ElementCenter(
@@ -1785,6 +1806,42 @@ int main(const int argumentCount, char** arguments)
     {
         const std::string launcher = Read(arguments[2]);
         const std::string runtime = Read(arguments[3]);
+        const std::size_t openXrControllerUpdate =
+            runtime.find("void VR_UpdateControllerActions(");
+        const std::size_t openVrControllerUpdateStart =
+            runtime.find("bool VR_UpdateOpenVrControllerActions()");
+        const std::size_t openXrMissionSelector =
+            runtime.find(
+                "&g_vrOpenXrMissionSelector,",
+                openXrControllerUpdate);
+        const std::size_t openXrGuardedBinding =
+            runtime.find(
+                "const bool guardedMissionBinding =",
+                openXrMissionSelector);
+        const std::size_t openXrGuardedModifier =
+            runtime.find(
+                "termHeld = missionSelector.modifierHeld;",
+                openXrGuardedBinding);
+        Check(
+            runtime.find(
+                "KISAK_SP_VR_OPENXR_MISSION_SELECTOR_V103") !=
+                    std::string::npos &&
+                runtime.find(
+                    "VR_FindInputTermActionForPhysicalSource(") !=
+                    std::string::npos &&
+                openXrControllerUpdate != std::string::npos &&
+                openVrControllerUpdateStart != std::string::npos &&
+                openXrMissionSelector != std::string::npos &&
+                openXrGuardedBinding != std::string::npos &&
+                openXrGuardedModifier != std::string::npos &&
+                openXrControllerUpdate < openXrMissionSelector &&
+                openXrMissionSelector < openXrGuardedBinding &&
+                openXrGuardedBinding < openXrGuardedModifier &&
+                openXrGuardedModifier < openVrControllerUpdateStart &&
+                runtime.find(
+                    "[VR][OPENXR][CONTROLS] V103 guarded mission selector") !=
+                    std::string::npos,
+            "issues #52/#60 V103 must apply the neutral-entry mission selector to native OpenXR before any Quest thumbrest chord can lock locomotion");
         Check(
             launcher.find("STATUS=LAUNCHER_VERIFIED") != std::string::npos &&
                 launcher.find("Active-VR-Settings.txt") != std::string::npos &&
@@ -2015,6 +2072,64 @@ int main(const int argumentCount, char** arguments)
                     std::string::npos,
             "issue #29 V70 must route OpenXR and OpenVR through one component-selective recenter transaction");
 
+        const std::size_t levelYawHelper =
+            runtime.find("bool VR_TryGetLevelYawOnlyOrientation(");
+        const std::size_t levelYawGuard =
+            runtime.find(
+                "horizontalLengthSquared <= 0.0001f",
+                levelYawHelper);
+        const std::size_t publishHeadOrientation =
+            runtime.find("void VR_PublishHeadOrientation(");
+        const std::size_t publishLevelCapture =
+            runtime.find(
+                "VR_TryGetLevelYawOnlyOrientation(",
+                publishHeadOrientation);
+        const std::size_t publishBaseCommit =
+            runtime.find(
+                "g_vrHeadBaseOrientation =",
+                publishLevelCapture);
+        const std::size_t recenterHeadForMode =
+            runtime.find("static bool VR_RecenterHeadForMode(");
+        const std::size_t recenterLevelCapture =
+            runtime.find(
+                "VR_TryGetLevelYawOnlyOrientation(",
+                recenterHeadForMode);
+        const std::size_t recenterDirectionCommit =
+            runtime.find(
+                "if (needsDirectionLevel)",
+                recenterLevelCapture);
+        const std::size_t recenterPositionCommit =
+            runtime.find(
+                "if (needsPosition)",
+                recenterLevelCapture);
+        Check(
+            levelYawHelper != std::string::npos &&
+                levelYawGuard != std::string::npos &&
+                publishHeadOrientation != std::string::npos &&
+                publishLevelCapture != std::string::npos &&
+                publishBaseCommit != std::string::npos &&
+                levelYawHelper < levelYawGuard &&
+                levelYawGuard < publishHeadOrientation &&
+                publishHeadOrientation < publishLevelCapture &&
+                publishLevelCapture < publishBaseCommit &&
+                runtime.find(
+                    "V104 level-safe HMD yaw-only base is active") !=
+                    std::string::npos,
+            "V104 must level the initial HMD base to yaw only and reject a near-vertical startup pose before committing it");
+        Check(
+            recenterHeadForMode != std::string::npos &&
+                recenterLevelCapture != std::string::npos &&
+                recenterDirectionCommit != std::string::npos &&
+                recenterPositionCommit != std::string::npos &&
+                recenterHeadForMode < recenterLevelCapture &&
+                recenterLevelCapture < recenterDirectionCommit &&
+                recenterLevelCapture < recenterPositionCommit &&
+                runtime.find(
+                    "g_vrHeadBaseOrientation =\n"
+                    "            g_vrLatestHeadOrientation;") ==
+                    std::string::npos,
+            "V104 direction/full recenter must validate a stable level yaw before mutating either orientation or position");
+
         const std::filesystem::path runtimePath = arguments[3];
         const std::filesystem::path root =
             runtimePath.parent_path().parent_path().parent_path();
@@ -2124,6 +2239,50 @@ int main(const int argumentCount, char** arguments)
                     "weapon/support/reload consumers retain the original grip axis") !=
                     std::string::npos,
             "issue #32 V86 must apply the Pimax grip fallback basis only to the standalone free hand when OpenXR has no palm pose");
+        Check(
+            runtime.find(
+                "KISAK_SP_VR_INDEX_LEFT_HANDMODEL_BASIS_V102") !=
+                    std::string::npos &&
+                runtime.find(
+                    "vr::k_pch_Controller_Component_OpenXR_HandModel") !=
+                    std::string::npos &&
+                runtime.find(
+                    "components.palmComponent") !=
+                    std::string::npos &&
+                runtime.find(
+                    "handIndex == offHandIndex") !=
+                    std::string::npos &&
+                runtime.find(
+                    "VrInput::IsOpenVrIndexController(hand)") !=
+                    std::string::npos &&
+                runtime.find(
+                    "uses SteamVR openxr_handmodel") !=
+                    std::string::npos &&
+                runtime.find(
+                    "visual palm basis; handgrip remains ") !=
+                    std::string::npos &&
+                runtime.find(
+                    "unchanged for support and reload") !=
+                    std::string::npos &&
+                runtime.find(
+                    "VR_PublishLeftControllerPalmPose(") !=
+                    std::string::npos &&
+                runtime.find(
+                    "openVrIndexOffHand\n                    ? controllerPalmPose") !=
+                    std::string::npos &&
+                runtime.find(
+                    "VR_PublishLeftControllerForegripPose(\n                controllerGripPose") !=
+                    std::string::npos &&
+                runtime.find(
+                    "squeeze accepts either analog Axis2") !=
+                    std::string::npos &&
+                runtime.find(
+                    "KISAK_SP_VR_INDEX_LEFT_GRIP_BASIS_V98") ==
+                    std::string::npos &&
+                runtime.find(
+                    "openVrIndexGripBasis") ==
+                    std::string::npos,
+            "issue #35 V102 must use the Index render model's dedicated openxr_handmodel pose only for the off-hand visual while preserving V98 squeeze input and the existing support/reload grip basis");
         Check(
             interactionPriority != std::string::npos &&
                 magazinePriority != std::string::npos &&
@@ -2379,6 +2538,29 @@ int main(const int argumentCount, char** arguments)
                     "KISAK_SP_VR_EYE_LOCAL_SHARED_MODAL_V88") !=
                     std::string::npos,
             "issue #51 V88 must isolate menus from HUD safe-area transforms and sample shared dialogs from their eye-local source");
+        Check(
+            runtime.find(
+                "KISAK_SP_VR_CANONICAL_MENU_ASPECT_V101") !=
+                    std::string::npos &&
+                runtime.find(
+                    "constexpr float kVrCanonicalMenuAspect = 4.0f / 3.0f;") !=
+                    std::string::npos &&
+                CountOccurrences(
+                    runtime,
+                    "kVrCanonicalMenuAspect;") == 2u &&
+                runtime.find(
+                    "const std::uint32_t menuSourceWidth =") ==
+                    std::string::npos &&
+                runtime.find(
+                    "Restored the canonical 4:3 menu") !=
+                    std::string::npos &&
+                CountOccurrences(
+                    runtime,
+                    "g_vrLoggedCanonicalMenuAspect = false;") == 2u &&
+                runtime.find(
+                    "if (!menuComfortMode &&\n        submissionViewsValid)") !=
+                    std::string::npos,
+            "issue #22 V101 must present OpenXR and OpenVR menus through COD4's canonical 4:3 canvas without changing the gameplay or HUD projection path");
         Check(
             reticles.find(
                 "KISAK_SP_VR_FLAT_CROSSHAIR_SUPPRESSION_V88") !=
@@ -2771,7 +2953,19 @@ int main(const int argumentCount, char** arguments)
                     std::string::npos,
             "issue #22 V82 must author shared HUD commands in one-eye space and route the real compass through the editor's canonical transform");
         Check(
-            screenPlacement.find("layout.ammoOffsetX") !=
+            screenPlacement.find(
+                "KISAK_SP_VR_RIGHT_SAFE_AMMO_COUNTER_V99") !=
+                    std::string::npos &&
+                screenPlacement.find(
+                    "UsesAmmoEquipmentTransform") !=
+                    std::string::npos &&
+                screenPlacement.find(
+                    "Right-safe ammo/grenade counters") !=
+                    std::string::npos &&
+                screenPlacement.find(
+                    "Left-safe action slots retain") !=
+                    std::string::npos &&
+                screenPlacement.find("layout.ammoOffsetX") !=
                     std::string::npos &&
                 screenPlacement.find("layout.ammoScale") !=
                     std::string::npos &&
@@ -2809,7 +3003,24 @@ int main(const int argumentCount, char** arguments)
                 draw.find("Home centers") != std::string::npos &&
                 draw.find("End resets selected only") !=
                     std::string::npos,
-            "all five visual boxes should drive the corresponding live mission HUD paths");
+            "all five visual boxes should drive the corresponding live mission HUD paths, including both bottom-safe halves of issue #22's ammo/equipment group");
+        const std::size_t vrErrorOverlayGuard = draw.find(
+            "KISAK_SP_VR_CONSOLE_ERROR_OVERLAY_SUPPRESSION_V100");
+        Check(
+            vrErrorOverlayGuard != std::string::npos &&
+                draw.find(
+                    "if (VR_IsInitialized())",
+                    vrErrorOverlayGuard) != std::string::npos &&
+                draw.find(
+                    "messages remain in the console and ",
+                    vrErrorOverlayGuard) != std::string::npos &&
+                CountOccurrences(
+                    draw,
+                    "Con_DrawErrors(0, 2, 300, 1.0);") == 1u &&
+                CountOccurrences(
+                    draw,
+                    "CG_DrawErrorMessages();") == 1u,
+            "issue #22 V100 should suppress only the in-headset error overlay after VR initialization while preserving the stock flat-screen draw path and console logging");
         Check(
             cgameMain.find(
                 "Dvar_RegisterEnum(\"cg_drawFPS\", cg_drawFpsNames, 0") !=
@@ -3524,6 +3735,41 @@ int main(const int argumentCount, char** arguments)
             vi::Source::RightSqueeze,
             &openVrActive) && openVrActive,
         "Index squeeze should prefer the second trigger-style axis");
+
+    std::array<vi::OpenVrHandState, 2> digitalIndexHands = {};
+    vi::OpenVrHandState& digitalIndexLeft = digitalIndexHands[0];
+    digitalIndexLeft.hand = vi::Hand::Left;
+    digitalIndexLeft.connected = true;
+    digitalIndexLeft.stateValid = true;
+    digitalIndexLeft.controllerType = "knuckles";
+    digitalIndexLeft.inputProfilePath =
+        "{indexcontroller}/input/index_controller_profile.json";
+    digitalIndexLeft.supportedButtonsKnown = true;
+    digitalIndexLeft.axisTypes.fill(vr::k_eControllerAxis_None);
+    digitalIndexLeft.axisTypes[1] = vr::k_eControllerAxis_Trigger;
+    digitalIndexLeft.axisTypes[2] = vr::k_eControllerAxis_Trigger;
+    digitalIndexLeft.supportedButtons =
+        vr::ButtonMaskFromId(vr::k_EButton_Grip) |
+        vr::ButtonMaskFromId(vr::k_EButton_Axis1);
+    digitalIndexLeft.controllerState.ulButtonPressed =
+        vr::ButtonMaskFromId(vr::k_EButton_Axis2);
+    digitalIndexLeft.controllerState.rAxis[2].x = 0.0f;
+
+    Check(
+        vi::IsOpenVrIndexController(digitalIndexLeft),
+        "V98 should identify the Valve Index legacy controller profile");
+    Check(
+        vi::GetOpenVrBooleanSourceState(
+            digitalIndexHands,
+            vi::Source::LeftSqueeze,
+            &openVrActive) && openVrActive,
+        "issue #35 V98 should accept a digital-only Index Axis2 grip press as left.squeeze");
+    Check(
+        !vi::GetOpenVrBooleanSourceState(
+            digitalIndexHands,
+            vi::Source::LeftPrimary,
+            &openVrActive) && openVrActive,
+        "the Index Axis2 squeeze must remain distinct from the legacy A/primary bit");
 
     std::array<vi::OpenVrHandState, 2> viveHands = {};
     vi::OpenVrHandState& viveLeft = viveHands[0];

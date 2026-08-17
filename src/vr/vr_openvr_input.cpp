@@ -63,12 +63,6 @@ bool ContainsIgnoreCase(
     return lowerValue.find(lowerFragment) != std::string::npos;
 }
 
-bool IsIndexController(const OpenVrHandState& state)
-{
-    return ContainsIgnoreCase(state.controllerType, "knuckles") ||
-        ContainsIgnoreCase(state.controllerType, "index");
-}
-
 int FindAxis(
     const OpenVrHandState& state,
     const openvr::EVRControllerAxisType type,
@@ -164,6 +158,13 @@ std::string ReadStringProperty(
 }
 
 } // namespace
+
+bool IsOpenVrIndexController(const OpenVrHandState& state)
+{
+    return ContainsIgnoreCase(state.controllerType, "knuckles") ||
+        ContainsIgnoreCase(state.controllerType, "index") ||
+        ContainsIgnoreCase(state.inputProfilePath, "index_controller");
+}
 
 bool ReadOpenVrHandState(
     openvr::IVRSystem* const system,
@@ -325,12 +326,13 @@ bool GetOpenVrBooleanSourceState(
     const std::uint64_t joystick = AxisButtonMask(joystickAxis);
     const std::uint64_t trackpad = AxisButtonMask(trackpadAxis);
     const std::uint64_t trigger = AxisButtonMask(triggerAxis);
+    const std::uint64_t squeeze = AxisButtonMask(squeezeAxis);
     const bool trackpadOnlyController =
         trackpadAxis >= 0 && joystickAxis < 0;
     const bool mixedRealityStyleController =
         trackpadAxis >= 0 &&
         joystickAxis >= 0 &&
-        !IsIndexController(*state) &&
+        !IsOpenVrIndexController(*state) &&
         (!state->supportedButtonsKnown ||
          !ButtonSupported(*state, facePrimary));
 
@@ -340,7 +342,7 @@ bool GetOpenVrBooleanSourceState(
         case Source::RightPrimary:
         {
             const std::uint64_t mask =
-                IsIndexController(*state)
+                IsOpenVrIndexController(*state)
                     ? grip
                     : trackpadOnlyController ||
                               mixedRealityStyleController
@@ -387,8 +389,17 @@ bool GetOpenVrBooleanSourceState(
             if (squeezeAxis >= 0)
             {
                 *active = true;
+                // SteamVR's Index legacy binding publishes physical grip as
+                // Axis2. Depending on the active binding, the analog value,
+                // the Axis2 press bit, or both may be populated, and some
+                // drivers omit that press bit from the supported-buttons
+                // property. The discovered second trigger axis makes its raw
+                // press bit authoritative. Beta.14 read only the analog
+                // value, so a digital-only Index squeeze was invisible to
+                // gameplay and press-to-bind.
                 return state->controllerState.rAxis[squeezeAxis].x >=
-                    kAnalogButtonThreshold;
+                        kAnalogButtonThreshold ||
+                    (state->controllerState.ulButtonPressed & squeeze) != 0u;
             }
             *active = ButtonSupported(*state, grip);
             return ButtonPressed(*state, grip);

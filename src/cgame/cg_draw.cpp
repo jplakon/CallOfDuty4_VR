@@ -846,6 +846,27 @@ void CG_DrawMiniConsole()
 
 void CG_DrawErrorMessages()
 {
+    // KISAK_SP_VR_CONSOLE_ERROR_OVERLAY_SUPPRESSION_V100
+    // The stock error message window is useful on a flat development screen,
+    // but in VR it is enlarged and duplicated into the shared HUD command
+    // list.  Suppress only that presentation layer after VR initializes;
+    // Com_Printf, console.log, the full console, and fatal dialogs remain.
+    if (VR_IsInitialized())
+    {
+        static bool loggedVrErrorOverlaySuppression = false;
+
+        if (!loggedVrErrorOverlaySuppression)
+        {
+            Com_Printf(
+                0,
+                "[VR][HUD][V100] Suppressed the in-headset console "
+                "error overlay; messages remain in the console and "
+                "console.log.\n");
+            loggedVrErrorOverlaySuppression = true;
+        }
+        return;
+    }
+
     Con_DrawErrors(0, 2, 300, 1.0);
 }
 
@@ -1590,7 +1611,7 @@ void __cdecl CG_Draw2D(int localClientNum)
             VR_JavelinHudDiagnostic("upper-right debug info complete");
             if (!cgArray[0].showScores && cg_minicon->current.enabled)
                 Con_DrawMiniConsole(0, 2, 4, 1.0);
-            Con_DrawErrors(0, 2, 300, 1.0);
+            CG_DrawErrorMessages();
             VR_JavelinHudDiagnostic("console errors complete");
             CG_DrawFlashFade(localClientNum);
             VR_JavelinHudDiagnostic("flash fade complete");

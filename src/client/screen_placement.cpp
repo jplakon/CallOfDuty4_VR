@@ -455,38 +455,53 @@ void __cdecl ScrPlace_ApplyRect(
     if (!h)
         MyAssertHandler(".\\client\\screen_placement.cpp", 247, 0, "%s", "h");
 #ifdef KISAK_SP
-    // Edge HUD items with left-safe and bottom-safe alignment form the
-    // action-slot/status cluster ([5], [6], weapon icon, and its count).
-    // Scaling virtual positions and dimensions before screen placement
-    // keeps the complete cluster attached to its safe-area corner.
+    // KISAK_SP_VR_RIGHT_SAFE_AMMO_COUNTER_V99
+    // COD4 authors action slots against the bottom-left safe anchor, but its
+    // ammunition and grenade counters use the bottom-right safe anchor.  The
+    // Configurator intentionally exposes them as one ammo/equipment group, so
+    // apply the same scale and offset to both halves before screen placement.
     if (scrPlace == scrPlaceView &&
-        horzAlign == 1 &&
-        vertAlign == 3)
+        kisak::vr::hud::UsesAmmoEquipmentTransform(
+            horzAlign,
+            vertAlign))
     {
         kisak::vr::hud::Layout layout;
         VR_GetActiveHudLayout(&layout);
-        const float vrBottomLeftHudScale =
+        const float vrAmmoEquipmentScale =
             layout.ammoScale;
 
-        *x *= vrBottomLeftHudScale;
-        *y *= vrBottomLeftHudScale;
-        *w *= vrBottomLeftHudScale;
-        *h *= vrBottomLeftHudScale;
+        *x *= vrAmmoEquipmentScale;
+        *y *= vrAmmoEquipmentScale;
+        *w *= vrAmmoEquipmentScale;
+        *h *= vrAmmoEquipmentScale;
         *x += layout.ammoOffsetX;
         *y -= layout.ammoOffsetY;
 
-        static bool loggedBottomLeftHudScale = false;
+        static bool loggedBottomLeftActionSlots = false;
+        static bool loggedBottomRightCounters = false;
 
-        if (!loggedBottomLeftHudScale)
+        if (horzAlign == 3 && !loggedBottomRightCounters)
         {
             Com_Printf(
                 0,
-                "[VR][HUD] Bottom-left HUD cluster offset %.0f/%.0f "
+                "[VR][HUD][V99] Right-safe ammo/grenade counters "
+                "use offset %.0f/%.0f "
                 "at %.2f scale.\n",
                 layout.ammoOffsetX,
                 layout.ammoOffsetY,
-                vrBottomLeftHudScale);
-            loggedBottomLeftHudScale = true;
+                vrAmmoEquipmentScale);
+            loggedBottomRightCounters = true;
+        }
+        else if (horzAlign == 1 && !loggedBottomLeftActionSlots)
+        {
+            Com_Printf(
+                0,
+                "[VR][HUD][V99] Left-safe action slots retain offset "
+                "%.0f/%.0f at %.2f scale.\n",
+                layout.ammoOffsetX,
+                layout.ammoOffsetY,
+                vrAmmoEquipmentScale);
+            loggedBottomLeftActionSlots = true;
         }
     }
 #endif

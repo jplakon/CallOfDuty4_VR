@@ -4,6 +4,16 @@
 
 _No changes yet._
 
+## v0.10.0-beta.15
+
+Cumulative post-beta.14 VR fixes from the V98-V104 validation chain.
+
+- Index/OpenVR hand and squeeze-path work, right-safe ammo/grenade HUD counters, suppressed in-headset error overlay, and canonical 4:3 menus.
+- V103 guarded the native OpenXR mission selector with neutral-entry behavior.
+- V104 uses a level-safe HMD yaw-only base for startup and direction/full recenter, with a near-vertical pose guard.
+- Quest 3/OpenXR headset validation and all 142 configurator tests passed.
+
+
 ## v0.10.0-beta.14
 
 Stereo UI/crosshair repair, Pimax Full FOV scope support, controller-driven

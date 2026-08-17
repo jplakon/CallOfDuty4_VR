@@ -1,6 +1,6 @@
 # Known issues
 
-This list applies to `v0.10.0-beta.14`.
+This list applies to `v0.10.0-beta.15`.
 
 ## Setup and compatibility
 

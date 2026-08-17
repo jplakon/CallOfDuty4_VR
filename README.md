@@ -14,7 +14,7 @@ copy of the original game.
 
 ## Current status
 
-The current public beta is `v0.10.0-beta.14`.
+The current public beta is `v0.10.0-beta.15`.
 
 Beta.14 fixes the remaining stereo-menu and legacy-crosshair defects, adds
 a full-FOV Pimax Crystal Light scope layout, routes Safehouse and Heat
@@ -22,6 +22,11 @@ air-support targeting through the right controller, makes the Configurator
 fully resizable, and adds a guarded guided installer beside the portable ZIP.
 Existing LocalAppData profiles and Controller Input V4 bindings remain
 unchanged during an update.
+
+### Beta.15 fixes
+
+- Carries the post-beta.14 V98-V104 repairs: Index/OpenVR hand and squeeze-path work, right-safe ammo and grenade counters, the suppressed in-headset error overlay, canonical 4:3 menus, guarded OpenXR mission selection, and level-safe HMD yaw-only startup/recenter.
+- Quest 3/OpenXR validation passed; the V104 near-vertical pose guard rejects unstable yaw instead of inventing one.
 
 ### Beta.14 fixes
 

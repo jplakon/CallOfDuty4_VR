@@ -58,6 +58,12 @@ struct OpenVrHandState
     std::string inputProfilePath;
 };
 
+// SteamVR's legacy Index emulation has a controller-specific layout: A uses
+// the historical grip button id while the physical squeeze is exposed as the
+// second trigger-style axis (and may be digital-only). Keep that identity
+// check shared by the game and the press-to-bind mapper.
+bool IsOpenVrIndexController(const OpenVrHandState& state);
+
 bool ReadOpenVrHandState(
     openvr::IVRSystem* system,
     Hand hand,
