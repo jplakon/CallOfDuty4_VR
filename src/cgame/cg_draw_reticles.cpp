@@ -5,13 +5,18 @@
 
 #include <client/client.h>
 #include <universal/profile.h>
+#include "vr/vr_openxr.h"
 
 #ifdef KISAK_MP
 #include <cgame_mp/cg_local_mp.h>
 #include <client_mp/client_mp.h>
 #elif KISAK_SP
 #include <cgame/cg_main.h>
-#include "vr/vr_openxr.h"
+
+extern const dvar_t *vr_crosshairEnabled;
+extern const dvar_t *vr_crosshairSize;
+extern const dvar_t *vr_crosshairThickness;
+extern const dvar_t *vr_crosshairGap;
 #endif
 
 // KISAK_SP_JAVELIN_RETICLE_DIAGNOSTICS
@@ -140,6 +145,208 @@ void __cdecl CG_DrawNightVisionOverlay(int32_t localClientNum)
     }
 }
 
+#ifdef KISAK_SP
+// The VR shot starts at tag_flash and follows its exact transformed axis.
+// Project the first point on that same physical ray from the HMD; projecting
+// the direction alone would place the HUD crosshair incorrectly through VR
+// parallax.
+static bool CG_CalcVrHipFireCrosshairPosition(
+    const cg_s *cgameGlob,
+    const WeaponDef *weapDef,
+    float *x,
+    float *y)
+{
+    if (weapDef == nullptr)
+    {
+        return false;
+    }
+
+    float muzzleWorld[3] = {};
+    float muzzleAxis[3][3] = {};
+    // The weapon model, the queued fire command, and this HUD are all built
+    // from the current rendered pose.  A previous-frame pose can make a
+    // crosshair look delayed while the controller is moving, so it must not
+    // be used as an aiming source.
+    bool ignoredAttackPressed = false;
+    if (!VR_GetRightControllerWeaponFirePose(
+            muzzleWorld,
+            muzzleAxis,
+            &ignoredAttackPressed))
+    {
+        return false;
+    }
+
+    const float bulletTraceRange =
+        weapDef->weapClass == WEAPCLASS_SPREAD
+            ? weapDef->fMinDamageRange
+            : 8192.0f;
+
+    if (bulletTraceRange <= 0.0f)
+    {
+        return false;
+    }
+
+    float traceEnd[3] = {};
+
+    Vec3Mad(
+        muzzleWorld,
+        bulletTraceRange,
+        muzzleAxis[0],
+        traceEnd);
+
+    trace_t trace = {};
+
+    CG_LocationalTrace(
+        &trace,
+        muzzleWorld,
+        traceEnd,
+        cgameGlob->predictedPlayerState.clientNum,
+        0x2806831);
+
+    if (trace.startsolid || trace.allsolid)
+    {
+        return false;
+    }
+
+    float aimPoint[3] = {
+        traceEnd[0],
+        traceEnd[1],
+        traceEnd[2],
+    };
+
+    if (trace.fraction < 1.0f)
+    {
+        Vec3Lerp(
+            muzzleWorld,
+            traceEnd,
+            trace.fraction,
+            aimPoint);
+    }
+
+    float viewToAimPoint[3] = {};
+
+    Vec3Sub(
+        aimPoint,
+        cgameGlob->refdef.vieworg,
+        viewToAimPoint);
+
+    const float forwardDot = Vec3Dot(
+        cgameGlob->refdef.viewaxis[0],
+        viewToAimPoint);
+
+    // CG_Draw2D is authored once in the left-eye source.  CG_DrawActive
+    // renders that source using eye 0's OpenXR FOV, and the compositor then
+    // maps it convergently into both physical eyes.  cgameGlob->refdef still
+    // contains CoD4's flat-screen FOV here; using it scales every off-centre
+    // ray incorrectly, with an error that grows with range.
+    float hudTanHalfFovX = cgameGlob->refdef.tanHalfFovX;
+    float hudTanHalfFovY = cgameGlob->refdef.tanHalfFovY;
+
+    VR_GetStereoEyeFovBounds(
+        0u,
+        &hudTanHalfFovX,
+        &hudTanHalfFovY);
+
+    if (forwardDot <= 0.0f ||
+        hudTanHalfFovX <= 0.0f ||
+        hudTanHalfFovY <= 0.0f)
+    {
+        return false;
+    }
+
+    *x = Vec3Dot(cgameGlob->refdef.viewaxis[1], viewToAimPoint) /
+        (forwardDot * hudTanHalfFovX) * -320.0f;
+    *y = Vec3Dot(cgameGlob->refdef.viewaxis[2], viewToAimPoint) /
+        (forwardDot * hudTanHalfFovY) * -240.0f;
+    return true;
+}
+
+static void CG_DrawVrHipFireCrosshair(
+    const float centerX,
+    const float centerY,
+    const float *color)
+{
+    if (cgMedia.whiteMaterial == nullptr ||
+        vr_crosshairSize == nullptr ||
+        vr_crosshairThickness == nullptr ||
+        vr_crosshairGap == nullptr)
+    {
+        return;
+    }
+
+    const float size = vr_crosshairSize->current.value;
+    const float thickness = vr_crosshairThickness->current.value;
+    const float requestedGap = vr_crosshairGap->current.value;
+    const float gap = requestedGap < size ? requestedGap : size;
+    const float armLength = size - gap;
+
+    if (armLength <= 0.0f)
+    {
+        return;
+    }
+
+    const float halfThickness = thickness * 0.5f;
+    const ScreenPlacement *const placement = &scrPlaceView[0];
+
+    CL_DrawStretchPic(
+        placement,
+        centerX - size,
+        centerY - halfThickness,
+        armLength,
+        thickness,
+        2,
+        2,
+        0.0f,
+        0.0f,
+        1.0f,
+        1.0f,
+        color,
+        cgMedia.whiteMaterial);
+    CL_DrawStretchPic(
+        placement,
+        centerX + gap,
+        centerY - halfThickness,
+        armLength,
+        thickness,
+        2,
+        2,
+        0.0f,
+        0.0f,
+        1.0f,
+        1.0f,
+        color,
+        cgMedia.whiteMaterial);
+    CL_DrawStretchPic(
+        placement,
+        centerX - halfThickness,
+        centerY - size,
+        thickness,
+        armLength,
+        2,
+        2,
+        0.0f,
+        0.0f,
+        1.0f,
+        1.0f,
+        color,
+        cgMedia.whiteMaterial);
+    CL_DrawStretchPic(
+        placement,
+        centerX - halfThickness,
+        centerY + gap,
+        thickness,
+        armLength,
+        2,
+        2,
+        0.0f,
+        0.0f,
+        1.0f,
+        1.0f,
+        color,
+        cgMedia.whiteMaterial);
+}
+#endif
+
 void __cdecl CG_DrawCrosshair(int32_t localClientNum)
 {
     WeaponDef *weapDefTurret; // [esp+Ch] [ebp-44h]
@@ -186,6 +393,54 @@ void __cdecl CG_DrawCrosshair(int32_t localClientNum)
         posLerp = ps->fWeaponPosFrac;
         transScale = 1.0;
         transShift = 0.0;
+
+#ifdef KISAK_SP
+        // The VR HUD is authored once in scrPlaceView[0] and replayed for
+        // both eyes. Draw exactly one simple hip-fire crosshair there and
+        // never fall through to COD4's flat reticle, scope, or turret paths.
+        if (VR_IsInitialized())
+        {
+            if (!drawHud ||
+                CG_Flashbanged(localClientNum) ||
+                !vr_crosshairEnabled->current.enabled ||
+                !cg_drawCrosshair->current.enabled ||
+                posLerp != 0.0f ||
+                (ps->eFlags & 0x300) != 0 ||
+                ps->viewlocked_entNum != ENTITYNUM_NONE)
+            {
+                return;
+            }
+
+            weapIndex = BG_GetViewmodelWeaponIndex(ps);
+            weapDef = BG_GetWeaponDef(weapIndex);
+
+            if (weapDef == nullptr ||
+                weapDef->weapType != WEAPTYPE_BULLET ||
+                weapDef->overlayMaterial != nullptr ||
+                weapDef->overlayReticle != WEAPOVERLAYRETICLE_NONE ||
+                weapDef->overlayInterface != WEAPOVERLAYINTERFACE_NONE ||
+                !AllowedToDrawCrosshair(localClientNum, ps))
+            {
+                return;
+            }
+
+            CG_CalcCrosshairColor(localClientNum, 1.0f, color);
+            if (color[3] >= 0.009999999776482582)
+            {
+                if (CG_CalcVrHipFireCrosshairPosition(
+                        cgameGlob,
+                        weapDef,
+                        &centerX,
+                        &centerY))
+                {
+                    CG_DrawVrHipFireCrosshair(centerX, centerY, color);
+                }
+            }
+
+            return;
+        }
+#endif
+
         if ((ps->eFlags & 0x300) != 0)
         {
             weapIndex = CG_PlayerTurretWeaponIdx(localClientNum);
@@ -747,19 +1002,8 @@ bool __cdecl CG_IsReticleTurnedOff()
     // instead of relying on a mutable archived dvar or launcher default.
     if (VR_IsInitialized())
     {
-        static bool loggedFlatCrosshairSuppression = false;
-
-        if (!loggedFlatCrosshairSuppression)
-        {
-            Com_Printf(
-                0,
-                "[VR][UI] V88 suppressed the legacy flat weapon "
-                "crosshair for VR, including archived profiles.\n");
-
-            loggedFlatCrosshairSuppression = true;
-        }
-
-        return true;
+        return !cg_drawCrosshair->current.enabled ||
+            !vr_crosshairEnabled->current.enabled;
     }
 
     return !cg_drawCrosshair->current.enabled;
