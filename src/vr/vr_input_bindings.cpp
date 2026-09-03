@@ -78,6 +78,17 @@ constexpr std::array<ActionDefinition, kActionCount> kActions = {{
     {Action::Turn, "KISAK_VR_BIND_TURN_AXIS", "KISAK_VR_BIND_TURN_AXIS_ALT", "turn", "Turning axis", "Analog axis used for snap or smooth turning.", ValueType::Vector2, "right.primary_axis", "unbound", false},
 }};
 
+constexpr std::array<BindingLayoutEntry, kOpenVrSafeBindingCount>
+    kOpenVrSafeBindings = {{
+        {Action::Jump, "right.primary_axis.up", "unbound"},
+        {Action::Melee, "left.trigger+left.primary_axis.up", "unbound"},
+        {Action::NextWeapon, "right.thumbstick_click", "unbound"},
+        {Action::PauseMenu, "left.secondary", "unbound"},
+        {Action::NightVision, "left.trigger+left.primary_axis.down", "unbound"},
+        {Action::Airstrike, "left.trigger+left.primary_axis.left", "unbound"},
+        {Action::C4, "left.trigger+left.primary_axis.right", "unbound"},
+    }};
+
 bool EqualsIgnoreCase(
     const std::string_view left,
     const std::string_view right)
@@ -199,6 +210,12 @@ const std::array<SourceDefinition, kSourceCount>& SourceDefinitions()
 const std::array<ActionDefinition, kActionCount>& ActionDefinitions()
 {
     return kActions;
+}
+
+const std::array<BindingLayoutEntry, kOpenVrSafeBindingCount>&
+OpenVrSafeBindingLayout()
+{
+    return kOpenVrSafeBindings;
 }
 
 const SourceDefinition& GetSourceDefinition(const Source source)
@@ -434,6 +451,29 @@ Source PhysicalSource(const Source source)
 ValueType PhysicalSourceValueType(const Source source)
 {
     return GetSourceDefinition(PhysicalSource(source)).valueType;
+}
+
+bool IsOpenVrSourceAvailable(const Source source)
+{
+    return source != Source::LeftThumbrestTouch &&
+        source != Source::RightThumbrestTouch;
+}
+
+bool OpenVrSourcesMayAlias(
+    const Source first,
+    const Source second)
+{
+    const bool leftAlias =
+        (first == Source::LeftSecondary &&
+         second == Source::LeftMenu) ||
+        (first == Source::LeftMenu &&
+         second == Source::LeftSecondary);
+    const bool rightAlias =
+        (first == Source::RightSecondary &&
+         second == Source::RightMenu) ||
+        (first == Source::RightMenu &&
+         second == Source::RightSecondary);
+    return leftAlias || rightAlias;
 }
 
 Source DirectionalSource(

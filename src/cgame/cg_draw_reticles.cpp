@@ -23,7 +23,7 @@ static bool VR_JavelinReticleDiagnosticActive(int32_t localClientNum)
         CG_GetLocalClientGlobals(localClientNum);
 
     return
-        VR_VerboseDiagnosticsEnabled() &&
+        VR_LegacyJavelinDiagnosticsEnabled() &&
         BG_GetViewmodelWeaponIndex(
                &cgameGlob->predictedPlayerState) == 7;
 }

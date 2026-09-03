@@ -6,6 +6,7 @@
 #include "vr/vr_interactions.h"
 #include "vr/vr_openvr_input.h"
 #include "vr/vr_openxr_profiles.h"
+#include "vr/vr_packed_layout.h"
 #include "vr/vr_prompt_labels.h"
 #include "vr/vr_weapon_calibration.h"
 #include "vr/vr_weapon_profiles.h"
@@ -56,6 +57,7 @@ namespace VrCalibration = kisak::vr::calibration;
 namespace VrGestures = kisak::vr::gestures;
 namespace VrHud = kisak::vr::hud;
 namespace VrInteractions = kisak::vr::interactions;
+namespace VrPackedLayout = kisak::vr::packed_layout;
 namespace VrPrompts = kisak::vr::prompts;
 namespace VrWeaponProfiles = kisak::vr::weapon_profiles;
 
@@ -130,7 +132,7 @@ struct VrOpenVrControllerPoseComponents
         vr::k_unTrackedDeviceIndexInvalid;
     bool resolved = false;
     bool stateFailureLogged = false;
-    bool indexHandModelBasisLogged = false;
+    bool visualHandBasisLogged = false;
     std::array<char, 256> renderModelName = {};
     const char* gripComponent = nullptr;
     const char* palmComponent = nullptr;
@@ -326,6 +328,21 @@ XrQuaternionf g_vrLeftControllerPalmOrientationHeadLocalOpenXr = {
 
 float g_vrTwoHandWeaponBlend = 0.0f;
 bool g_vrTwoHandWeaponTargetActive = false;
+
+// KISAK_SP_VR_CALIBRATED_TWO_HAND_STEERING_V108
+// Capture the physical two-hand frame relative to the weapon controller when
+// the support hand engages. Subsequent support-hand motion is applied as a
+// relative delta to the live calibrated weapon basis, so nonzero weapon-fit
+// Pitch/Yaw/Roll cannot be discarded by the two-hand solver.
+bool g_vrTwoHandWeaponAnchorValid = false;
+bool g_vrTwoHandWeaponAnchorCaptureRequested = false;
+int g_vrTwoHandWeaponAnchorWeaponIndex = 0;
+float g_vrTwoHandWeaponAnchorTargetAxis[3][3] = {};
+float g_vrTwoHandWeaponAnchorControllerAxis[3][3] = {};
+bool g_vrTwoHandWeaponLastActiveFrameValid = false;
+int g_vrTwoHandWeaponLastActiveWeaponIndex = 0;
+float g_vrTwoHandWeaponLastActiveTargetAxis[3][3] = {};
+float g_vrTwoHandWeaponLastActiveControllerAxis[3][3] = {};
 
 bool g_vrPoseFocusAimPoseHeld = false;
 std::uint32_t g_vrPoseFocusAimEngageFrames = 0u;
@@ -962,6 +979,55 @@ float VR_ReadConfiguratorFloat(
     return parsedValue;
 }
 
+// KISAK_SP_VR_HUD_RANGE_CLAMP_V106
+// Configurator saves reject out-of-range values, but direct environment edits
+// can still reach the runtime. HUD placement is uniquely recoverable by
+// clamping a finite number to the nearest drawable value; falling back to an
+// unrelated default can make an already oversized group larger.
+float VR_ReadConfiguratorClampedFloat(
+    const char* const name,
+    const float defaultValue,
+    const float minimumValue,
+    const float maximumValue)
+{
+    const char* const requestedValue = std::getenv(name);
+    if (requestedValue == nullptr || requestedValue[0] == '\0')
+    {
+        return defaultValue;
+    }
+
+    char* parseEnd = nullptr;
+    const float parsedValue = std::strtof(requestedValue, &parseEnd);
+    if (parseEnd == requestedValue || parseEnd == nullptr ||
+        parseEnd[0] != '\0' || !std::isfinite(parsedValue))
+    {
+        Com_PrintWarning(
+            0,
+            "[VR][CONFIG] Ignoring malformed %s='%s'; using %.3f.\n",
+            name,
+            requestedValue,
+            defaultValue);
+        return defaultValue;
+    }
+
+    const float clampedValue =
+        (std::clamp)(parsedValue, minimumValue, maximumValue);
+    if (clampedValue != parsedValue)
+    {
+        Com_PrintWarning(
+            0,
+            "[VR][CONFIG] Clamping %s='%s' to %.3f. "
+            "Valid range is %.3f through %.3f.\n",
+            name,
+            requestedValue,
+            clampedValue,
+            minimumValue,
+            maximumValue);
+    }
+
+    return clampedValue;
+}
+
 bool VR_ReadConfiguratorToggle(
     const char* const name,
     const bool defaultValue)
@@ -1326,9 +1392,101 @@ VrInput::Binding VR_ReadInputBinding(
     return defaultBinding;
 }
 
+bool VR_BindingsEqual(
+    VrInput::Binding first,
+    VrInput::Binding second)
+{
+    if (first.sourceCount != second.sourceCount)
+    {
+        return false;
+    }
+
+    std::sort(
+        first.sources.begin(),
+        first.sources.begin() + first.sourceCount);
+    std::sort(
+        second.sources.begin(),
+        second.sources.begin() + second.sourceCount);
+    return std::equal(
+        first.sources.begin(),
+        first.sources.begin() + first.sourceCount,
+        second.sources.begin());
+}
+
+bool VR_ParseHandedBinding(
+    const VrInput::Action action,
+    const char* const rightHandedValue,
+    const VrInteractions::DominantHand dominantHand,
+    VrInput::Binding* const binding)
+{
+    const std::string value =
+        dominantHand == VrInteractions::DominantHand::Left
+            ? VrInteractions::MirrorBindingHands(rightHandedValue)
+            : std::string(rightHandedValue);
+    return VrInput::ParseBinding(action, value, binding);
+}
+
+bool VR_ApplyOpenVrSafeBindingCompatibility(
+    VrConfiguratorSettings* const settings)
+{
+    if (settings == nullptr)
+    {
+        return false;
+    }
+
+    for (const VrInput::BindingLayoutEntry& layout :
+         VrInput::OpenVrSafeBindingLayout())
+    {
+        const VrInput::ActionDefinition& definition =
+            VrInput::GetActionDefinition(layout.action);
+        const std::size_t actionIndex =
+            static_cast<std::size_t>(layout.action);
+        VrInput::Binding expectedPrimary;
+        VrInput::Binding expectedAlternate;
+        if (!VR_ParseHandedBinding(
+                layout.action,
+                definition.defaultBinding,
+                settings->dominantHand,
+                &expectedPrimary) ||
+            !VR_ParseHandedBinding(
+                layout.action,
+                definition.defaultAlternateBinding,
+                settings->dominantHand,
+                &expectedAlternate) ||
+            !VR_BindingsEqual(
+                settings->bindings[actionIndex][0],
+                expectedPrimary) ||
+            !VR_BindingsEqual(
+                settings->bindings[actionIndex][1],
+                expectedAlternate))
+        {
+            return false;
+        }
+    }
+
+    for (const VrInput::BindingLayoutEntry& layout :
+         VrInput::OpenVrSafeBindingLayout())
+    {
+        const std::size_t actionIndex =
+            static_cast<std::size_t>(layout.action);
+        VR_ParseHandedBinding(
+            layout.action,
+            layout.binding,
+            settings->dominantHand,
+            &settings->bindings[actionIndex][0]);
+        VR_ParseHandedBinding(
+            layout.action,
+            layout.alternateBinding,
+            settings->dominantHand,
+            &settings->bindings[actionIndex][1]);
+    }
+
+    return true;
+}
+
 const VrConfiguratorSettings& VR_GetConfiguratorSettings()
 {
-    static const VrConfiguratorSettings settings = []()
+    static VrConfiguratorSettings settings = []()
     {
         VrConfiguratorSettings loaded;
 
@@ -1420,11 +1578,17 @@ const VrConfiguratorSettings& VR_GetConfiguratorSettings()
             VR_ReadFirstGameplayRecenterMode();
 
         loaded.hudLayout.safeX =
-            VR_ReadConfiguratorFloat(
-                "KISAK_VR_HUD_SAFE_X", 0.50f, 0.50f, 1.00f);
+            VR_ReadConfiguratorClampedFloat(
+                "KISAK_VR_HUD_SAFE_X",
+                0.50f,
+                VrHud::kMinimumSafeArea,
+                VrHud::kMaximumSafeArea);
         loaded.hudLayout.safeY =
-            VR_ReadConfiguratorFloat(
-                "KISAK_VR_HUD_SAFE_Y", 1.00f, 0.50f, 1.00f);
+            VR_ReadConfiguratorClampedFloat(
+                "KISAK_VR_HUD_SAFE_Y",
+                1.00f,
+                VrHud::kMinimumSafeArea,
+                VrHud::kMaximumSafeArea);
         loaded.hudLayout.ammoOffsetX =
             VR_ReadConfiguratorFloat(
                 "KISAK_VR_HUD_BOTTOM_LEFT_X_OFFSET",
@@ -1438,7 +1602,7 @@ const VrConfiguratorSettings& VR_GetConfiguratorSettings()
                 -240.0f,
                 480.0f);
         loaded.hudLayout.ammoScale =
-            VR_ReadConfiguratorFloat(
+            VR_ReadConfiguratorClampedFloat(
                 "KISAK_VR_HUD_BOTTOM_LEFT_SCALE",
                 0.50f,
                 VrHud::kMinimumScale,
@@ -1460,7 +1624,7 @@ const VrConfiguratorSettings& VR_GetConfiguratorSettings()
                 -80.0f,
                 440.0f);
         loaded.hudLayout.compassScale =
-            VR_ReadConfiguratorFloat(
+            VR_ReadConfiguratorClampedFloat(
                 "KISAK_VR_COMPASS_SIZE",
                 1.00f,
                 VrHud::kMinimumScale,
@@ -1478,7 +1642,7 @@ const VrConfiguratorSettings& VR_GetConfiguratorSettings()
                 -240.0f,
                 400.0f);
         loaded.hudLayout.notificationScale =
-            VR_ReadConfiguratorFloat(
+            VR_ReadConfiguratorClampedFloat(
                 "KISAK_VR_GAME_MESSAGE_SCALE",
                 1.00f,
                 VrHud::kMinimumScale,
@@ -1496,7 +1660,7 @@ const VrConfiguratorSettings& VR_GetConfiguratorSettings()
                 -180.0f,
                 270.0f);
         loaded.hudLayout.objectiveScale =
-            VR_ReadConfiguratorFloat(
+            VR_ReadConfiguratorClampedFloat(
                 "KISAK_VR_OBJECTIVE_MESSAGE_SCALE",
                 1.00f,
                 VrHud::kMinimumScale,
@@ -1514,7 +1678,7 @@ const VrConfiguratorSettings& VR_GetConfiguratorSettings()
                 -400.0f,
                 80.0f);
         loaded.hudLayout.subtitleScale =
-            VR_ReadConfiguratorFloat(
+            VR_ReadConfiguratorClampedFloat(
                 "KISAK_VR_SUBTITLE_SCALE",
                 1.00f,
                 VrHud::kMinimumScale,
@@ -1869,6 +2033,21 @@ const VrConfiguratorSettings& VR_GetConfiguratorSettings()
 
         return loaded;
     }();
+
+    static bool openVrCompatibilityChecked = false;
+    if (!openVrCompatibilityChecked &&
+        g_vrRuntimeBackend == VrRuntimeBackend::OpenVr)
+    {
+        openVrCompatibilityChecked = true;
+        if (VR_ApplyOpenVrSafeBindingCompatibility(&settings))
+        {
+            Com_Printf(
+                0,
+                "[VR][OPENVR][CONTROLS] V105 upgraded the untouched "
+                "portable defaults to the safe off-hand trigger selector "
+                "and separated Pause from Next weapon.\n");
+        }
+    }
 
     return settings;
 }
@@ -9097,6 +9276,27 @@ void VR_DestroyControllerInput()
         g_vrLeftControllerPositionSampleMilliseconds = 0u;
         g_vrTwoHandWeaponBlend = 0.0f;
         g_vrTwoHandWeaponTargetActive = false;
+        g_vrTwoHandWeaponAnchorValid = false;
+        g_vrTwoHandWeaponAnchorCaptureRequested = false;
+        g_vrTwoHandWeaponAnchorWeaponIndex = 0;
+        g_vrTwoHandWeaponLastActiveFrameValid = false;
+        g_vrTwoHandWeaponLastActiveWeaponIndex = 0;
+        std::memset(
+            g_vrTwoHandWeaponAnchorTargetAxis,
+            0,
+            sizeof(g_vrTwoHandWeaponAnchorTargetAxis));
+        std::memset(
+            g_vrTwoHandWeaponAnchorControllerAxis,
+            0,
+            sizeof(g_vrTwoHandWeaponAnchorControllerAxis));
+        std::memset(
+            g_vrTwoHandWeaponLastActiveTargetAxis,
+            0,
+            sizeof(g_vrTwoHandWeaponLastActiveTargetAxis));
+        std::memset(
+            g_vrTwoHandWeaponLastActiveControllerAxis,
+            0,
+            sizeof(g_vrTwoHandWeaponLastActiveControllerAxis));
         g_vrPoseFocusAimPoseHeld = false;
         g_vrPoseFocusAimEngageFrames = 0u;
         g_vrPoseFocusAimReleaseFrames = 0u;
@@ -11318,6 +11518,11 @@ void VR_InvalidateRightControllerWeaponPose()
         g_vrPhysicalSniperScopePoseWorldValid = false;
         g_vrRightControllerFinalWeaponMuzzleValid = false;
         g_vrRightControllerFinalWeaponMuzzleBlocked = false;
+        g_vrTwoHandWeaponAnchorValid = false;
+        g_vrTwoHandWeaponAnchorCaptureRequested = false;
+        g_vrTwoHandWeaponAnchorWeaponIndex = 0;
+        g_vrTwoHandWeaponLastActiveFrameValid = false;
+        g_vrTwoHandWeaponLastActiveWeaponIndex = 0;
     }
     {
         std::lock_guard<std::mutex> lock(g_vrWeaponProfilesMutex);
@@ -12367,6 +12572,11 @@ void VR_UpdateTwoHandWeaponTargetFromPublishedPoses()
             !targetActive &&
             g_vrTwoHandWeaponTargetActive;
 
+        if (logTwoHandEngaged)
+        {
+            g_vrTwoHandWeaponAnchorCaptureRequested = true;
+        }
+
         g_vrTwoHandWeaponTargetActive =
             targetActive;
 
@@ -12574,14 +12784,17 @@ void VR_UpdateControllerActions(
                     continue;
                 }
 
-                const bool missionShortcut =
+                const bool selectorAction =
                     action.action == VrInput::Action::GrenadeLauncher ||
                     action.action == VrInput::Action::NightVision ||
                     action.action == VrInput::Action::Airstrike ||
                     action.action == VrInput::Action::C4;
                 const bool guardedMissionBinding =
-                    missionShortcut &&
-                    VrInput::UsesOpenVrMissionSelector(binding);
+                    selectorAction &&
+                    VrInput::UsesMissionSelector(
+                        binding,
+                        VrInput::Source::RightThumbrestTouch,
+                        VrInput::Source::LeftPrimaryAxis);
 
                 bool chordHeld = true;
                 for (std::size_t termIndex = 0u;
@@ -12664,7 +12877,7 @@ void VR_UpdateControllerActions(
                         termHeld = missionSelector.modifierHeld;
                     }
 
-                    if (missionShortcut &&
+                    if (selectorAction &&
                         source == VrInput::Source::RightThumbrestTouch &&
                         termHeld)
                     {
@@ -15622,6 +15835,34 @@ bool VR_VerboseDiagnosticsEnabled()
     return enabled;
 }
 
+bool VR_LegacyJavelinDiagnosticsEnabled()
+{
+    // KISAK_SP_VR_RETIRED_JAVELIN_TRACE_GATE_V112
+    // This trace predates the current runtime diagnostics and keys off the
+    // level-local weapon index 7. In different missions that index may name an
+    // AK, Javelin, or another weapon. Requiring an explicit hidden developer
+    // flag prevents an ordinary diagnostics launch from performing synchronous
+    // console writes at every render/HUD/menu stage for an unrelated weapon.
+    static const bool enabled = []()
+    {
+        if (!VR_VerboseDiagnosticsEnabled())
+        {
+            return false;
+        }
+
+        const char* requested =
+            std::getenv(
+                "KISAK_VR_LEGACY_JAVELIN_TRACE");
+
+        return
+            requested != nullptr &&
+            requested[0] != '\0' &&
+            std::strcmp(requested, "0") != 0;
+    }();
+
+    return enabled;
+}
+
 
 bool VR_TrackedHandDiagnosticsEnabled()
 {
@@ -18190,6 +18431,9 @@ bool VR_ApplyRightControllerToWeaponPlacement(
 
     float leftForegripPosition[3] = {};
     float twoHandBlend = 0.0f;
+    bool twoHandTargetActive = false;
+    float twoHandAnchorTargetAxis[3][3] = {};
+    float twoHandAnchorControllerAxis[3][3] = {};
     std::string safeWeaponId = VrWeaponProfiles::NormalizeId(
         weaponId != nullptr ? weaponId : "");
     if (!VrWeaponProfiles::IsSafeId(safeWeaponId))
@@ -18223,6 +18467,18 @@ bool VR_ApplyRightControllerToWeaponPlacement(
 
         twoHandBlend =
             g_vrTwoHandWeaponBlend;
+
+        twoHandTargetActive =
+            g_vrTwoHandWeaponTargetActive;
+
+        if (!twoHandTargetActive && twoHandBlend <= 0.001f)
+        {
+            g_vrTwoHandWeaponAnchorValid = false;
+            g_vrTwoHandWeaponAnchorCaptureRequested = false;
+            g_vrTwoHandWeaponAnchorWeaponIndex = 0;
+            g_vrTwoHandWeaponLastActiveFrameValid = false;
+            g_vrTwoHandWeaponLastActiveWeaponIndex = 0;
+        }
 
         VrWeaponAttachmentBaseline& baseline =
             g_vrWeaponAttachmentBaselines[
@@ -18448,302 +18704,134 @@ bool VR_ApplyRightControllerToWeaponPlacement(
 
     if (twoHandBlend > 0.001f)
     {
-        float twoHandForward[3] = {
-            leftForegripPosition[0] -
-                currentPosition[0],
-            leftForegripPosition[1] -
-                currentPosition[1],
-            leftForegripPosition[2] -
-                currentPosition[2],
-        };
+        float calibratedOneHandWeaponAxis[3][3] = {};
+        kisak::vr::weapon_calibration::MultiplyAxes(
+            attachmentAxis,
+            currentAxis,
+            calibratedOneHandWeaponAxis);
 
-        const float forwardLength =
-            std::sqrt(
-                twoHandForward[0] *
-                    twoHandForward[0] +
-                twoHandForward[1] *
-                    twoHandForward[1] +
-                twoHandForward[2] *
-                    twoHandForward[2]);
+        float currentTwoHandTargetAxis[3][3] = {};
+        bool targetFrameReady =
+            twoHandTargetActive &&
+            kisak::vr::weapon_calibration::BuildTwoHandTargetAxis(
+                currentPosition,
+                leftForegripPosition,
+                currentAxis,
+                currentTwoHandTargetAxis);
+        float relativeControllerAxis[3][3] = {};
+        std::memcpy(
+            relativeControllerAxis,
+            currentAxis,
+            sizeof(relativeControllerAxis));
 
-        if (forwardLength > 0.0001f)
+        bool anchorReady = false;
         {
-            twoHandForward[0] /= forwardLength;
-            twoHandForward[1] /= forwardLength;
-            twoHandForward[2] /= forwardLength;
+            std::lock_guard<std::mutex> lock(
+                g_vrWeaponControllerPoseMutex);
 
-            const float upAlongForward =
-                currentAxis[2][0] *
-                    twoHandForward[0] +
-                currentAxis[2][1] *
-                    twoHandForward[1] +
-                currentAxis[2][2] *
-                    twoHandForward[2];
-
-            float twoHandUp[3] = {
-                currentAxis[2][0] -
-                    upAlongForward *
-                    twoHandForward[0],
-                currentAxis[2][1] -
-                    upAlongForward *
-                    twoHandForward[1],
-                currentAxis[2][2] -
-                    upAlongForward *
-                    twoHandForward[2],
-            };
-
-            float upLength =
-                std::sqrt(
-                    twoHandUp[0] * twoHandUp[0] +
-                    twoHandUp[1] * twoHandUp[1] +
-                    twoHandUp[2] * twoHandUp[2]);
-
-            if (upLength <= 0.0001f)
+            if (twoHandTargetActive &&
+                g_vrTwoHandWeaponTargetActive &&
+                targetFrameReady)
             {
-                twoHandUp[0] = currentAxis[1][1] *
-                                   twoHandForward[2] -
-                               currentAxis[1][2] *
-                                   twoHandForward[1];
+                if (g_vrTwoHandWeaponAnchorCaptureRequested ||
+                    !g_vrTwoHandWeaponAnchorValid ||
+                    g_vrTwoHandWeaponAnchorWeaponIndex != weaponIndex)
+                {
+                    std::memcpy(
+                        g_vrTwoHandWeaponAnchorTargetAxis,
+                        currentTwoHandTargetAxis,
+                        sizeof(g_vrTwoHandWeaponAnchorTargetAxis));
+                    std::memcpy(
+                        g_vrTwoHandWeaponAnchorControllerAxis,
+                        currentAxis,
+                        sizeof(g_vrTwoHandWeaponAnchorControllerAxis));
+                    g_vrTwoHandWeaponAnchorWeaponIndex = weaponIndex;
+                    g_vrTwoHandWeaponAnchorValid = true;
+                    g_vrTwoHandWeaponAnchorCaptureRequested = false;
+                }
 
-                twoHandUp[1] = currentAxis[1][2] *
-                                   twoHandForward[0] -
-                               currentAxis[1][0] *
-                                   twoHandForward[2];
-
-                twoHandUp[2] = currentAxis[1][0] *
-                                   twoHandForward[1] -
-                               currentAxis[1][1] *
-                                   twoHandForward[0];
-
-                upLength =
-                    std::sqrt(
-                        twoHandUp[0] *
-                            twoHandUp[0] +
-                        twoHandUp[1] *
-                            twoHandUp[1] +
-                        twoHandUp[2] *
-                            twoHandUp[2]);
+                std::memcpy(
+                    g_vrTwoHandWeaponLastActiveTargetAxis,
+                    currentTwoHandTargetAxis,
+                    sizeof(g_vrTwoHandWeaponLastActiveTargetAxis));
+                std::memcpy(
+                    g_vrTwoHandWeaponLastActiveControllerAxis,
+                    currentAxis,
+                    sizeof(g_vrTwoHandWeaponLastActiveControllerAxis));
+                g_vrTwoHandWeaponLastActiveWeaponIndex = weaponIndex;
+                g_vrTwoHandWeaponLastActiveFrameValid = true;
+            }
+            else if (!twoHandTargetActive &&
+                     g_vrTwoHandWeaponLastActiveFrameValid &&
+                     g_vrTwoHandWeaponLastActiveWeaponIndex == weaponIndex)
+            {
+                std::memcpy(
+                    currentTwoHandTargetAxis,
+                    g_vrTwoHandWeaponLastActiveTargetAxis,
+                    sizeof(currentTwoHandTargetAxis));
+                std::memcpy(
+                    relativeControllerAxis,
+                    g_vrTwoHandWeaponLastActiveControllerAxis,
+                    sizeof(relativeControllerAxis));
+                targetFrameReady = true;
             }
 
-            if (upLength > 0.0001f)
+            if (g_vrTwoHandWeaponAnchorValid &&
+                g_vrTwoHandWeaponAnchorWeaponIndex == weaponIndex)
             {
-                twoHandUp[0] /= upLength;
-                twoHandUp[1] /= upLength;
-                twoHandUp[2] /= upLength;
+                std::memcpy(
+                    twoHandAnchorTargetAxis,
+                    g_vrTwoHandWeaponAnchorTargetAxis,
+                    sizeof(twoHandAnchorTargetAxis));
+                std::memcpy(
+                    twoHandAnchorControllerAxis,
+                    g_vrTwoHandWeaponAnchorControllerAxis,
+                    sizeof(twoHandAnchorControllerAxis));
+                anchorReady = true;
+            }
+        }
 
-                float twoHandLeft[3] = {
-                    twoHandUp[1] *
-                        twoHandForward[2] -
-                    twoHandUp[2] *
-                        twoHandForward[1],
-                    twoHandUp[2] *
-                        twoHandForward[0] -
-                    twoHandUp[0] *
-                        twoHandForward[2],
-                    twoHandUp[0] *
-                        twoHandForward[1] -
-                    twoHandUp[1] *
-                        twoHandForward[0],
-                };
+        if (targetFrameReady && anchorReady)
+        {
+            float targetTwoHandWeaponAxis[3][3] = {};
+            kisak::vr::weapon_calibration::RelativeTwoHandWeaponAxis(
+                twoHandAnchorTargetAxis,
+                twoHandAnchorControllerAxis,
+                relativeControllerAxis,
+                calibratedOneHandWeaponAxis,
+                currentTwoHandTargetAxis,
+                targetTwoHandWeaponAxis);
 
-                const float leftLength =
-                    std::sqrt(
-                        twoHandLeft[0] *
-                            twoHandLeft[0] +
-                        twoHandLeft[1] *
-                            twoHandLeft[1] +
-                        twoHandLeft[2] *
-                            twoHandLeft[2]);
+            float blendedWeaponAxis[3][3] = {};
+            if (kisak::vr::weapon_calibration::BlendWeaponAxes(
+                    calibratedOneHandWeaponAxis,
+                    targetTwoHandWeaponAxis,
+                    twoHandBlend,
+                    blendedWeaponAxis))
+            {
+                float blendedControllerAxis[3][3] = {};
+                kisak::vr::weapon_calibration::
+                    ControllerAxisForWeaponAxis(
+                        attachmentAxis,
+                        blendedWeaponAxis,
+                        blendedControllerAxis);
+                std::memcpy(
+                    currentAxis,
+                    blendedControllerAxis,
+                    sizeof(currentAxis));
 
-                if (leftLength > 0.0001f)
+                static bool loggedTwoHandWeaponApply = false;
+                if (!loggedTwoHandWeaponApply)
                 {
-                    twoHandLeft[0] /= leftLength;
-                    twoHandLeft[1] /= leftLength;
-                    twoHandLeft[2] /= leftLength;
-
-                    const float blend =
-                        std::clamp(
-                            twoHandBlend,
-                            0.0f,
-                            1.0f);
-
-                    float blendedForward[3] = {
-                        currentAxis[0][0] *
-                                (1.0f - blend) +
-                            twoHandForward[0] *
-                                blend,
-                        currentAxis[0][1] *
-                                (1.0f - blend) +
-                            twoHandForward[1] *
-                                blend,
-                        currentAxis[0][2] *
-                                (1.0f - blend) +
-                            twoHandForward[2] *
-                                blend,
-                    };
-
-                    float blendedUpHint[3] = {
-                        currentAxis[2][0] *
-                                (1.0f - blend) +
-                            twoHandUp[0] *
-                                blend,
-                        currentAxis[2][1] *
-                                (1.0f - blend) +
-                            twoHandUp[1] *
-                                blend,
-                        currentAxis[2][2] *
-                                (1.0f - blend) +
-                            twoHandUp[2] *
-                                blend,
-                    };
-
-                    const float blendedForwardLength =
-                        std::sqrt(
-                            blendedForward[0] *
-                                blendedForward[0] +
-                            blendedForward[1] *
-                                blendedForward[1] +
-                            blendedForward[2] *
-                                blendedForward[2]);
-
-                    if (blendedForwardLength > 0.0001f)
-                    {
-                        blendedForward[0] /=
-                            blendedForwardLength;
-
-                        blendedForward[1] /=
-                            blendedForwardLength;
-
-                        blendedForward[2] /=
-                            blendedForwardLength;
-
-                        const float blendedUpAlongForward =
-                            blendedUpHint[0] *
-                                blendedForward[0] +
-                            blendedUpHint[1] *
-                                blendedForward[1] +
-                            blendedUpHint[2] *
-                                blendedForward[2];
-
-                        blendedUpHint[0] -=
-                            blendedUpAlongForward *
-                            blendedForward[0];
-
-                        blendedUpHint[1] -=
-                            blendedUpAlongForward *
-                            blendedForward[1];
-
-                        blendedUpHint[2] -=
-                            blendedUpAlongForward *
-                            blendedForward[2];
-
-                        const float blendedUpLength =
-                            std::sqrt(
-                                blendedUpHint[0] *
-                                    blendedUpHint[0] +
-                                blendedUpHint[1] *
-                                    blendedUpHint[1] +
-                                blendedUpHint[2] *
-                                    blendedUpHint[2]);
-
-                        if (blendedUpLength > 0.0001f)
-                        {
-                            blendedUpHint[0] /=
-                                blendedUpLength;
-
-                            blendedUpHint[1] /=
-                                blendedUpLength;
-
-                            blendedUpHint[2] /=
-                                blendedUpLength;
-
-                            float blendedLeft[3] = {
-                                blendedUpHint[1] *
-                                    blendedForward[2] -
-                                blendedUpHint[2] *
-                                    blendedForward[1],
-                                blendedUpHint[2] *
-                                    blendedForward[0] -
-                                blendedUpHint[0] *
-                                    blendedForward[2],
-                                blendedUpHint[0] *
-                                    blendedForward[1] -
-                                blendedUpHint[1] *
-                                    blendedForward[0],
-                            };
-
-                            const float blendedLeftLength =
-                                std::sqrt(
-                                    blendedLeft[0] *
-                                        blendedLeft[0] +
-                                    blendedLeft[1] *
-                                        blendedLeft[1] +
-                                    blendedLeft[2] *
-                                        blendedLeft[2]);
-
-                            if (blendedLeftLength > 0.0001f)
-                            {
-                                blendedLeft[0] /=
-                                    blendedLeftLength;
-
-                                blendedLeft[1] /=
-                                    blendedLeftLength;
-
-                                blendedLeft[2] /=
-                                    blendedLeftLength;
-
-                                float blendedUp[3] = {
-                                    blendedForward[1] *
-                                        blendedLeft[2] -
-                                    blendedForward[2] *
-                                        blendedLeft[1],
-                                    blendedForward[2] *
-                                        blendedLeft[0] -
-                                    blendedForward[0] *
-                                        blendedLeft[2],
-                                    blendedForward[0] *
-                                        blendedLeft[1] -
-                                    blendedForward[1] *
-                                        blendedLeft[0],
-                                };
-
-                                memcpy(
-                                    currentAxis[0],
-                                    blendedForward,
-                                    sizeof(blendedForward));
-
-                                memcpy(
-                                    currentAxis[1],
-                                    blendedLeft,
-                                    sizeof(blendedLeft));
-
-                                memcpy(
-                                    currentAxis[2],
-                                    blendedUp,
-                                    sizeof(blendedUp));
-
-                                static bool
-                                    loggedTwoHandWeaponApply =
-                                        false;
-
-                                if (!loggedTwoHandWeaponApply)
-                                {
-                                    Com_Printf(
-                                        0,
-                                        "[VR] Applied optional two-hand "
-                                        "foregrip stabilization.\n");
-
-                                    loggedTwoHandWeaponApply =
-                                        true;
-                                }
-                            }
-                        }
-                    }
+                    Com_Printf(
+                        0,
+                        "[VR] V108 applied calibrated relative "
+                        "two-hand foregrip steering.\n");
+                    loggedTwoHandWeaponApply = true;
                 }
             }
         }
     }
-
     float calibrationCameraLocal[3] = {};
     kisak::vr::weapon_calibration::ControllerLocalOffsetToCameraLocal(
         currentAxis,
@@ -22912,48 +23000,60 @@ bool VR_UpdateOpenVrControllerActions()
     VrInputActiveState inputVectorActive = {};
     bool missionMovementLockHeld = false;
 
-    bool missionTouchActive = false;
-    const bool missionTouchHeld =
+    const VrConfiguratorSettings& configurable =
+        VR_GetConfiguratorSettings();
+    const bool leftDominant =
+        configurable.dominantHand ==
+        VrInteractions::DominantHand::Left;
+    const VrInput::Source missionModifierSource = leftDominant
+        ? VrInput::Source::RightTrigger
+        : VrInput::Source::LeftTrigger;
+    const VrInput::Source missionSelectionAxis = leftDominant
+        ? VrInput::Source::RightPrimaryAxis
+        : VrInput::Source::LeftPrimaryAxis;
+    const VrInput::Source missionCancelAxis = leftDominant
+        ? VrInput::Source::LeftPrimaryAxis
+        : VrInput::Source::RightPrimaryAxis;
+
+    bool missionModifierActive = false;
+    const bool missionModifierHeld =
         VrInput::GetOpenVrBooleanSourceState(
             g_vrOpenVrHands,
-            VrInput::Source::RightThumbrestTouch,
-            &missionTouchActive);
-    bool leftPrimaryAxisActive = false;
-    const VrInput::OpenVrVector2 leftPrimaryAxis =
+            missionModifierSource,
+            &missionModifierActive);
+    bool missionSelectionAxisActive = false;
+    const VrInput::OpenVrVector2 missionSelectionAxisValue =
         VrInput::GetOpenVrVector2SourceState(
             g_vrOpenVrHands,
-            VrInput::Source::LeftPrimaryAxis,
-            &leftPrimaryAxisActive);
-    bool rightPrimaryAxisActive = false;
-    const VrInput::OpenVrVector2 rightPrimaryAxis =
+            missionSelectionAxis,
+            &missionSelectionAxisActive);
+    bool missionCancelAxisActive = false;
+    const VrInput::OpenVrVector2 missionCancelAxisValue =
         VrInput::GetOpenVrVector2SourceState(
             g_vrOpenVrHands,
-            VrInput::Source::RightPrimaryAxis,
-            &rightPrimaryAxisActive);
+            missionCancelAxis,
+            &missionCancelAxisActive);
     const VrInput::OpenVrMissionSelectorUpdate missionSelector =
         VrInput::UpdateOpenVrMissionSelector(
             &g_vrOpenVrMissionSelector,
-            missionTouchActive,
-            missionTouchHeld,
-            leftPrimaryAxis,
-            leftPrimaryAxisActive,
-            rightPrimaryAxis,
-            rightPrimaryAxisActive);
+            missionModifierActive,
+            missionModifierHeld,
+            missionSelectionAxisValue,
+            missionSelectionAxisActive,
+            missionCancelAxisValue,
+            missionCancelAxisActive);
 
     if (missionSelector.available &&
         !g_vrOpenVrLoggedMissionSelector)
     {
         Com_Printf(
             0,
-            "[VR][OPENVR][CONTROLS] V79 guarded mission selector is "
-            "active: start with both sticks centered, touch the centered "
-            "right stick, then move the left stick; right-stick movement "
-            "cancels selection.\n");
+            "[VR][OPENVR][CONTROLS] V105 safe mission selector is "
+            "active: start with both sticks centered, hold the off-hand "
+            "trigger, then move the off-hand stick; dominant-stick "
+            "movement cancels selection.\n");
         g_vrOpenVrLoggedMissionSelector = true;
     }
-
-    const VrConfiguratorSettings& configurable =
-        VR_GetConfiguratorSettings();
 
     bool nightVisionGestureGripActive = false;
     const bool nightVisionGestureGripPressed =
@@ -22999,14 +23099,18 @@ bool VR_UpdateOpenVrControllerActions()
                 continue;
             }
 
-            const bool missionShortcut =
+            const bool selectorAction =
+                action.action == VrInput::Action::Melee ||
                 action.action == VrInput::Action::GrenadeLauncher ||
                 action.action == VrInput::Action::NightVision ||
                 action.action == VrInput::Action::Airstrike ||
                 action.action == VrInput::Action::C4;
             const bool guardedMissionBinding =
-                missionShortcut &&
-                VrInput::UsesOpenVrMissionSelector(binding);
+                selectorAction &&
+                VrInput::UsesMissionSelector(
+                    binding,
+                    missionModifierSource,
+                    missionSelectionAxis);
 
             bool chordHeld = true;
             for (std::size_t termIndex = 0u;
@@ -23073,14 +23177,14 @@ bool VR_UpdateOpenVrControllerActions()
                 }
 
                 if (guardedMissionBinding &&
-                    source == VrInput::Source::RightThumbrestTouch)
+                    source == missionModifierSource)
                 {
                     sourceActive = missionSelector.available;
                     sourceHeld = missionSelector.modifierHeld;
                 }
 
-                if (missionShortcut &&
-                    source == VrInput::Source::RightThumbrestTouch &&
+                if (selectorAction &&
+                    source == missionModifierSource &&
                     sourceActive && sourceHeld)
                 {
                     missionMovementLockHeld = true;
@@ -23232,8 +23336,10 @@ bool VR_UpdateOpenVrControllerActions()
         bool semanticGripPose = false;
         bool semanticPalmPose = false;
         bool semanticAimPose = false;
+        const bool openVrOffHand =
+            handIndex == offHandIndex;
         const bool openVrIndexOffHand =
-            handIndex == offHandIndex &&
+            openVrOffHand &&
             VrInput::IsOpenVrIndexController(hand);
 
         if (poseValid)
@@ -23253,6 +23359,17 @@ bool VR_UpdateOpenVrControllerActions()
                     controllerPose,
                     &controllerGripPose);
 
+            // KISAK_SP_VR_OPENVR_RAW_HAND_BASIS_V107
+            // A SteamVR tracked-device pose, openxr_grip, or handgrip is not
+            // a palm pose. V77 published controllerGripPose as palm-valid for
+            // every non-Index OpenVR controller, causing the free glove to
+            // interpret raw /pose/raw axes with palm_ext anatomy and to log a
+            // palm source that SteamVR never supplied. Query the dedicated
+            // openxr_handmodel component for every off hand. If it is absent,
+            // publish no palm pose so the standalone glove selects its existing
+            // grip-frame anatomical fallback. Support, reload, aim, gestures,
+            // and the weapon hand keep their original grip/aim poses.
+            //
             // KISAK_SP_VR_INDEX_LEFT_HANDMODEL_BASIS_V102
             // Valve's Index render model exposes three distinct semantic
             // transforms: handgrip is the neutral held-controller grip,
@@ -23263,7 +23380,7 @@ bool VR_UpdateOpenVrControllerActions()
             // off-hand visual; support grip, reload, gestures, weapon aim,
             // the right hand, and every non-Index path retain their existing
             // grip/aim poses.
-            if (openVrIndexOffHand)
+            if (openVrOffHand)
             {
                 semanticPalmPose =
                     VR_LocateOpenVrControllerComponentPose(
@@ -23273,18 +23390,30 @@ bool VR_UpdateOpenVrControllerActions()
                         controllerPose,
                         &controllerPalmPose);
 
-                if (!components.indexHandModelBasisLogged)
+                if (!components.visualHandBasisLogged)
                 {
                     if (semanticPalmPose)
                     {
-                        Com_Printf(
-                            0,
-                            "[VR][OPENVR][POSE] V102 Index off-hand "
-                            "uses SteamVR openxr_handmodel as the "
-                            "visual palm basis; handgrip remains "
-                            "unchanged for support and reload.\n");
+                        if (openVrIndexOffHand)
+                        {
+                            Com_Printf(
+                                0,
+                                "[VR][OPENVR][POSE] V102 Index off-hand "
+                                "uses SteamVR openxr_handmodel as the "
+                                "visual palm basis; handgrip remains "
+                                "unchanged for support and reload.\n");
+                        }
+                        else
+                        {
+                            Com_Printf(
+                                0,
+                                "[VR][OPENVR][POSE] V107 off-hand uses "
+                                "SteamVR openxr_handmodel as the visual "
+                                "palm basis; grip remains unchanged for "
+                                "support and reload.\n");
+                        }
                     }
-                    else
+                    else if (openVrIndexOffHand)
                     {
                         Com_PrintWarning(
                             0,
@@ -23293,8 +23422,22 @@ bool VR_UpdateOpenVrControllerActions()
                             "the visual glove is using the unchanged "
                             "grip fallback.\n");
                     }
+                    else
+                    {
+                        Com_Printf(
+                            0,
+                            "[VR][OPENVR][POSE] V107 off-hand has no "
+                            "usable SteamVR openxr_handmodel component; "
+                            "the standalone glove uses the %s with "
+                            "grip-frame anatomy instead of mislabeling "
+                            "it as palm_ext/pose. Support and reload "
+                            "retain the same grip pose.\n",
+                            semanticGripPose
+                                ? "semantic grip pose"
+                                : "raw device pose");
+                    }
 
-                    components.indexHandModelBasisLogged = true;
+                    components.visualHandBasisLogged = true;
                 }
             }
 
@@ -23308,7 +23451,7 @@ bool VR_UpdateOpenVrControllerActions()
 
             if ((!semanticGripPose &&
                  components.gripComponent != nullptr) ||
-                (openVrIndexOffHand &&
+                (openVrOffHand &&
                  !semanticPalmPose &&
                  components.palmComponent != nullptr) ||
                 (!semanticAimPose &&
@@ -23334,8 +23477,7 @@ bool VR_UpdateOpenVrControllerActions()
             g_vrControllerRenderPoses[handIndex];
         renderPose.gripValid = poseValid;
         renderPose.palmValid =
-            poseValid &&
-            (!openVrIndexOffHand || semanticPalmPose);
+            poseValid && semanticPalmPose;
         renderPose.aimValid = poseValid;
 
         if (poseValid)
@@ -23345,9 +23487,7 @@ bool VR_UpdateOpenVrControllerActions()
             if (renderPose.palmValid)
             {
                 renderPose.palmPose =
-                    openVrIndexOffHand
-                        ? controllerPalmPose
-                        : controllerGripPose;
+                    controllerPalmPose;
             }
             renderPose.aimPose =
                 controllerAimPose;
@@ -23387,11 +23527,8 @@ bool VR_UpdateOpenVrControllerActions()
                 poseValid);
 
             VR_PublishLeftControllerPalmPose(
-                openVrIndexOffHand
-                    ? controllerPalmPose
-                    : controllerGripPose,
-                poseValid &&
-                    (!openVrIndexOffHand || semanticPalmPose));
+                controllerPalmPose,
+                poseValid && semanticPalmPose);
         }
 
         if (poseValid &&
@@ -24781,40 +24918,44 @@ bool VR_GetPhysicalSniperScopeCaptureLayout(
     int* scopePanelY,
     int* scopePanelSize)
 {
-    if (backbufferWidth < 2 ||
-        backbufferHeight < 1 ||
-        g_vrEyeSwapchains.size() <
-            kVrStereoEyeCount)
+    int leftEyeWidth = 0;
+    int rightEyeWidth = 0;
+    const char* backendName = "uninitialized";
+
+    // KISAK_SP_VR_OPENVR_PACKED_LAYOUT_V111
+    // OpenVR owns persistent eye targets rather than OpenXR swapchains. Using
+    // the OpenXR-only vector here made the packed-layout query fail on the
+    // fallback backend, so gameplay split the entire backbuffer (including
+    // the dedicated scope panel) into two over-wide eyes.
+    if (g_vrRuntimeBackend ==
+        VrRuntimeBackend::OpenVr)
     {
-        return false;
+        leftEyeWidth =
+            g_vrOpenVrEyeTargets[0].width;
+        rightEyeWidth =
+            g_vrOpenVrEyeTargets[1].width;
+        backendName = "OpenVR";
+    }
+    else if (g_vrRuntimeBackend ==
+                 VrRuntimeBackend::OpenXr &&
+             g_vrEyeSwapchains.size() >=
+                 kVrStereoEyeCount)
+    {
+        leftEyeWidth =
+            g_vrEyeSwapchains[0].width;
+        rightEyeWidth =
+            g_vrEyeSwapchains[1].width;
+        backendName = "OpenXR";
     }
 
-    const int leftEyeWidth =
-        g_vrEyeSwapchains[0].width;
-
-    const int rightEyeWidth =
-        g_vrEyeSwapchains[1].width;
-
-    if (leftEyeWidth <= 0 ||
-        rightEyeWidth <= 0)
-    {
-        return false;
-    }
-
-    const int requestedScopeSize =
-        (std::max)(
-            512,
-            (std::min)(
-                g_vrScopeCaptureSizePixels,
-                backbufferHeight));
-
-    const int requiredMainStereoWidth =
-        leftEyeWidth +
-        rightEyeWidth;
-
-    if (requestedScopeSize > backbufferHeight ||
-        requiredMainStereoWidth >
-            backbufferWidth - requestedScopeSize)
+    VrPackedLayout::CaptureLayout layout;
+    if (!VrPackedLayout::ResolveCaptureLayout(
+            backbufferWidth,
+            backbufferHeight,
+            leftEyeWidth,
+            rightEyeWidth,
+            g_vrScopeCaptureSizePixels,
+            &layout))
     {
         return false;
     }
@@ -24822,36 +24963,37 @@ bool VR_GetPhysicalSniperScopeCaptureLayout(
     if (mainStereoWidth != nullptr)
     {
         *mainStereoWidth =
-            requiredMainStereoWidth;
+            layout.mainStereoWidth;
     }
 
     if (scopePanelX != nullptr)
     {
         *scopePanelX =
-            requiredMainStereoWidth;
+            layout.scopePanelX;
     }
 
     if (scopePanelY != nullptr)
     {
-        *scopePanelY = 0;
+        *scopePanelY = layout.scopePanelY;
     }
 
     if (scopePanelSize != nullptr)
     {
         *scopePanelSize =
-            requestedScopeSize;
+            layout.scopePanelSize;
     }
 
     if (!g_vrLoggedDedicatedScopeLayout)
     {
         Com_Printf(
             0,
-            "[VR] Packed dedicated scope layout active: "
+            "[VR][LAYOUT] V111 %s packed dedicated scope layout: "
             "%d px stereo region plus %d x %d scope source "
             "inside the %d x %d backbuffer.\n",
-            requiredMainStereoWidth,
-            requestedScopeSize,
-            requestedScopeSize,
+            backendName,
+            layout.mainStereoWidth,
+            layout.scopePanelSize,
+            layout.scopePanelSize,
             backbufferWidth,
             backbufferHeight);
 

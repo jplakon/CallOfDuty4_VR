@@ -1,6 +1,7 @@
 #include "rb_draw3d.h"
 #if defined(XR_USE_GRAPHICS_API_D3D11)
 #include "vr/vr_d3d9_capture.h"
+#include "vr/vr_postfx_policy.h"
 #endif
 #include "rb_logfile.h"
 #include "r_dvars.h"
@@ -816,9 +817,55 @@ void RB_StandardDrawCommandsCommon()
             R_SetResolvedScene(gfxCmdBufContext);
             R_BeginView(&gfxCmdBufSourceState, &viewInfo->sceneDef, &viewInfo->viewParms);
             R_SetViewportStruct(&gfxCmdBufSourceState, &viewInfo->displayViewport);
+
+#if defined(XR_USE_GRAPHICS_API_D3D11)
+            // KISAK_SP_VR_PACKED_POSTFX_ISOLATION_V113
+            // Retail marks each gameplay eye as fullscreen even though VR
+            // stores two eyes (and sometimes the scope camera) in one packed
+            // render target. Glow, depth-of-field, and blur use whole-target
+            // downsample/filter passes. Running those passes with an eye-local
+            // viewport can sample uninitialized or neighboring packed regions,
+            // producing the long sky streaks reported in Ultimatum (#49).
+            // Preserve the viewport-safe film/color pass for each eye, but do
+            // not run the unsafe whole-target filters until they have a packed
+            // stereo-aware implementation.
+            const bool vrEyeLocalColorOnly =
+                kisak::vr::postfx::UseEyeLocalColorOnly(
+                    VR_D3D9IsSameFrameStereoEnabled(),
+                    data->viewInfoCount,
+                    viewInfo->isRenderingFullScreen != 0);
+#else
+            const bool vrEyeLocalColorOnly = false;
+#endif
+
             if (viewInfo->isRenderingFullScreen)
             {
-                RB_ApplyLatePostEffects(viewInfo);
+                if (vrEyeLocalColorOnly)
+                {
+                    if (RB_UsingColorManipulation(viewInfo))
+                    {
+                        RB_ApplyColorManipulationViewport(viewInfo);
+                    }
+
+#if defined(XR_USE_GRAPHICS_API_D3D11)
+                    static bool loggedVrPackedPostFxIsolation = false;
+
+                    if (!loggedVrPackedPostFxIsolation)
+                    {
+                        Com_Printf(
+                            0,
+                            "[VR] V113 isolated packed stereo from "
+                            "fullscreen glow/DOF/blur; eye-local film "
+                            "color remains active.\n");
+
+                        loggedVrPackedPostFxIsolation = true;
+                    }
+#endif
+                }
+                else
+                {
+                    RB_ApplyLatePostEffects(viewInfo);
+                }
             }
             else
             {

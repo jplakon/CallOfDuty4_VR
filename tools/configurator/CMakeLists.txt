@@ -18,6 +18,9 @@ add_executable(
     ../../src/vr/vr_compatibility.h
     ../../src/vr/vr_openxr_profiles.cpp
     ../../src/vr/vr_openxr_profiles.h
+    ../../src/vr/vr_packed_layout.h
+    ../../src/vr/vr_postfx_policy.h
+    ../../src/vr/vr_saved_screen_policy.h
     ../../src/vr/vr_prompt_labels.cpp
     ../../src/vr/vr_prompt_labels.h
     ../../src/vr/vr_weapon_profiles.cpp
@@ -95,6 +98,9 @@ add_executable(
     ../../src/vr/vr_openvr_input.h
     ../../src/vr/vr_openxr_profiles.cpp
     ../../src/vr/vr_openxr_profiles.h
+    ../../src/vr/vr_packed_layout.h
+    ../../src/vr/vr_postfx_policy.h
+    ../../src/vr/vr_saved_screen_policy.h
     ../../src/vr/vr_prompt_labels.cpp
     ../../src/vr/vr_prompt_labels.h
     ../../src/vr/vr_weapon_profiles.cpp

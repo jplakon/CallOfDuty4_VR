@@ -8,6 +8,7 @@ bool __cdecl R_UsingDepthOfField(const GfxViewInfo *viewInfo);
 bool __cdecl RB_UsingColorManipulation(const GfxViewInfo *viewInfo);
 void __cdecl RB_ApplyColorManipulationFullscreen(const GfxViewInfo *viewInfo);
 void __cdecl RB_ApplyColorManipulationSplitscreen(const GfxViewInfo *viewInfo);
+void __cdecl RB_ApplyColorManipulationViewport(const GfxViewInfo *viewInfo);
 void RB_GetResolvedScene();
 void __cdecl RB_GetDepthOfFieldInputImages(float radius);
 void __cdecl RB_ProcessPostEffects(const GfxViewInfo *viewInfo);

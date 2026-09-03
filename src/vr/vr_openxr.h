@@ -46,6 +46,12 @@ void VR_RecordRenderFramePose(
 // release-disabled unless KISAK_VR_VERBOSE_DIAGNOSTICS=1 is set.
 bool VR_VerboseDiagnosticsEnabled();
 
+// KISAK_SP_VR_RETIRED_JAVELIN_TRACE_GATE_V112
+// The old weapon-slot-7 trace emits hundreds of lines per rendered frame and
+// is only appropriate for a targeted developer capture. Ordinary verbose
+// diagnostics must not activate it because weapon indices are level-local.
+bool VR_LegacyJavelinDiagnosticsEnabled();
+
 // KISAK_SP_VR_QUIT_CONFIRMATION_MONO_V45
 // True while the top UI menu is a quit/leave-game confirmation.
 bool VR_IsQuitConfirmationMenuActive();

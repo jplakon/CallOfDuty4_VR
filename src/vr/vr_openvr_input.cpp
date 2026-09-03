@@ -298,6 +298,11 @@ bool GetOpenVrBooleanSourceState(
 
     *active = false;
 
+    if (!IsOpenVrSourceAvailable(source))
+    {
+        return false;
+    }
+
     const OpenVrHandState* const state =
         HandForSource(hands, source);
     if (state == nullptr)
@@ -418,13 +423,9 @@ bool GetOpenVrBooleanSourceState(
 
         case Source::LeftThumbrestTouch:
         case Source::RightThumbrestTouch:
-            // The legacy state has no dedicated thumbrest component. Oculus
-            // drivers expose joystick contact through this bit. The runtime
-            // guards the default mission chords before treating that contact
-            // as their modifier, so turning cannot invoke a shortcut.
-            *active = joystickAxis >= 0 &&
-                ButtonSupported(*state, joystick);
-            return ButtonTouched(*state, joystick);
+            // Rejected before controller lookup. The legacy API exposes
+            // joystick contact here, not an independent thumbrest.
+            return false;
 
         case Source::LeftTrackpadTouch:
         case Source::RightTrackpadTouch:
@@ -549,36 +550,37 @@ OpenVrVector2 GetOpenVrVector2SourceState(
     return value;
 }
 
-bool UsesOpenVrMissionSelector(const Binding& binding)
+bool UsesMissionSelector(
+    const Binding& binding,
+    const Source modifier,
+    const Source selectionAxis)
 {
-    bool hasLegacyThumbrestModifier = false;
-    bool hasLeftPrimaryDirection = false;
+    bool hasModifier = false;
+    bool hasSelectionDirection = false;
 
     for (std::size_t sourceIndex = 0u;
          sourceIndex < binding.sourceCount;
          ++sourceIndex)
     {
         const Source source = binding.sources[sourceIndex];
-        hasLegacyThumbrestModifier =
-            hasLegacyThumbrestModifier ||
-            source == Source::RightThumbrestTouch;
-        hasLeftPrimaryDirection =
-            hasLeftPrimaryDirection ||
+        hasModifier = hasModifier || source == modifier;
+        hasSelectionDirection =
+            hasSelectionDirection ||
             (IsDirectionalSource(source) &&
-             PhysicalSource(source) == Source::LeftPrimaryAxis);
+             PhysicalSource(source) == selectionAxis);
     }
 
-    return hasLegacyThumbrestModifier && hasLeftPrimaryDirection;
+    return hasModifier && hasSelectionDirection;
 }
 
 OpenVrMissionSelectorUpdate UpdateOpenVrMissionSelector(
     OpenVrMissionSelectorState* const state,
-    const bool touchAvailable,
-    const bool touchHeld,
-    const OpenVrVector2 leftPrimaryAxis,
-    const bool leftPrimaryAxisActive,
-    const OpenVrVector2 rightPrimaryAxis,
-    const bool rightPrimaryAxisActive,
+    const bool modifierAvailable,
+    const bool modifierHeld,
+    const OpenVrVector2 selectionAxis,
+    const bool selectionAxisActive,
+    const OpenVrVector2 cancelAxis,
+    const bool cancelAxisActive,
     const float neutralThreshold)
 {
     OpenVrMissionSelectorUpdate update;
@@ -590,35 +592,35 @@ OpenVrMissionSelectorUpdate UpdateOpenVrMissionSelector(
         return update;
     }
 
-    update.available = touchAvailable &&
-        leftPrimaryAxisActive &&
-        rightPrimaryAxisActive;
+    update.available = modifierAvailable &&
+        selectionAxisActive &&
+        cancelAxisActive;
 
-    const bool contactHeld = update.available && touchHeld;
-    const bool contactBegan = contactHeld && !state->touchWasHeld;
-    const bool leftNeutral = leftPrimaryAxisActive &&
-        AxisIsNeutral(leftPrimaryAxis, neutralThreshold);
-    const bool rightNeutral = rightPrimaryAxisActive &&
-        AxisIsNeutral(rightPrimaryAxis, neutralThreshold);
+    const bool contactHeld = update.available && modifierHeld;
+    const bool contactBegan = contactHeld && !state->modifierWasHeld;
+    const bool selectionNeutral = selectionAxisActive &&
+        AxisIsNeutral(selectionAxis, neutralThreshold);
+    const bool cancelNeutral = cancelAxisActive &&
+        AxisIsNeutral(cancelAxis, neutralThreshold);
 
     if (!contactHeld)
     {
         update.cancelledThisFrame = state->armed;
         state->armed = false;
     }
-    else if (!rightNeutral)
+    else if (!cancelNeutral)
     {
         update.cancelledThisFrame = state->armed;
         state->armed = false;
     }
-    else if (contactBegan && leftNeutral)
+    else if (contactBegan && selectionNeutral)
     {
         state->armed = true;
         update.armedThisFrame = true;
     }
 
-    update.modifierHeld = state->armed && contactHeld && rightNeutral;
-    state->touchWasHeld = contactHeld;
+    update.modifierHeld = state->armed && contactHeld && cancelNeutral;
+    state->modifierWasHeld = contactHeld;
     return update;
 }
 

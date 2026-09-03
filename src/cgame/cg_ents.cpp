@@ -1168,6 +1168,9 @@ void __cdecl CG_Vehicle(int localClientNum, centity_s *cent)
     entityState_s *p_nextState; // r30
     const DObj_s *obj; // r3
     int RenderFlagForRefEntity; // r3
+    cg_s *cgameGlob;
+    int materialTimeReference;
+    float materialTime;
 
     p_nextState = &cent->nextState;
     if ((cent->nextState.lerp.eFlags & 0x20) == 0)
@@ -1176,9 +1179,37 @@ void __cdecl CG_Vehicle(int localClientNum, centity_s *cent)
         if (obj)
         {
             CG_Vehicle_PreControllers(localClientNum, obj, cent);
-            CG_GetLocalClientGlobals(localClientNum);
+            cgameGlob = CG_GetLocalClientGlobals(localClientNum);
+
+            // KISAK_SP_VR_ISSUE67_VEHICLE_MATERIAL_TIME_V109
+            // Match the MP client: the server advances this phase only while
+            // the vehicle moves, and the renderer expects its time offset.
+            if (cent->currentState.u.vehicle.materialTime < 0)
+            {
+                materialTime = 0.0f;
+            }
+            else
+            {
+                materialTimeReference =
+                    cent->currentState.u.vehicle.materialTime +
+                    static_cast<int>(
+                        static_cast<double>(
+                            p_nextState->lerp.u.vehicle.materialTime -
+                            cent->currentState.u.vehicle.materialTime) *
+                        cgameGlob->frameInterpolation);
+                materialTime =
+                    static_cast<float>(cgameGlob->time - materialTimeReference) *
+                    EQUAL_EPSILON;
+            }
+
             RenderFlagForRefEntity = CG_GetRenderFlagForRefEntity(p_nextState->lerp.eFlags);
-            R_AddDObjToScene(obj, &cent->pose, p_nextState->number, RenderFlagForRefEntity | 4, cent->pose.origin, 0.0f); // KISAKTODO: is materialTime really 0.0 here?
+            R_AddDObjToScene(
+                obj,
+                &cent->pose,
+                p_nextState->number,
+                RenderFlagForRefEntity | 4,
+                cent->pose.origin,
+                materialTime);
             if (p_nextState->eType == 11)
                 CG_CompassUpdateVehicleInfo(localClientNum, p_nextState->number);
         }
@@ -2441,4 +2472,3 @@ int __cdecl CG_DObjGetWorldTagPos(const cpose_t *pose, DObj_s *obj, unsigned int
 
     return 1;
 }
-

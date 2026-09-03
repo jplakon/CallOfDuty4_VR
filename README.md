@@ -14,7 +14,72 @@ copy of the original game.
 
 ## Current status
 
-The current public beta is `v0.10.0-beta.15`.
+The current public beta is `v0.10.0-beta.16`.
+
+Beta.16 addresses issue #46's distant dog tumbling and
+ground clipping. COD4's reconstructed body-ground helper had swapped its roll
+angle and vertical height outputs, causing a dog's ground angle to be applied
+as a height offset. The corrected output routing matches current upstream
+KisakCOD and also repairs the same mix-up for planted actor corpses.
+
+It addresses issue #48's brief yellow/pink NPC and
+vehicle frames during scripted screen flashes. Packed VR now saves one coherent
+scope/stereo shellshock snapshot after the final view and blends only the
+current eye's matching region, instead of capturing and resampling shared
+feedback midway through each eye replay. Desktop/non-VR behavior is unchanged.
+
+It addresses issue #49's stretched Ultimatum sky. The
+packed stereo renderer now keeps eye-local film/color grading but isolates the
+retail fullscreen glow, depth-of-field, and blur passes that can read across
+packed view boundaries. Desktop/non-VR rendering is unchanged.
+
+It addresses issue #64's weapon-triggered FPS collapse.
+An old per-frame Javelin trace used level-local weapon slot `7`, which can also
+identify the Blackout AK, and could synchronously write hundreds of diagnostic
+lines per frame. Normal verbose diagnostics no longer activate that retired
+trace; a separate hidden developer flag is required.
+
+It addresses issue #66's wide or stretched gameplay on
+SteamVR/OpenVR Performance mode. Packed rendering now takes each eye width from
+the active backend, so `4768x2016` remains two `1872x2016` gameplay eyes plus
+the dedicated 1024-pixel scope panel when a mission begins.
+
+It addresses issue #65's mission-start crouch. Stance
+inputs carried through a loading screen or menu must now return to neutral
+before they can lower the player, while deliberate crouch and prone actions
+continue normally after that release.
+
+It fixes issue #67's continuously scrolling tank
+tracks. Single-player vehicles now interpolate and submit the server-owned
+material phase, keeping stopped tracks still while preserving smooth movement.
+
+It fixes issue #61's original calibrated two-hand attach/release snap. The
+support grip now anchors to the visible one-hand weapon pose at engagement and
+applies later off-hand movement as a relative steering delta. Nonzero global,
+per-weapon, and gunstock Pitch/Yaw/Roll remain in the blend origin, and release
+fades from the last held steering delta instead of following the departing
+off hand. Smaller off-center roll/pivot and magazine-hand alignment concerns
+remain under investigation.
+
+It addresses the legacy OpenVR floating off-hand pose in issue #76:
+SteamVR raw/grip poses now use grip-frame anatomy instead of being mislabeled
+as `palm_ext/pose`, while a real `openxr_handmodel` component remains the
+preferred visual-palm source. Support grip, reload, aim, gestures, and native
+OpenXR behavior are unchanged.
+
+It addresses issue #75 by lowering HUD group scales and horizontal/vertical
+safe areas to `0.25` for wide or canted-FOV headsets. Finite manual values
+outside the supported range clamp to the nearest endpoint instead of making a
+group unexpectedly revert to its larger default.
+
+It also addresses issue #74 on the legacy OpenVR controller path. Joystick
+contact no longer masquerades as an independent thumbrest touch, and the new
+OpenVR-safe control preset separates guarded mission actions, Pause, and
+weapon cycling.
+
+Only issue #67 and the original #61 snapping defect have reporter hardware
+confirmation so far. The other beta.16 changes remain candidate fixes
+pending validation on their reported headset/runtime combinations.
 
 Beta.14 fixes the remaining stereo-menu and legacy-crosshair defects, adds
 a full-FOV Pimax Crystal Light scope layout, routes Safehouse and Heat
@@ -95,9 +160,10 @@ unchanged during an update.
 - Corrects direct OpenVR projection, color transfer, compositor submission,
   and semantic grip/aim controller poses. The complete path was verified on
   Quest 3 through SteamVR without changing the primary VDXR/OpenXR route.
-- Guards legacy OpenVR thumbrest mission chords behind a neutral-entry
-  selector, preventing ordinary walking plus right-stick turning from firing
-  mission shortcuts.
+- Keeps legacy OpenVR controls safe when SteamVR lacks an independent
+  thumbrest component: V105 disables the joystick-touch alias and provides a
+  neutral-entry off-hand trigger + stick preset that also separates Pause from
+  Next weapon.
 - Adds a physical left-hand night-vision gesture on both backends: grip at the
   crown and pull the visor down, or grip close to the visor and pull it up,
   then release to toggle.

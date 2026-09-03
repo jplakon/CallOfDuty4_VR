@@ -4,6 +4,7 @@
 
 #include "cl_input.h"
 #include "vr/vr_openxr.h"
+#include "vr/vr_input_bindings.h"
 #include "vr/vr_interactions.h"
 
 void __cdecl CG_NextWeapon_f();
@@ -28,6 +29,15 @@ const dvar_t *cl_anglespeedkey;
 
 unsigned int frame_msec;
 int old_com_frameTime;
+
+static kisak::vr::input::GameplayButtonGateState
+    vrLowerStanceGate;
+static kisak::vr::input::GameplayButtonGateState
+    vrStanceGate;
+static bool vrStanceHoldConsumed = false;
+static int vrStancePressTime = 0;
+static StanceState vrStancePressPosition =
+    CL_STANCE_STAND;
 
 #define KEY_LEFT 0
 #define KEY_RIGHT 1
@@ -89,6 +99,17 @@ kbutton_t kb[29];
 void __cdecl TRACK_cl_input()
 {
     track_static_alloc_internal(kb, 580, "kb", 10);
+}
+
+void CL_ResetVrStanceInputGates()
+{
+    kisak::vr::input::ResetGameplayButtonGate(
+        &vrLowerStanceGate);
+    kisak::vr::input::ResetGameplayButtonGate(
+        &vrStanceGate);
+    vrStanceHoldConsumed = false;
+    vrStancePressTime = 0;
+    vrStancePressPosition = CL_STANCE_STAND;
 }
 
 bool __cdecl IN_IsTempProneKeyActive()
@@ -1530,16 +1551,25 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
         VR_GetLowerStanceButton(
             &vrLowerStanceHeld);
 
+        const bool vrGameplayInputAvailable =
+            !Key_IsCatcherActive(0, 0x33);
+
         // Controller Input V4 restores the straightforward legacy layout:
         // right primary-axis up is a normal Jump binding, while down owns the
         // separate one-step lower-stance action. Any remapped Boolean source
         // receives the same one-action-per-release behavior.
-        static bool vrLowerStanceWasHeld = false;
+        // KISAK_SP_VR_ISSUE65_STANCE_NEUTRAL_ENTRY_V110
+        // A stick/button held during mission loading is not a new gameplay
+        // press. Require the configured lower-stance action to return neutral
+        // once before it can lower the freshly initialized standing stance.
+        const kisak::vr::input::GameplayButtonGateUpdate
+            vrLowerStanceUpdate =
+                kisak::vr::input::UpdateGameplayButtonGate(
+                    &vrLowerStanceGate,
+                    vrGameplayInputAvailable,
+                    vrLowerStanceHeld);
         const bool vrLowerStancePressed =
-            vrLowerStanceHeld &&
-            !vrLowerStanceWasHeld;
-        vrLowerStanceWasHeld =
-            vrLowerStanceHeld;
+            vrLowerStanceUpdate.pressedThisFrame;
 
         bool vrStanceStepChanged = false;
 
@@ -1630,8 +1660,6 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
         // as the configured-or-physical VR ADS action is held.  kbutton_t's
         // two-key tracking keeps a real right-mouse press independent.
         static bool vrAdsNativeCommandHeld = false;
-        const bool vrGameplayInputAvailable =
-            !Key_IsCatcherActive(0, 0x33);
 
         if (vrAdsHeld &&
             !vrAdsNativeCommandHeld &&
@@ -1796,17 +1824,25 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
                 BUTTON_MELEE;
         }
 
-        static bool vrStanceWasHeld = false;
-        static bool vrStanceHoldConsumed = false;
-        static int vrStancePressTime = 0;
-        static StanceState vrStancePressPosition =
-            CL_STANCE_STAND;
+        // The legacy tap-crouch/hold-prone action needs the same neutral-entry
+        // rule as the dedicated lower-stance action. This also cancels an
+        // in-progress hold when UI/input catchers take ownership.
+        const kisak::vr::input::GameplayButtonGateUpdate
+            vrStanceUpdate =
+                kisak::vr::input::UpdateGameplayButtonGate(
+                    &vrStanceGate,
+                    vrGameplayInputAvailable,
+                    vrStanceHeld);
 
         bool vrStanceChanged =
             vrStanceStepChanged;
 
-        if (vrStanceHeld &&
-            !vrStanceWasHeld)
+        if (!vrStanceUpdate.inputAccepted)
+        {
+            vrStanceHoldConsumed = false;
+        }
+
+        if (vrStanceUpdate.pressedThisFrame)
         {
             vrStancePressTime =
                 com_frameTime;
@@ -1818,7 +1854,8 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
                 false;
         }
 
-        if (vrStanceHeld &&
+        if (vrStanceUpdate.inputAccepted &&
+            vrStanceHeld &&
             !vrStanceHoldConsumed &&
             com_frameTime - vrStancePressTime >=
                 cl_stanceHoldTime->current.integer)
@@ -1840,8 +1877,7 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
                 true;
         }
 
-        if (!vrStanceHeld &&
-            vrStanceWasHeld &&
+        if (vrStanceUpdate.releasedThisFrame &&
             !vrStanceHoldConsumed)
         {
             StanceState targetStance =
@@ -1867,9 +1903,6 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
             vrStanceChanged =
                 true;
         }
-
-        vrStanceWasHeld =
-            vrStanceHeld;
 
         if (vrStanceChanged)
         {

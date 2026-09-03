@@ -65,7 +65,7 @@ static void VR_JavelinDiagnostic(
     uint32_t weaponNum,
     const void *object = nullptr)
 {
-    if (!VR_VerboseDiagnosticsEnabled() ||
+    if (!VR_LegacyJavelinDiagnosticsEnabled() ||
         weaponNum != 7)
         return;
 
@@ -4660,6 +4660,12 @@ static bool VR_BuildFreeLeftHandTransform(
         *reinterpret_cast<mat3x3*>(
             wristAxis));
 
+    // KISAK_SP_VR_CONTROLLER_LOCAL_HAND_OFFSETS_V107
+    // Position calibration is described and displayed as controller-local.
+    // Apply it along the tracked pose axes, not the already model-remapped and
+    // Euler-adjusted wrist axes. Large visual-fit rotations therefore no longer
+    // rotate the meanings of Forward, Left, and Up while the palm-anchor
+    // subtraction remains tied to the final rendered wrist orientation.
     for (int component = 0;
          component < 3;
          ++component)
@@ -4676,11 +4682,11 @@ static bool VR_BuildFreeLeftHandTransform(
             leftControllerOrigin[component] -
             palmAnchorWorld +
             controllerLocalOffset[0] *
-                wristAxis[0][component] +
+                leftControllerAxis[0][component] +
             controllerLocalOffset[1] *
-                wristAxis[1][component] +
+                leftControllerAxis[1][component] +
             controllerLocalOffset[2] *
-                wristAxis[2][component];
+                leftControllerAxis[2][component];
     }
 
     float unnormalizedQuaternion[4] = {};

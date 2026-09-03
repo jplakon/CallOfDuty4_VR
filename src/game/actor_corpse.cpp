@@ -556,16 +556,21 @@ void __cdecl Actor_GetBodyPlantAngles(
     traceEnd[2] = (float)v15 - (float)30.0;
     YawVectors(fYaw, forward, right);
     v16 = Actor_SetBodyPlantAngle((int)iEntNum, iClipMask, vOrigin, vOrigin, forward, pfPitch);
-    if (pfHeight)
+    // KISAK_SP_VR_ISSUE46_DOG_BODY_PLANT_OUTPUTS_V115
+    // Actor_SetBodyPlantAngle returns the side-to-side ground angle here.
+    // The reconstructed SP source had the roll and height output blocks
+    // reversed, so dog callers that request pitch + height stored this angle
+    // as a vertical offset and visibly sank, rose, or tumbled on uneven ground.
+    if (pfRoll)
     {
         if (fabsf(*pfPitch) >= 30.0)
-            *pfHeight = 0.0;
+            *pfRoll = 0.0;
         else
-            v16 = (float)((float)(Actor_SetBodyPlantAngle((int)iEntNum, iClipMask, vOrigin, vOrigin, right, pfHeight)
+            v16 = (float)((float)(Actor_SetBodyPlantAngle((int)iEntNum, iClipMask, vOrigin, vOrigin, right, pfRoll)
                 + (float)v16)
                 * (float)0.5);
     }
-    if (pfRoll)
+    if (pfHeight)
     {
         v17 = (float)((float)v16 - vOrigin[2]);
         if (v17 < 0.0)
@@ -581,7 +586,7 @@ void __cdecl Actor_GetBodyPlantAngles(
             if (G_TraceCapsuleComplete(traceStart, actorMins, actorMaxs, traceEnd, (int)iEntNum, iClipMask))
                 v17 = 0.0;
         }
-        *pfRoll = v17;
+        *pfHeight = v17;
     }
 }
 
@@ -862,4 +867,3 @@ XAnimTree_s *__cdecl G_GetActorCorpseAnimTree(gentity_s *ent)
 {
     return g_scr_data.actorCorpseInfo[G_GetActorCorpseIndex(ent)].tree;
 }
-

@@ -8,7 +8,9 @@ namespace kisak::vr::hud
 
 constexpr float kCanvasWidth = 640.0f;
 constexpr float kCanvasHeight = 480.0f;
-constexpr float kMinimumScale = 0.50f;
+constexpr float kMinimumSafeArea = 0.25f;
+constexpr float kMaximumSafeArea = 1.00f;
+constexpr float kMinimumScale = 0.25f;
 constexpr float kMaximumScale = 2.00f;
 constexpr float kSnapDistance = 14.0f;
 

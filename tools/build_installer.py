@@ -175,7 +175,7 @@ def compile_installer(
     app_id: str | None = None,
 ) -> tuple[Path, Path, list[str]]:
     if not VERSION_RE.fullmatch(version):
-        fail("version must look like 0.10.0-beta.14 and must not start with v")
+        fail("version must look like 1.2.3-beta.1 and must not start with v")
     if app_id is not None and not APP_ID_RE.fullmatch(app_id):
         fail("app id must be a canonical GUID without braces")
     payload_directory = payload_directory.resolve()
@@ -289,7 +289,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if not VERSION_RE.fullmatch(args.version):
             fail(
-                "version must look like 0.10.0-beta.14 and must not start "
+                "version must look like 1.2.3-beta.1 and must not start "
                 "with v"
             )
         inventory = safe_payload_inventory(payload_directory)

@@ -596,6 +596,7 @@ void __cdecl CL_MapLoading_StartCinematic(const char *mapname, float volume)
 void __cdecl CL_MapLoading(const char *mapname)
 {
     // KISAKTODO: (SP): could use more touchups
+    CL_ResetVrStanceInputGates();
     if (!clientUIActives[0].isRunning)
         MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\client\\cl_main.cpp", 677, 0, "%s", "clUI->isRunning");
     Con_Close(0);
@@ -630,6 +631,7 @@ void __cdecl CL_ClearState()
 {
     unsigned __int16 *configstrings; // r31
 
+    CL_ResetVrStanceInputGates();
     CG_CreateNextSnap(0, 0.0, 0);
     CG_SetNextSnap(0);
     SND_StopSounds(SND_STOP_ALL);
@@ -1859,4 +1861,3 @@ void __cdecl CL_Init(int localClientNum)
     clients[0].usingAds = 0;
     Com_Printf(14, "----- Client Initialization Complete -----\n");
 }
-

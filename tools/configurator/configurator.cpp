@@ -55,7 +55,7 @@ constexpr wchar_t kHudEditorClass[] =
 constexpr wchar_t kWeaponEditorClass[] =
     L"KisakCODVrWeaponCalibrationEditorV65";
 constexpr wchar_t kWindowTitle[] =
-    L"KisakCOD VR Configurator - v0.10.0-beta.14";
+    L"KisakCOD VR Configurator - v0.10.0-beta.16";
 
 // KISAK_VR_CONFIGURATOR_RESIZABLE_WINDOW_V96
 // The original fixed outer size was only barely larger than the rightmost
@@ -1670,12 +1670,46 @@ void PopulateBindingCombo(
             current,
             &currentBinding) &&
         currentBinding.sourceCount > 1u;
+    const bool openVr =
+        StringValue(
+            state.values,
+            "KISAK_VR_BACKEND",
+            "auto") == "openvr";
+    const bool unavailableChord =
+        openVr && chord &&
+        std::any_of(
+            currentBinding.sources.begin(),
+            currentBinding.sources.begin() + currentBinding.sourceCount,
+            [](const vi::Source source)
+            {
+                return !vi::IsOpenVrSourceAvailable(source);
+            });
+
+    vi::Source currentSource = vi::Source::Unbound;
+    const bool unavailableSingleSource =
+        openVr && !chord &&
+        vi::ParseSource(current, &currentSource) &&
+        !vi::IsOpenVrSourceAvailable(currentSource);
 
     if (chord)
     {
         const std::wstring label =
-            L"Chord: " +
+            (unavailableChord
+                 ? L"Unavailable on OpenVR: "
+                 : L"Chord: ") +
             ToWide(vi::BindingLabel(currentBinding));
+        const LRESULT item = SendMessageW(
+            combo,
+            CB_ADDSTRING,
+            0,
+            reinterpret_cast<LPARAM>(label.c_str()));
+        SendMessageW(combo, CB_SETITEMDATA, item, -1);
+    }
+    else if (unavailableSingleSource)
+    {
+        const std::wstring label =
+            L"Unavailable on OpenVR: " +
+            ToWide(vi::GetSourceDefinition(currentSource).label);
         const LRESULT item = SendMessageW(
             combo,
             CB_ADDSTRING,
@@ -1691,6 +1725,13 @@ void PopulateBindingCombo(
         const kc::SettingChoice& choice =
             setting->choices[index];
 
+        vi::Source source = vi::Source::Unbound;
+        vi::ParseSource(choice.value, &source);
+        if (openVr && !vi::IsOpenVrSourceAvailable(source))
+        {
+            continue;
+        }
+
         const std::wstring label =
             ToWide(choice.label);
 
@@ -1700,8 +1741,6 @@ void PopulateBindingCombo(
             0,
             reinterpret_cast<LPARAM>(label.c_str()));
 
-        vi::Source source = vi::Source::Unbound;
-        vi::ParseSource(choice.value, &source);
         SendMessageW(
             combo,
             CB_SETITEMDATA,
@@ -2143,12 +2182,19 @@ void EditControllerChord(
         action->action,
         current,
         &currentBinding);
+    const bool openVr =
+        StringValue(
+            state.values,
+            "KISAK_VR_BACKEND",
+            "auto") == "openvr";
 
     for (const vi::SourceDefinition& source :
          vi::SourceDefinitions())
     {
         if (source.source == vi::Source::Unbound ||
-            !vi::IsSourceCompatible(action->action, source.source))
+            !vi::IsSourceCompatible(action->action, source.source) ||
+            (openVr &&
+             !vi::IsOpenVrSourceAvailable(source.source)))
         {
             continue;
         }

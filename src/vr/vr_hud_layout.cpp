@@ -264,8 +264,14 @@ void ClampLayout(Layout* const layout)
         return;
     }
 
-    layout->safeX = Clamp(layout->safeX, 0.50f, 1.00f);
-    layout->safeY = Clamp(layout->safeY, 0.50f, 1.00f);
+    layout->safeX = Clamp(
+        layout->safeX,
+        kMinimumSafeArea,
+        kMaximumSafeArea);
+    layout->safeY = Clamp(
+        layout->safeY,
+        kMinimumSafeArea,
+        kMaximumSafeArea);
     layout->ammoOffsetX = Clamp(layout->ammoOffsetX, -320.0f, 640.0f);
     layout->ammoOffsetY = Clamp(layout->ammoOffsetY, -240.0f, 480.0f);
     layout->ammoScale = Clamp(layout->ammoScale, kMinimumScale, kMaximumScale);

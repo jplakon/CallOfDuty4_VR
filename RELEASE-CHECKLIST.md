@@ -1,6 +1,6 @@
 # Release checklist
 
-This checklist is for `v0.10.0-beta.14` over `v0.10.0-beta.13`.
+This checklist is for `v0.10.0-beta.16` over `v0.10.0-beta.15`.
 
 ## Documentation blockers
 
@@ -41,7 +41,7 @@ This checklist is for `v0.10.0-beta.14` over `v0.10.0-beta.13`.
   `KisakCOD-VR-Input-Mapper`, and `KisakCOD-VR-Configurator-Tests` in Win32
   Release configuration from the committed source.
 - Run the settings tests against `release/package/VR-Settings.bat` and require
-  all 142 catalog settings plus beta.14 compatibility, launcher, runtime,
+  all 142 catalog settings plus beta.16 compatibility, launcher, runtime,
   configurator, HUD/menu, Pimax, and mounted-gun contracts to pass.
 - Confirm `git status --porcelain --untracked-files=no` remains empty.
 - Copy nothing from `bin/Debug` into the player package.
@@ -63,7 +63,7 @@ This checklist is for `v0.10.0-beta.14` over `v0.10.0-beta.13`.
 
 - Open **Setup & Compatibility** on the primary VDXR/Quest 3/RTX 3080 Ti
   system. Require file, DirectX, OS, GPU, and 32-bit OpenXR checks to pass;
-  before the first beta.14 run, require honest headset/controller warnings.
+  before the first beta.16 run, require honest headset/controller warnings.
 - Apply the recommendation only after verifying its confirmation lists the
   exact backend/graphics delta. Snapshot all other settings before/after and
   require handedness, units, comfort, input, HUD, height, interactions, and
@@ -110,8 +110,10 @@ This checklist is for `v0.10.0-beta.14` over `v0.10.0-beta.13`.
 - In both OpenXR and OpenVR, lower and raise the night-vision visor with the
   physical left-grip gesture. Confirm a press begun on the rifle foregrip never
   arms later in the same hold and ordinary two-hand aiming remains unchanged.
-- In OpenVR, confirm the remaining right-thumbrest + left-direction mission
-  chords require neutral entry and cannot fire while walking and turning.
+- In OpenVR, begin with both sticks centered, hold the off-hand trigger, and
+  move the off-hand stick through each guarded mission selector. Require
+  neutral entry, dominant-stick cancellation, and no accidental mission action
+  while walking or turning.
 - Test **Bind...** for boolean and vector actions through OpenXR, Escape cancel,
   timeout/error reporting, and missing-helper handling.
 - On available native hardware, test Touch, Index, Vive/trackpad, PICO, and
@@ -215,6 +217,26 @@ This checklist is for `v0.10.0-beta.14` over `v0.10.0-beta.13`.
   and identify any bridge misses, consumer skips, or long reuse streaks.
 - Confirm normal play produces no per-stage Javelin trace or periodic
   controller/hand diagnostics unless `KISAK_VR_VERBOSE_DIAGNOSTICS=1` is set.
+- With normal diagnostics, reproduce issue #64's AK and Javelin scenarios and
+  require no retired per-frame weapon-slot trace or logging-driven collapse.
+- On OpenVR, verify joystick contact never appears as an independent thumbrest
+  input, apply the OpenVR-safe preset, and exercise its guarded mission-action,
+  Pause, and weapon-cycle bindings.
+- On OpenVR Performance mode, require `4768x2016` to remain two `1872x2016`
+  gameplay eyes plus the dedicated 1024-pixel scope panel after mission load.
+- With nonzero global/per-weapon/gunstock Pitch, Yaw, and Roll calibration,
+  attach, steer, and release two-hand support without the original snap or tug.
+  Record the remaining #61 roll/pivot and magazine-hand alignment concerns as
+  unresolved rather than claiming them fixed.
+- Set every HUD group and both safe areas to `0.30`, then exactly `0.25`.
+  Require save/restart persistence, coherent placement in both eyes, and usable
+  menus, subtitles, compass, notifications, and objective/status banners.
+- In Ultimatum, require the sky to remain eye-local without stretched streaks.
+  Trigger scripted flash and shellshock sequences and require coherent whiteout
+  and actor/vehicle colors in both eyes.
+- In All Ghillied Up or Hunted, observe dogs from long range through approach
+  and attack. Require stable slope-following without tumbling, sinking,
+  floating, or ground clipping.
 - Test fixed Barrett, Javelin, Stinger, mounted turret, and vehicle weapon.
 - Test Blackout rappel and One Shot, One Kill sprint-direction changes for a
   level horizon while confirming physical HMD pitch and roll still work.
@@ -232,15 +254,23 @@ This checklist is for `v0.10.0-beta.14` over `v0.10.0-beta.13`.
 
 ## Tag and package
 
-- Create annotated tag `v0.10.0-beta.14` only after the compatibility,
+- Create annotated tag `v0.10.0-beta.16` only after the compatibility,
   Metric/Imperial, per-weapon/gunstock, handed-interaction, controller, menu,
   rendering, crash-diagnostic, tracked-hand, reload, grenade, OpenVR two-hand,
   Automatic-proximity release, detonator, and campaign state is validated.
 - Install Inno Setup 6 or 7 and make `ISCC.exe` available through
   `INNO_SETUP_COMPILER`, `PATH`, a standard install location, or `--iscc`.
 - Run `python tests/installer_builder_tests.py` and require all tests to pass.
-- Run `tools/package_release.py` without `--portable-only` so the portable ZIP
-  and guarded Setup are generated from the same staged payload.
+- Run the following without `--portable-only` so the portable ZIP and guarded
+  Setup are generated from the same staged payload:
+
+  ```powershell
+  python tools/package_release.py `
+    --version 0.10.0-beta.16 `
+    --repository-url https://github.com/jplakon/CallOfDuty4_VR `
+    --patreon-url https://www.patreon.com/c/J_Play `
+    --output-directory releases
+  ```
 - The packager must refuse to run if any documentation placeholder or
   controller-map `VERIFY` marker remains.
 - Inspect the ZIP inventory.

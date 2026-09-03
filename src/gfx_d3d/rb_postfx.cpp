@@ -58,6 +58,14 @@ void __cdecl RB_ApplyColorManipulationSplitscreen(const GfxViewInfo *viewInfo)
 {
     iassert( RB_UsingColorManipulation( viewInfo ) );
     iassert( !viewInfo->isRenderingFullScreen );
+
+    RB_ApplyColorManipulationViewport(viewInfo);
+}
+
+void __cdecl RB_ApplyColorManipulationViewport(const GfxViewInfo *viewInfo)
+{
+    iassert( RB_UsingColorManipulation( viewInfo ) );
+
     RB_GetResolvedScene();
     RB_SplitScreenFilter(rgp.postFxColorMaterial, viewInfo);
 }
@@ -364,4 +372,3 @@ void __cdecl RB_BlurScreen(const GfxViewInfo *viewInfo, float blurRadius)
     else
         RB_FullScreenColoredFilter(rgp.feedbackBlendMaterial, color);
 }
-

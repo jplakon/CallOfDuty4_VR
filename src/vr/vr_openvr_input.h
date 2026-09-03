@@ -19,13 +19,12 @@ struct OpenVrVector2
     float y = 0.0f;
 };
 
-// SteamVR's legacy Oculus controller state does not expose the capacitive
-// thumbrest as a separate component. It reports joystick contact instead.
-// Guard the default thumbrest + off-hand-direction mission chords so normal
-// walking and turning cannot accidentally invoke them.
+// Mission selector chords must begin with both sticks centered. The native
+// OpenXR path uses a real thumbrest as its modifier. Legacy OpenVR uses the
+// off-hand trigger because its controller-state API has no thumbrest source.
 struct OpenVrMissionSelectorState
 {
-    bool touchWasHeld = false;
+    bool modifierWasHeld = false;
     bool armed = false;
 };
 
@@ -84,16 +83,19 @@ OpenVrVector2 GetOpenVrVector2SourceState(
     Source source,
     bool* active);
 
-bool UsesOpenVrMissionSelector(const Binding& binding);
+bool UsesMissionSelector(
+    const Binding& binding,
+    Source modifier,
+    Source selectionAxis);
 
 OpenVrMissionSelectorUpdate UpdateOpenVrMissionSelector(
     OpenVrMissionSelectorState* state,
-    bool touchAvailable,
-    bool touchHeld,
-    OpenVrVector2 leftPrimaryAxis,
-    bool leftPrimaryAxisActive,
-    OpenVrVector2 rightPrimaryAxis,
-    bool rightPrimaryAxisActive,
+    bool modifierAvailable,
+    bool modifierHeld,
+    OpenVrVector2 selectionAxis,
+    bool selectionAxisActive,
+    OpenVrVector2 cancelAxis,
+    bool cancelAxisActive,
     float neutralThreshold = 0.20f);
 
 std::string OpenVrHandDescription(const OpenVrHandState& state);

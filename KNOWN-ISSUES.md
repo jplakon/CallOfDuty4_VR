@@ -1,6 +1,6 @@
 # Known issues
 
-This list applies to `v0.10.0-beta.15`.
+This list applies to `v0.10.0-beta.16`.
 
 ## Setup and compatibility
 
@@ -55,10 +55,30 @@ This list applies to `v0.10.0-beta.15`.
   is documented in `INSTALL.md`.
 - The 32-bit SteamVR/OpenVR fallback supplies gameplay input through SteamVR's
   legacy controller API. Some drivers alias face, menu, grip, and touch
-  components. Beta.12 guards the known thumbrest/right-stick alias and resolves
-  semantic grip/aim render-model components, but native PSVR2, Index, and Vive
-  hardware still require confirmation. Include controller type/profile lines
-  from `main\console.log` with reports. OpenXR remains the preferred backend.
+  components. V105 disables the impossible thumbrest source, prevents the input
+  mapper from capturing joystick contact as thumbrest touch, and adds an
+  **OpenVR safe controls** preset plus secondary/menu conflict warnings. Native
+  Apple Vision Pro/ALVR, PSVR2, Index, and Vive hardware still require
+  confirmation. Include controller type/profile lines from `main\console.log`
+  with reports. OpenXR remains the preferred backend.
+- V107 stops the OpenVR adapter from presenting a raw-device or grip pose as a
+  valid palm surface. A dedicated SteamVR `openxr_handmodel` component is still
+  used when present; otherwise only the standalone glove selects the grip-frame
+  fallback. Apple Vision Pro/ALVR with PSVR2 Sense emulation remains pending
+  headset confirmation. If an earlier workaround saved large off-hand fit
+  values, reset the six off-hand offsets and angles before evaluating V107.
+- V108 replaces issue #61's absolute two-hand aim frame with an
+  engagement-anchored steering delta and freezes that delta during release.
+  The reporter confirmed that the original attach/release snap and tug are
+  gone on PSVR2 through SteamVR/OpenVR. Smaller off-center roll/pivot feel and
+  magazine-hand alignment concerns remain under investigation.
+- V110 prevents stance input held through loading or a menu from crouching the
+  player as gameplay begins. Automated edge-state coverage passes, but issue
+  #65 still requires the reporter's seated Quest 3S/SteamVR confirmation.
+- V111 corrects issue #66's OpenVR packed-width selection: Performance mode
+  keeps two 1872-pixel gameplay eyes and excludes the dedicated 1024-pixel
+  scope panel from their split. Automated layout and build checks pass, but
+  the reporter's Quest 3S/SteamVR mission-start confirmation is still required.
 - The beta.12 OpenVR projection, color, compositor, semantic pose, and
   controller-selector path was verified on Quest 3 through SteamVR. This does
   not by itself prove the same driver behavior on PSVR2 or Index.
@@ -73,9 +93,34 @@ This list applies to `v0.10.0-beta.15`.
 - `3072x1536` is incompatible with the packed renderer because it cannot hold
   two rectangular eyes plus the dedicated scope panel; the launcher rejects it.
 
+## Gameplay
+
+- Beta.16 corrects issue #46's swapped roll-angle and vertical-height outputs in
+  COD4's actor body-ground sampler. Source comparison and build checks pass,
+  but dog movement in All Ghillied Up and Hunted still requires the reporter's
+  Quest 3 / VDXR confirmation at both long and close range.
+
 ## Rendering
 
 - Synchronized dynamic shadows can have a significant performance cost.
+- V114 isolates COD4's saved-screen shellshock/flash feedback across packed VR
+  views. Captures now occur only after the final view, and each eye samples its
+  matching packed region instead of an incomplete or overwritten shared image.
+  Source/build checks pass, but issue #48 still requires the reporter's Quest 3
+  / VDXR confirmation at Crew Expendable's ending and, if practical, War Pig.
+- V113 isolates packed stereo from COD4's fullscreen glow, depth-of-field, and
+  blur filters, which could resample neighboring or uninitialized regions and
+  stretch Ultimatum's sky into long strips. Eye-local film/color grading remains
+  active, but issue #49 still requires the reporter's PICO 4/OpenVR confirmation.
+- V112 prevents ordinary verbose-diagnostics launches from enabling the
+  retired level-local weapon-slot-7 trace that can match both the Blackout AK
+  and Bog Javelin. Source/build checks pass, but issue #64 still requires the
+  reporter's Quest 3S/OpenVR A/B confirmation; unrelated baseline frame pacing
+  may remain on the GTX 1660.
+- V109 restores the server-driven material phase for single-player vehicles;
+  this prevents stationary tank tracks from scrolling on their own. The
+  reporter confirmed War Pig behavior through PSVR2/OpenVR and issue #67 is
+  closed.
 - Pimax Crystal Light Full FOV uses the runtime's uncropped `4312x5102`
   recommendation at output scale `0.80`, producing two `3450x4082` eyes plus
   the 1024-pixel scope panel in beta.14's `7924x4082` packed surface. Magnified
@@ -97,6 +142,10 @@ This list applies to `v0.10.0-beta.15`.
 - Ammo/equipment, compass/objective icons, normal notifications, bold
   objective/status banners, and subtitles can move independently. The native
   crosshair remains locked to optical center by design.
+- V106 allows every HUD group scale and both safe-area dimensions down to
+  `0.25` for wide or canted-FOV headsets. Direct finite environment overrides
+  outside the range clamp to the nearest endpoint; malformed values still use
+  the tested default. Real Apple Vision Pro/ALVR confirmation remains pending.
 - Position-only, direction/level-only, full recenter, and player-height actions
   on the calibration page apply to the running SP game. Standing-height
   measurement preserves both recenter components; seated calibration recenters
@@ -123,7 +172,9 @@ This list applies to `v0.10.0-beta.15`.
   and the configured runtime and controllers must already be active.
 - A controller profile may not expose every selectable component. Unsupported
   bindings remain inactive; use **Bind...** or choose a primary/secondary
-  action and primary axis for portable profiles.
+  action and primary axis for portable profiles. With OpenVR selected,
+  thumbrest choices are omitted because legacy SteamVR cannot distinguish them
+  from joystick touch.
 - Input conflicts are warnings rather than errors. This permits intentional
   overlaps, but an accidental overlap activates both gameplay actions.
 - OpenXR runtimes that terminate the mapper during `xrCreateSession` cannot be

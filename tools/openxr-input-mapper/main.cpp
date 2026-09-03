@@ -1420,7 +1420,8 @@ public:
             {
                 if (source.source == input::Source::Unbound ||
                     source.valueType != options.valueType ||
-                    source.hand == input::Hand::None)
+                    source.hand == input::Hand::None ||
+                    !input::IsOpenVrSourceAvailable(source.source))
                 {
                     continue;
                 }

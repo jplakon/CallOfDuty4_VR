@@ -36,7 +36,7 @@ static uint32_t s_vrJavelinFrameDiagnosticSequence = 0;
 static bool VR_JavelinFrameDiagnosticActive()
 {
     return
-        VR_VerboseDiagnosticsEnabled() &&
+        VR_LegacyJavelinDiagnosticsEnabled() &&
         BG_GetViewmodelWeaponIndex(
                &cgArray[0].predictedPlayerState) == 7;
 }

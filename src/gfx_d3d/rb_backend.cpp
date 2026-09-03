@@ -1,5 +1,6 @@
 #include "rb_backend.h"
 #include "vr/vr_d3d9_capture.h"
+#include "vr/vr_saved_screen_policy.h"
 #include <qcommon/mem_track.h>
 
 #include "rb_logfile.h"
@@ -71,6 +72,62 @@ GfxRenderTarget gfxRenderTargets[17]; // LWSS: changed to 17 to please ASAN. (Gf
 
 r_backEndGlobals_t backEnd;
 materialCommands_t tess;
+
+namespace
+{
+
+bool RB_ShouldCaptureSavedScreenForCurrentView()
+{
+    if (backEndData == nullptr)
+    {
+        return true;
+    }
+
+    return kisak::vr::saved_screen::
+        ShouldCaptureFullPackedFrame(
+            VR_D3D9IsSameFrameStereoEnabled(),
+            backEndData->viewInfoCount,
+            backEndData->viewInfoIndex);
+}
+
+bool RB_ResolvePackedSavedScreenBlend(
+    const float commandS0,
+    const float commandT0,
+    const float commandWidth,
+    const float commandHeight,
+    kisak::vr::saved_screen::BlendRegion* region)
+{
+    if (backEndData == nullptr ||
+        backEndData->viewInfo == nullptr ||
+        backEndData->viewInfoIndex >=
+            backEndData->viewInfoCount)
+    {
+        return false;
+    }
+
+    const GfxViewInfo* viewInfo =
+        &backEndData->viewInfo[
+            backEndData->viewInfoIndex];
+
+    return kisak::vr::saved_screen::
+        ResolvePackedBlendRegion(
+            VR_D3D9IsSameFrameStereoEnabled(),
+            backEndData->viewInfoCount,
+            backEndData->viewInfoIndex,
+            gfxCmdBufSourceState.renderTargetWidth,
+            gfxCmdBufSourceState.renderTargetHeight,
+            viewInfo->displayViewport.x,
+            viewInfo->displayViewport.y,
+            viewInfo->displayViewport.width,
+            viewInfo->displayViewport.height,
+            commandS0,
+            commandT0,
+            commandWidth,
+            commandHeight,
+            region);
+}
+
+} // namespace
 
 void __cdecl TRACK_rb_backend()
 {
@@ -969,8 +1026,35 @@ void __cdecl RB_SaveScreenCmd(GfxRenderCommandExecState *execState)
 
     if (tess.indexCount)
         RB_EndTessSurface();
-    R_Resolve(gfxCmdBufContext, gfxRenderTargets[R_RENDERTARGET_SAVED_SCREEN].image);
-    rgp.savedScreenTimes[cmd->screenTimerId] = gfxCmdBufSourceState.sceneDef.time;
+
+    // KISAK_SP_VR_PACKED_SAVED_SCREEN_ISOLATION_V114
+    // The same 2D command list is replayed for both VR eyes. Resolving it
+    // during the first replay captures an incomplete packed target, and the
+    // second replay then replaces that shared shellshock snapshot. Capture
+    // only after the final packed view has been drawn so the saved texture
+    // contains one coherent scope/stereo frame.
+    if (RB_ShouldCaptureSavedScreenForCurrentView())
+    {
+        R_Resolve(
+            gfxCmdBufContext,
+            gfxRenderTargets[
+                R_RENDERTARGET_SAVED_SCREEN].image);
+        rgp.savedScreenTimes[cmd->screenTimerId] =
+            gfxCmdBufSourceState.sceneDef.time;
+    }
+    else
+    {
+        static bool loggedDeferredPackedSavedScreen = false;
+
+        if (!loggedDeferredPackedSavedScreen)
+        {
+            Com_Printf(
+                0,
+                "[VR] V114 deferred shellshock saved-screen capture "
+                "until the final packed view.\n");
+            loggedDeferredPackedSavedScreen = true;
+        }
+    }
 
     execState->cmd = (char *)execState->cmd + cmd->header.byteCount;
 }
@@ -986,8 +1070,15 @@ void __cdecl RB_SaveScreenSectionCmd(GfxRenderCommandExecState *execState)
     if (tess.indexCount)
         RB_EndTessSurface();
 
-    R_ResolveSection(gfxCmdBufContext, gfxRenderTargets[R_RENDERTARGET_SAVED_SCREEN].image);
-    rgp.savedScreenTimes[cmd->screenTimerId] = gfxCmdBufSourceState.sceneDef.time;
+    if (RB_ShouldCaptureSavedScreenForCurrentView())
+    {
+        R_ResolveSection(
+            gfxCmdBufContext,
+            gfxRenderTargets[
+                R_RENDERTARGET_SAVED_SCREEN].image);
+        rgp.savedScreenTimes[cmd->screenTimerId] =
+            gfxCmdBufSourceState.sceneDef.time;
+    }
 
     execState->cmd = (char *)execState->cmd + cmd->header.byteCount;
 }
@@ -1035,17 +1126,36 @@ void __cdecl RB_BlendSavedScreenBlurredCmd(GfxRenderCommandExecState *execState)
             alpha = 0.99f;
         screenWidth = (double)gfxCmdBufSourceState.renderTargetWidth * cmd->ds;
         screenHeight = (double)gfxCmdBufSourceState.renderTargetHeight * cmd->dt;
-        R_SetCodeImageTexture(&gfxCmdBufSourceState, TEXTURE_SRC_CODE_FEEDBACK, gfxRenderTargets[R_RENDERTARGET_SAVED_SCREEN].image);
         t1 = cmd->t0 + cmd->dt;
         s1 = cmd->s0 + cmd->ds;
+
+        float s0 = cmd->s0;
+        float t0 = cmd->t0;
+        kisak::vr::saved_screen::BlendRegion packedRegion;
+        if (RB_ResolvePackedSavedScreenBlend(
+                cmd->s0,
+                cmd->t0,
+                cmd->ds,
+                cmd->dt,
+                &packedRegion))
+        {
+            screenWidth = packedRegion.destinationWidth;
+            screenHeight = packedRegion.destinationHeight;
+            s0 = packedRegion.sourceS0;
+            t0 = packedRegion.sourceT0;
+            s1 = packedRegion.sourceS1;
+            t1 = packedRegion.sourceT1;
+        }
+
+        R_SetCodeImageTexture(&gfxCmdBufSourceState, TEXTURE_SRC_CODE_FEEDBACK, gfxRenderTargets[R_RENDERTARGET_SAVED_SCREEN].image);
         RB_DrawStretchPic(
             rgp.shellShockBlurredMaterial,
             0.0,
             0.0,
             screenWidth,
             screenHeight,
-            cmd->s0,
-            cmd->t0,
+            s0,
+            t0,
             s1,
             t1,
             ((uint8_t)SnapFloatToInt(alpha * 255.0f) << 24) | 0xFFFFFF,
@@ -1078,17 +1188,36 @@ void __cdecl RB_BlendSavedScreenFlashedCmd(GfxRenderCommandExecState *execState)
     iassert( gfxCmdBufSourceState.viewMode == VIEW_MODE_2D );
     screenWidth = (double)gfxCmdBufSourceState.renderTargetWidth * cmd->ds;
     screenHeight = (double)gfxCmdBufSourceState.renderTargetHeight * cmd->dt;
-    R_SetCodeImageTexture(&gfxCmdBufSourceState, TEXTURE_SRC_CODE_FEEDBACK, gfxRenderTargets[R_RENDERTARGET_SAVED_SCREEN].image);
     t1 = cmd->t0 + cmd->dt;
     s1 = cmd->s0 + cmd->ds;
+
+    float s0 = cmd->s0;
+    float t0 = cmd->t0;
+    kisak::vr::saved_screen::BlendRegion packedRegion;
+    if (RB_ResolvePackedSavedScreenBlend(
+            cmd->s0,
+            cmd->t0,
+            cmd->ds,
+            cmd->dt,
+            &packedRegion))
+    {
+        screenWidth = packedRegion.destinationWidth;
+        screenHeight = packedRegion.destinationHeight;
+        s0 = packedRegion.sourceS0;
+        t0 = packedRegion.sourceT0;
+        s1 = packedRegion.sourceS1;
+        t1 = packedRegion.sourceT1;
+    }
+
+    R_SetCodeImageTexture(&gfxCmdBufSourceState, TEXTURE_SRC_CODE_FEEDBACK, gfxRenderTargets[R_RENDERTARGET_SAVED_SCREEN].image);
     RB_DrawStretchPic(
         rgp.shellShockFlashedMaterial,
         0.0,
         0.0,
         screenWidth,
         screenHeight,
-        cmd->s0,
-        cmd->t0,
+        s0,
+        t0,
         s1,
         t1,
         ((uint8_t)SnapFloatToInt(cmd->intensityScreengrab * 255.0f) << 24)

@@ -88,7 +88,9 @@ single dropdown item replaces that slot with a normal one-input binding.
 
 The configurator warns when two gameplay actions share an input, but allows the
 choice because intentional overlaps are useful. Menu and context-specific axis
-bindings may overlap gameplay controls without a warning.
+bindings may overlap gameplay controls without a warning. With OpenVR selected,
+the editor also warns when Pause may share SteamVR's ApplicationMenu bit with a
+gameplay action.
 
 The grenade-launcher shortcut uses the physical **Right grip / squeeze** in a
 fresh/default profile. Night vision, airstrike, and C4 remain visible chord
@@ -102,11 +104,25 @@ The remaining directional layout is:
 | Left | Airstrike / mission slot 6 |
 | Right | C4 / mission slot 7 |
 
-On the legacy SteamVR/OpenVR controller path, a right-thumbrest directional
-chord must begin with both sticks centered. Touch and hold the centered right
-stick, then move the left stick in the requested direction. Moving the right
-stick cancels the selector so normal walking and turning cannot trigger one of
-these shortcuts.
+SteamVR's legacy controller-state API cannot expose an independent capacitive
+thumbrest. V105 therefore disables `thumbrest_touch` on OpenVR instead of
+misreporting ordinary joystick contact, and the OpenVR press-to-bind mapper does
+not capture it. Select **OpenVR safe controls** in the Configurator for a
+conflict-free legacy layout. The preset keeps Pause on the off-hand
+secondary/menu button, moves Next weapon to the dominant thumbstick click, and
+uses the following off-hand trigger + off-hand primary-axis selector:
+
+| Direction | Action |
+|---|---|
+| Up | Melee |
+| Down | Night vision |
+| Left | Airstrike / mission slot 6 |
+| Right | C4 / mission slot 7 |
+
+Begin with both sticks centered, hold the off-hand trigger, and then move the
+off-hand stick in the requested direction. Moving the dominant stick cancels
+the selector. The preset and automatic untouched-profile upgrade mirror these
+bindings for left-handed play, including when Automatic falls back to OpenVR.
 
 ## Physical night-vision visor gesture
 
@@ -165,6 +181,20 @@ are migrated to Off or Full when the configurator loads them.
 components alone. **Apply seated + recenter position** changes posture/height
 and recenters translation without changing the direction/level baseline.
 
+## Floating off-hand fit
+
+The six off-hand controls under **Weapons & Hands** affect only the standalone
+floating glove. V107 uses a real SteamVR `openxr_handmodel` component as a palm
+surface when one is available. If OpenVR supplies only a semantic grip or raw
+tracked-device pose, the glove uses grip-frame anatomy rather than falsely
+labeling that controller frame as `palm_ext/pose`. Weapon aiming, the attached
+support hand, reload interactions, and gestures keep their existing poses.
+
+Reset all six values to zero before evaluating V107 if an earlier OpenVR
+workaround used a large rotation. Pitch/Yaw/Roll then refine only the visual
+orientation. Forward/Left/Up remain aligned with the tracked controller axes,
+so rotating the glove no longer rotates the meaning of the translation fields.
+
 ## Per-weapon and gunstock calibration
 
 Open **Weapons & Hands** and choose **Open calibration editor**. Keep the six
@@ -181,6 +211,14 @@ stable internal weapon id rather than relying on a display name. Adjust the
 hip-fire layer first, then select the shouldered/ADS or gunstock layer and use
 **Apply live**. Moving the support hand onto or off the foregrip and entering
 or leaving ADS should transition without a pose snap.
+
+V108 treats the support hand as a relative steering input. At engagement it
+anchors the physical two-controller relationship to the already calibrated
+one-hand weapon pose; it does not rebuild an absolute weapon basis from the
+raw controller line. Moving both hands together therefore keeps the selected
+Pitch/Yaw/Roll fit, while moving the support hand relative to the weapon hand
+steers normally. On release, the last held steering delta is frozen during the
+short blend back to one-hand aim so a departing off hand cannot tug the weapon.
 
 For a physical stock, create or select a gunstock and choose **Guided aim
 capture** from its layer. Shoulder it normally and aim at a fixed point ahead
@@ -226,8 +264,10 @@ instead. Press-to-bind is the safest way to learn what the active runtime and
 driver expose.
 
 SteamVR/OpenVR uses the same saved action model through legacy controller-state
-discovery. Some drivers alias face, menu, grip, and touch components, so inspect
-the configurator's conflict warnings and test the result in-game.
+discovery. The legacy API has no separate thumbrest source, and most controller
+profiles publish secondary/menu through the same ApplicationMenu bit. Use the
+**OpenVR safe controls** preset, inspect the Configurator's conflict warnings,
+and test the result in-game.
 
 ## Physical interactions
 

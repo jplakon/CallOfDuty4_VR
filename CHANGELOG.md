@@ -4,6 +4,99 @@
 
 _No changes yet._
 
+## v0.10.0-beta.16
+
+Cumulative V105-V115 VR fixes over `v0.10.0-beta.15`. Issue #67 and the
+original attach/release snap in #61 have reporter hardware confirmation. The
+remaining issue-specific fixes below have
+passed their available automated checks but still await confirmation on the
+reported headset/runtime combinations.
+
+- V115 addresses issue #46's distant dogs sinking, rising, and tumbling while
+  running toward the player. The reconstructed single-player body-ground helper
+  had its roll-angle and vertical-height output blocks reversed.
+- Dog ground planting now keeps forward pitch, side roll, and vertical height
+  in their intended outputs, matching the corrected upstream KisakCOD source.
+  The change also corrects the same output mix-up for planted actor corpses;
+  reporter headset confirmation remains pending.
+- V114 addresses issue #48's brief yellow/pink NPC and vehicle frames during
+  scripted flashes and shellshock. The shared 2D command list was saving the
+  packed VR framebuffer once per eye, so the first save could contain an
+  incomplete stereo frame and the second save could replace it mid-effect.
+- Packed VR now captures shellshock feedback only after the final view and
+  maps saved-screen blur/flash sampling to the current eye's exact packed
+  region. The two-eye and scope-plus-two-eye layouts are covered, while the
+  desktop/non-VR saved-screen path is unchanged. Reporter headset confirmation
+  remains pending.
+- V113 addresses issue #49's Ultimatum sky streaks. COD4 marks each VR eye as
+  fullscreen even though both eyes share one packed render target; the retail
+  glow, depth-of-field, and blur passes then downsample through an eye-local
+  viewport and can read unrelated packed regions.
+- Packed stereo now retains the viewport-safe film/color pass per eye while
+  isolating the unsafe whole-target filters. Desktop/non-VR rendering is
+  unchanged, and headset confirmation remains pending.
+- V112 addresses issue #64's AK/Javelin FPS collapse by isolating the retired
+  weapon-slot-7 diagnostic trace from ordinary verbose diagnostics. Weapon
+  indices are level-local, so the old Javelin slot can identify an unrelated
+  weapon such as Blackout's first-house AK.
+- The trace's synchronous weapon, frame, HUD, reticle, and menu logging—dozens
+  to hundreds of lines per rendered frame—now requires the explicit hidden
+  `KISAK_VR_LEGACY_JAVELIN_TRACE=1` developer flag. Normal and one-shot verbose
+  diagnostics retain bounded controller and pose evidence without that cost.
+- V111 addresses issue #66 on the SteamVR/OpenVR fallback. Packed-layout discovery
+  now reads OpenVR's persistent eye targets instead of requiring OpenXR
+  swapchains that do not exist on that backend.
+- Performance mode now splits `4768x2016` into two `1872x2016` gameplay eyes
+  plus the dedicated 1024-pixel scope panel. The menu and mission renderer,
+  captured source, FSR path, and compositor therefore share one width.
+- V110 addresses issue #65 by neutral-gating both VR stance paths at gameplay
+  entry. A lower-stance stick direction or tap/hold stance button carried
+  through mission loading can no longer be interpreted as a fresh crouch or
+  prone command on the first playable frame.
+- Opening a menu also disarms both stance paths. After gameplay resumes, the
+  controls must be released once before deliberate tap-crouch, hold-prone, or
+  one-step lower-stance input is accepted again.
+- V109 fixes issue #67 by restoring single-player vehicle material timing.
+  Tank tread texture animation now follows the server-owned movement phase
+  instead of the renderer's always-running global scene clock.
+- The client interpolates the current and next vehicle phase exactly as the
+  multiplayer renderer does, so stopped tracks remain still while moving
+  tracks continue smoothly and in the authored direction.
+- V108 fixes issue #61's original attach/release snap by replacing the absolute controller-to-controller
+  two-hand aim override with calibrated relative steering. Attaching the
+  support hand captures the current physical hand relationship, so even large
+  global, per-weapon, or gunstock Pitch/Yaw/Roll values remain the no-snap
+  blend origin.
+- Moving both hands together no longer adds a second rotation. Moving only the
+  support hand supplies the steering delta, and releasing freezes the last
+  held delta while the configured two-hand blend decays back to one-hand aim.
+  Smaller off-center roll/pivot feel and magazine-hand alignment concerns
+  remain under investigation.
+- V107 addresses issue #76 on the OpenVR backend: a raw-device or semantic grip
+  pose is no longer published or logged as `palm_ext/pose`. The floating
+  off-hand glove uses SteamVR's dedicated `openxr_handmodel` component when it
+  exists and otherwise selects the existing grip-frame anatomical fallback.
+- The correction is isolated to the standalone glove. Weapon aim, support
+  grip, reload, gestures, and native OpenXR pose behavior are unchanged.
+  Forward/Left/Up hand-fit offsets now remain on the tracked controller axes
+  even when a large Pitch/Yaw/Roll visual adjustment is applied.
+- V106 fixes issue #75 for wide and canted-FOV headsets by lowering every HUD
+  group-scale and safe-area floor from `0.50` to `0.25`; existing defaults and
+  saved layouts remain unchanged.
+- Finite HUD environment overrides now clamp to the nearest legal value instead
+  of reverting to an unrelated default. Malformed and non-finite values still
+  fail safely to the tested default.
+- V105 fixes issue #74 on the legacy OpenVR controller path: joystick contact
+  can no longer masquerade as an independent thumbrest touch in gameplay or
+  press-to-bind.
+- Adds an **OpenVR safe controls** preset and automatically upgrades untouched
+  layouts whenever the OpenVR backend actually runs. Its neutral-entry off-hand
+  trigger + stick selector covers melee, night vision, airstrike, and C4;
+  weapon cycling moves away from the menu button.
+- The Configurator hides unavailable thumbrest choices while OpenVR is selected
+  and warns about both saved thumbrest bindings and the common
+  secondary/ApplicationMenu alias.
+
 ## v0.10.0-beta.15
 
 Cumulative post-beta.14 VR fixes from the V98-V104 validation chain.

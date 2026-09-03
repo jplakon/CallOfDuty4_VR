@@ -7,11 +7,15 @@
 #include "vr/vr_compatibility.h"
 #include "vr/vr_openvr_input.h"
 #include "vr/vr_openxr_profiles.h"
+#include "vr/vr_packed_layout.h"
+#include "vr/vr_postfx_policy.h"
+#include "vr/vr_saved_screen_policy.h"
 #include "vr/vr_prompt_labels.h"
 #include "vr/vr_weapon_calibration.h"
 #include "vr/vr_weapon_profiles.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -26,6 +30,9 @@ namespace vint = kisak::vr::interactions;
 namespace vc = kisak::vr::calibration;
 namespace vrc = kisak::vr::compatibility;
 namespace vh = kisak::vr::hud;
+namespace vpl = kisak::vr::packed_layout;
+namespace vpost = kisak::vr::postfx;
+namespace vsaved = kisak::vr::saved_screen;
 namespace vp = kisak::vr::prompts;
 namespace vwp = kisak::vr::weapon_profiles;
 
@@ -110,6 +117,232 @@ std::size_t CountOccurrences(
 
 int main(const int argumentCount, char** arguments)
 {
+    {
+        Check(
+            !vsaved::ShouldCaptureFullPackedFrame(
+                true,
+                2u,
+                0u) &&
+                vsaved::ShouldCaptureFullPackedFrame(
+                    true,
+                    2u,
+                    1u) &&
+                !vsaved::ShouldCaptureFullPackedFrame(
+                    true,
+                    3u,
+                    1u) &&
+                vsaved::ShouldCaptureFullPackedFrame(
+                    true,
+                    3u,
+                    2u) &&
+                vsaved::ShouldCaptureFullPackedFrame(
+                    false,
+                    2u,
+                    0u),
+            "issue #48 V114 should save shellshock feedback only after the final packed VR view while retaining retail capture behavior");
+
+        vsaved::BlendRegion left;
+        vsaved::BlendRegion right;
+        Check(
+            vsaved::ResolvePackedBlendRegion(
+                true,
+                2u,
+                0u,
+                2844,
+                1190,
+                0,
+                0,
+                1422,
+                1190,
+                0.0f,
+                0.0f,
+                1.0f,
+                1.0f,
+                &left) &&
+                vsaved::ResolvePackedBlendRegion(
+                    true,
+                    2u,
+                    1u,
+                    2844,
+                    1190,
+                    1422,
+                    0,
+                    1422,
+                    1190,
+                    0.0f,
+                    0.0f,
+                    1.0f,
+                    1.0f,
+                    &right) &&
+                NearlyEqual(left.destinationWidth, 1422.0f) &&
+                NearlyEqual(left.destinationHeight, 1190.0f) &&
+                NearlyEqual(left.sourceS0, 0.0f) &&
+                NearlyEqual(left.sourceS1, 0.5f) &&
+                NearlyEqual(right.sourceS0, 0.5f) &&
+                NearlyEqual(right.sourceS1, 1.0f),
+            "issue #48 V114 should blend each eye from its matching half of the coherent saved packed frame");
+    }
+
+    {
+        Check(
+            vpost::UseEyeLocalColorOnly(true, 2u, true) &&
+                vpost::UseEyeLocalColorOnly(true, 3u, true),
+            "issue #49 V113 should isolate whole-target post effects for two-eye and scope-plus-two-eye packed rendering");
+        Check(
+            !vpost::UseEyeLocalColorOnly(false, 2u, true) &&
+                !vpost::UseEyeLocalColorOnly(true, 1u, true) &&
+                !vpost::UseEyeLocalColorOnly(true, 4u, true) &&
+                !vpost::UseEyeLocalColorOnly(true, 2u, false),
+            "issue #49 V113 should preserve retail and non-fullscreen post-effect behavior outside packed stereo");
+    }
+
+    {
+        vpl::CaptureLayout performance;
+        Check(
+            vpl::ResolveCaptureLayout(
+                4768,
+                2016,
+                1872,
+                1872,
+                1024,
+                &performance) &&
+                performance.mainStereoWidth == 3744 &&
+                performance.scopePanelX == 3744 &&
+                performance.scopePanelY == 0 &&
+                performance.scopePanelSize == 1024,
+            "issue #66 V111 should keep Performance mode at two 1872-pixel eyes plus the dedicated 1024-pixel scope panel");
+
+        vpl::CaptureLayout native;
+        Check(
+            vpl::ResolveCaptureLayout(
+                6016,
+                2688,
+                2496,
+                2496,
+                1024,
+                &native) &&
+                native.mainStereoWidth == 4992 &&
+                native.scopePanelX == 4992 &&
+                native.scopePanelSize == 1024,
+            "issue #66 V111 should preserve the Native packed layout");
+
+        Check(
+            !vpl::ResolveCaptureLayout(
+                4768,
+                2016,
+                2384,
+                2384,
+                1024,
+                &performance) &&
+                !vpl::ResolveCaptureLayout(
+                    1024,
+                    400,
+                    256,
+                    256,
+                    1024,
+                    &performance),
+            "issue #66 V111 should reject a split that consumes the scope panel or cannot hold the minimum scope source");
+    }
+
+    {
+        vi::GameplayButtonGateState gate;
+
+        const vi::GameplayButtonGateUpdate loadingHeld =
+            vi::UpdateGameplayButtonGate(
+                &gate,
+                false,
+                true);
+        const vi::GameplayButtonGateUpdate firstGameplayHeld =
+            vi::UpdateGameplayButtonGate(
+                &gate,
+                true,
+                true);
+        const vi::GameplayButtonGateUpdate gameplayNeutral =
+            vi::UpdateGameplayButtonGate(
+                &gate,
+                true,
+                false);
+        const vi::GameplayButtonGateUpdate deliberatePress =
+            vi::UpdateGameplayButtonGate(
+                &gate,
+                true,
+                true);
+        const vi::GameplayButtonGateUpdate deliberateRelease =
+            vi::UpdateGameplayButtonGate(
+                &gate,
+                true,
+                false);
+
+        Check(
+            !loadingHeld.inputAccepted &&
+                !loadingHeld.pressedThisFrame &&
+                !firstGameplayHeld.inputAccepted &&
+                !firstGameplayHeld.pressedThisFrame,
+            "issue #65 V110 should suppress a stance control carried from loading into the first gameplay frame");
+        Check(
+            gameplayNeutral.inputAccepted &&
+                !gameplayNeutral.releasedThisFrame &&
+                deliberatePress.inputAccepted &&
+                deliberatePress.pressedThisFrame,
+            "issue #65 V110 should arm stance input only after observing neutral gameplay input");
+        Check(
+            deliberateRelease.inputAccepted &&
+                deliberateRelease.releasedThisFrame,
+            "issue #65 V110 should preserve ordinary tap and hold release edges after neutral entry");
+
+        const vi::GameplayButtonGateUpdate menuInterrupt =
+            vi::UpdateGameplayButtonGate(
+                &gate,
+                false,
+                true);
+        const vi::GameplayButtonGateUpdate resumedHeld =
+            vi::UpdateGameplayButtonGate(
+                &gate,
+                true,
+                true);
+        Check(
+            !menuInterrupt.inputAccepted &&
+                !menuInterrupt.releasedThisFrame &&
+                !resumedHeld.inputAccepted &&
+                !resumedHeld.pressedThisFrame,
+            "issue #65 V110 should cancel stance edges whenever a menu interrupts gameplay");
+
+        vi::GameplayButtonGateState loadingTransitionGate;
+        vi::UpdateGameplayButtonGate(
+            &loadingTransitionGate,
+            true,
+            false);
+        const vi::GameplayButtonGateUpdate beforeLoading =
+            vi::UpdateGameplayButtonGate(
+                &loadingTransitionGate,
+                true,
+                true);
+        vi::ResetGameplayButtonGate(
+            &loadingTransitionGate);
+        const vi::GameplayButtonGateUpdate heldAfterLoading =
+            vi::UpdateGameplayButtonGate(
+                &loadingTransitionGate,
+                true,
+                true);
+        const vi::GameplayButtonGateUpdate neutralAfterLoading =
+            vi::UpdateGameplayButtonGate(
+                &loadingTransitionGate,
+                true,
+                false);
+        const vi::GameplayButtonGateUpdate pressedAfterLoading =
+            vi::UpdateGameplayButtonGate(
+                &loadingTransitionGate,
+                true,
+                true);
+        Check(
+            beforeLoading.pressedThisFrame &&
+                !heldAfterLoading.inputAccepted &&
+                !heldAfterLoading.pressedThisFrame &&
+                neutralAfterLoading.inputAccepted &&
+                pressedAfterLoading.pressedThisFrame,
+            "issue #65 V110 should explicitly disarm a previously armed stance gate across a mission-loading transition");
+    }
+
     {
         const vg::HeadLocalPosition crown = {
             -0.15f,
@@ -378,15 +611,33 @@ int main(const int argumentCount, char** arguments)
                 vi::Action::NightVision,
                 "right.thumbrest_touch+left.primary_axis.down",
                 &guardedBinding) &&
-                vi::UsesOpenVrMissionSelector(guardedBinding),
+                vi::UsesMissionSelector(
+                    guardedBinding,
+                    vi::Source::RightThumbrestTouch,
+                    vi::Source::LeftPrimaryAxis),
             "V79 should guard the default OpenVR mission-selector chord");
         Check(
             vi::ParseBinding(
                 vi::Action::NightVision,
                 "right.thumbrest_touch+right.primary_axis.down",
                 &unrelatedBinding) &&
-                !vi::UsesOpenVrMissionSelector(unrelatedBinding),
+                !vi::UsesMissionSelector(
+                    unrelatedBinding,
+                    vi::Source::RightThumbrestTouch,
+                    vi::Source::LeftPrimaryAxis),
             "V79 should not rewrite a custom non-left-axis chord");
+
+        vi::Binding openVrSafeBinding;
+        Check(
+            vi::ParseBinding(
+                vi::Action::NightVision,
+                "left.trigger+left.primary_axis.down",
+                &openVrSafeBinding) &&
+                vi::UsesMissionSelector(
+                    openVrSafeBinding,
+                    vi::Source::LeftTrigger,
+                    vi::Source::LeftPrimaryAxis),
+            "issue #74 V105 should guard the OpenVR trigger plus off-hand-axis selector");
 
         const vi::OpenVrVector2 neutral = {};
         const vi::OpenVrVector2 leftUp = {0.0f, 0.9f};
@@ -822,6 +1073,145 @@ int main(const int argumentCount, char** arguments)
     }
 
     {
+        const float identity[3][3] = {
+            {1.0f, 0.0f, 0.0f},
+            {0.0f, 1.0f, 0.0f},
+            {0.0f, 0.0f, 1.0f},
+        };
+        const float yawThirty[3][3] = {
+            {0.8660254f, 0.5f, 0.0f},
+            {-0.5f, 0.8660254f, 0.0f},
+            {0.0f, 0.0f, 1.0f},
+        };
+        const float yawNinety[3][3] = {
+            {0.0f, 1.0f, 0.0f},
+            {-1.0f, 0.0f, 0.0f},
+            {0.0f, 0.0f, 1.0f},
+        };
+        const auto axesNear = [](
+                                  const float left[3][3],
+                                  const float right[3][3])
+        {
+            for (int row = 0; row < 3; ++row)
+            {
+                for (int column = 0; column < 3; ++column)
+                {
+                    if (std::fabs(
+                            left[row][column] -
+                            right[row][column]) > 0.0001f)
+                    {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        };
+
+        const float weaponHandPosition[3] = {0.0f, 0.0f, 0.0f};
+        const float offHandPosition[3] = {12.0f, 0.0f, 0.0f};
+        float engagementTarget[3][3] = {};
+        Check(
+            kisak::vr::weapon_calibration::BuildTwoHandTargetAxis(
+                weaponHandPosition,
+                offHandPosition,
+                identity,
+                engagementTarget) &&
+                axesNear(engagementTarget, identity),
+            "issue #61 V108 should build a stable physical two-hand frame from the controller line");
+
+        float anchoredTargetWeapon[3][3] = {};
+        kisak::vr::weapon_calibration::RelativeTwoHandWeaponAxis(
+            engagementTarget,
+            identity,
+            identity,
+            yawThirty,
+            engagementTarget,
+            anchoredTargetWeapon);
+        Check(
+            axesNear(anchoredTargetWeapon, yawThirty),
+            "issue #61 V108 support-hand engagement must preserve the calibrated one-hand weapon orientation exactly");
+
+        float rigidOneHandWeapon[3][3] = {};
+        kisak::vr::weapon_calibration::MultiplyAxes(
+            yawThirty,
+            yawNinety,
+            rigidOneHandWeapon);
+        float rigidTwoHandWeapon[3][3] = {};
+        kisak::vr::weapon_calibration::RelativeTwoHandWeaponAxis(
+            engagementTarget,
+            identity,
+            yawNinety,
+            rigidOneHandWeapon,
+            yawNinety,
+            rigidTwoHandWeapon);
+        Check(
+            axesNear(rigidTwoHandWeapon, rigidOneHandWeapon),
+            "issue #61 V108 moving both hands together must not add a second rotation or discard calibration");
+
+        float expectedSupportDeltaWeapon[3][3] = {};
+        kisak::vr::weapon_calibration::MultiplyAxes(
+            yawThirty,
+            yawNinety,
+            expectedSupportDeltaWeapon);
+        float actualSupportDeltaWeapon[3][3] = {};
+        kisak::vr::weapon_calibration::RelativeTwoHandWeaponAxis(
+            engagementTarget,
+            identity,
+            identity,
+            yawThirty,
+            yawNinety,
+            actualSupportDeltaWeapon);
+        Check(
+            axesNear(
+                actualSupportDeltaWeapon,
+                expectedSupportDeltaWeapon),
+            "issue #61 V108 should apply off-hand steering as a delta in the calibrated weapon frame");
+
+        float releaseOneHandWeapon[3][3] = {};
+        kisak::vr::weapon_calibration::MultiplyAxes(
+            yawNinety,
+            yawThirty,
+            releaseOneHandWeapon);
+        float expectedFrozenReleaseWeapon[3][3] = {};
+        kisak::vr::weapon_calibration::MultiplyAxes(
+            releaseOneHandWeapon,
+            yawNinety,
+            expectedFrozenReleaseWeapon);
+        float actualFrozenReleaseWeapon[3][3] = {};
+        kisak::vr::weapon_calibration::RelativeTwoHandWeaponAxis(
+            engagementTarget,
+            identity,
+            identity,
+            releaseOneHandWeapon,
+            yawNinety,
+            actualFrozenReleaseWeapon);
+        Check(
+            axesNear(
+                actualFrozenReleaseWeapon,
+                expectedFrozenReleaseWeapon),
+            "issue #61 V108 release should preserve the last relative steering delta while one-hand aim keeps tracking");
+
+        float blendedAtEngagement[3][3] = {};
+        Check(
+            kisak::vr::weapon_calibration::BlendWeaponAxes(
+                yawThirty,
+                anchoredTargetWeapon,
+                1.0f,
+                blendedAtEngagement) &&
+                axesNear(blendedAtEngagement, yawThirty),
+            "issue #61 V108 full two-hand strength must remain continuous at the captured engagement pose");
+
+        float recoveredControllerAxis[3][3] = {};
+        kisak::vr::weapon_calibration::ControllerAxisForWeaponAxis(
+            yawThirty,
+            expectedSupportDeltaWeapon,
+            recoveredControllerAxis);
+        Check(
+            axesNear(recoveredControllerAxis, yawNinety),
+            "issue #61 V108 should recover the controller basis without changing the calibrated final weapon basis");
+    }
+
+    {
         vc::Request requested;
         requested.requestId = "cfg-test-123";
         requested.command = vc::Command::MeasureStanding;
@@ -1117,6 +1507,53 @@ int main(const int argumentCount, char** arguments)
                     vh::Element::Subtitles),
                 1.25f),
             "the visual editor should resize an individual HUD group");
+
+        Check(
+            NearlyEqual(vh::kMinimumSafeArea, 0.25f) &&
+                NearlyEqual(vh::kMinimumScale, 0.25f),
+            "issue #75 V106 should allow quarter-size safe areas and HUD groups");
+        vh::Layout compactScaleLayout = layout;
+        vh::SetElementScale(
+            &compactScaleLayout,
+            vh::Element::Subtitles,
+            0.30f);
+        Check(
+            NearlyEqual(
+                vh::ElementScale(
+                    compactScaleLayout,
+                    vh::Element::Subtitles),
+                0.30f),
+            "issue #75 V106 should preserve an in-range sub-0.50 HUD scale");
+        vh::SetElementScale(
+            &compactScaleLayout,
+            vh::Element::Subtitles,
+            0.10f);
+        Check(
+            NearlyEqual(
+                vh::ElementScale(
+                    compactScaleLayout,
+                    vh::Element::Subtitles),
+                0.25f),
+            "issue #75 V106 should clamp a too-small visual-editor scale to 0.25 instead of its default");
+
+        vh::Layout compact = vh::DefaultLayout();
+        compact.safeX = 0.10f;
+        compact.safeY = -1.0f;
+        compact.ammoScale = 0.10f;
+        compact.compassScale = 0.10f;
+        compact.notificationScale = 0.10f;
+        compact.objectiveScale = 0.10f;
+        compact.subtitleScale = 0.10f;
+        vh::ClampLayout(&compact);
+        Check(
+            NearlyEqual(compact.safeX, 0.25f) &&
+                NearlyEqual(compact.safeY, 0.25f) &&
+                NearlyEqual(compact.ammoScale, 0.25f) &&
+                NearlyEqual(compact.compassScale, 0.25f) &&
+                NearlyEqual(compact.notificationScale, 0.25f) &&
+                NearlyEqual(compact.objectiveScale, 0.25f) &&
+                NearlyEqual(compact.subtitleScale, 0.25f),
+            "issue #75 V106 should clamp every finite HUD size field to the new nearest legal floor");
 
         const vh::Point compassBeforeResize = vh::ElementCenter(
             layout,
@@ -1575,6 +2012,58 @@ int main(const int argumentCount, char** arguments)
         "metric range errors should be reported in the units shown by the editor");
     values = kc::BuiltInDefaults();
     {
+        const std::array<const char*, 7> compactHudKeys = {{
+            "KISAK_VR_HUD_SAFE_X",
+            "KISAK_VR_HUD_SAFE_Y",
+            "KISAK_VR_HUD_BOTTOM_LEFT_SCALE",
+            "KISAK_VR_COMPASS_SIZE",
+            "KISAK_VR_GAME_MESSAGE_SCALE",
+            "KISAK_VR_OBJECTIVE_MESSAGE_SCALE",
+            "KISAK_VR_SUBTITLE_SCALE",
+        }};
+        kc::SettingsMap compactValues = values;
+        bool catalogUsesQuarterFloor = true;
+        for (const char* const key : compactHudKeys)
+        {
+            const kc::SettingDefinition* const definition =
+                kc::FindSetting(key);
+            catalogUsesQuarterFloor =
+                catalogUsesQuarterFloor &&
+                definition != nullptr &&
+                std::abs(definition->minimumValue - 0.25) < 0.000001;
+            compactValues[key] = "0.25";
+        }
+        Check(
+            catalogUsesQuarterFloor &&
+                kc::ValidateSettings(compactValues).empty(),
+            "issue #75 V106 Configurator fields should accept 0.25 for every safe-area and HUD scale control");
+
+        compactValues["KISAK_VR_COMPASS_SIZE"] = "0.24";
+        Check(
+            HasError(
+                kc::ValidateSettings(compactValues),
+                "KISAK_VR_COMPASS_SIZE"),
+            "issue #75 V106 Configurator validation should retain a hard safety floor below 0.25");
+
+        compactValues = values;
+        compactValues["KISAK_VR_HUD_SAFE_X"] = "0.30";
+        compactValues["KISAK_VR_COMPASS_SIZE"] = "0.30";
+        vh::Layout compactLayout =
+            kc::HudLayoutFromSettings(compactValues);
+        Check(
+            NearlyEqual(compactLayout.safeX, 0.30f) &&
+                NearlyEqual(compactLayout.compassScale, 0.30f),
+            "issue #75 V106 settings-to-HUD conversion should preserve valid sub-0.50 values");
+
+        compactValues["KISAK_VR_HUD_SAFE_X"] = "0.10";
+        compactValues["KISAK_VR_COMPASS_SIZE"] = "0.10";
+        compactLayout = kc::HudLayoutFromSettings(compactValues);
+        Check(
+            NearlyEqual(compactLayout.safeX, 0.25f) &&
+                NearlyEqual(compactLayout.compassScale, 0.25f),
+            "issue #75 V106 settings-to-HUD conversion should clamp finite out-of-range values instead of restoring defaults");
+    }
+    {
         vh::Layout edited = kc::HudLayoutFromSettings(values);
         const vh::Point defaultCompassCenter =
             vh::ElementCenter(edited, vh::Element::Compass);
@@ -1842,6 +2331,54 @@ int main(const int argumentCount, char** arguments)
                     "[VR][OPENXR][CONTROLS] V103 guarded mission selector") !=
                     std::string::npos,
             "issues #52/#60 V103 must apply the neutral-entry mission selector to native OpenXR before any Quest thumbrest chord can lock locomotion");
+        const std::size_t packedLayoutStart =
+            runtime.find(
+                "bool VR_GetPhysicalSniperScopeCaptureLayout(");
+        const std::size_t packedLayoutEnd =
+            runtime.find(
+                "bool VR_GetPhysicalSniperScopeRenderView(",
+                packedLayoutStart);
+        const std::string packedLayout =
+            packedLayoutStart != std::string::npos &&
+                    packedLayoutEnd > packedLayoutStart
+                ? runtime.substr(
+                      packedLayoutStart,
+                      packedLayoutEnd - packedLayoutStart)
+                : std::string();
+        Check(
+            runtime.find(
+                "KISAK_SP_VR_OPENVR_PACKED_LAYOUT_V111") !=
+                    std::string::npos &&
+                packedLayout.find(
+                    "VrRuntimeBackend::OpenVr") !=
+                    std::string::npos &&
+                packedLayout.find(
+                    "g_vrOpenVrEyeTargets[0].width") !=
+                    std::string::npos &&
+                packedLayout.find(
+                    "VrRuntimeBackend::OpenXr") !=
+                    std::string::npos &&
+                packedLayout.find(
+                    "g_vrEyeSwapchains[0].width") !=
+                    std::string::npos &&
+                packedLayout.find(
+                    "ResolveCaptureLayout(") !=
+                    std::string::npos &&
+                runtime.find(
+                    "[VR][LAYOUT] V111 %s packed dedicated scope layout") !=
+                    std::string::npos,
+            "issue #66 V111 must resolve packed gameplay width from the active backend's real eye targets instead of requiring OpenXR swapchains on OpenVR");
+        Check(
+            runtime.find(
+                "VR_ApplyOpenVrSafeBindingCompatibility(&settings)") !=
+                    std::string::npos &&
+                runtime.find(
+                    "[VR][OPENVR][CONTROLS] V105 upgraded the untouched") !=
+                    std::string::npos &&
+                runtime.find(
+                    "[VR][OPENVR][CONTROLS] V105 safe mission selector") !=
+                    std::string::npos,
+            "issue #74 V105 must apply the safe layout after an automatic or explicit OpenVR backend is selected");
         Check(
             launcher.find("STATUS=LAUNCHER_VERIFIED") != std::string::npos &&
                 launcher.find("Active-VR-Settings.txt") != std::string::npos &&
@@ -1862,7 +2399,7 @@ int main(const int argumentCount, char** arguments)
                 launcher.find("compatibility preflight found a launch blocker") !=
                     std::string::npos &&
                 launcher.find("--validate") != std::string::npos,
-            "the launcher should validate overrides, run beta.14 preflight, and publish every guarded state path");
+            "the launcher should validate overrides, run the current preflight, and publish every guarded state path");
         Check(
             launcher.find(
                 "KISAK_SP_VR_PIMAX_X86_RUNTIME_V86") !=
@@ -1988,6 +2525,26 @@ int main(const int argumentCount, char** arguments)
                 runtime.find("RUNTIME_COMPATIBILITY_LEFT_CONTROLLER") !=
                     std::string::npos,
             "the game should acknowledge settings, calibration, compatibility, live HUD editing, and per-weapon/gunstock lifecycle receipts");
+        Check(
+            runtime.find(
+                "KISAK_SP_VR_CALIBRATED_TWO_HAND_STEERING_V108") !=
+                    std::string::npos &&
+                runtime.find("BuildTwoHandTargetAxis") !=
+                    std::string::npos &&
+                runtime.find("RelativeTwoHandWeaponAxis") !=
+                    std::string::npos &&
+                runtime.find("ControllerAxisForWeaponAxis") !=
+                    std::string::npos &&
+                runtime.find(
+                    "g_vrTwoHandWeaponAnchorCaptureRequested = true") !=
+                    std::string::npos &&
+                runtime.find(
+                    "g_vrTwoHandWeaponLastActiveFrameValid") !=
+                    std::string::npos &&
+                runtime.find(
+                    "V108 applied calibrated relative") !=
+                    std::string::npos,
+            "issue #61 V108 must anchor two-hand engagement and steer from the calibrated weapon frame");
         const std::size_t openVrControllerUpdate =
             runtime.find("bool VR_UpdateOpenVrControllerActions()");
         const std::size_t openVrTwoHandUpdate =
@@ -2141,6 +2698,12 @@ int main(const int argumentCount, char** arguments)
             root / "src/cgame/cg_compass.cpp");
         const std::string rendererScene = Read(
             root / "src/gfx_d3d/r_scene.cpp");
+        const std::string rendererDraw3d = Read(
+            root / "src/gfx_d3d/rb_draw3d.cpp");
+        const std::string rendererPostFx = Read(
+            root / "src/gfx_d3d/rb_postfx.cpp");
+        const std::string rendererBackend = Read(
+            root / "src/gfx_d3d/rb_backend.cpp");
         const std::string draw = Read(
             root / "src/cgame/cg_draw.cpp");
         const std::string reticles = Read(
@@ -2160,8 +2723,12 @@ int main(const int argumentCount, char** arguments)
             root / "src/cgame/cg_draw_debug.cpp");
         const std::string weapons = Read(
             root / "src/cgame/cg_weapons.cpp");
+        const std::string cgameEntities = Read(
+            root / "src/cgame/cg_ents.cpp");
         const std::string clientInput = Read(
             root / "src/client/cl_input.cpp");
+        const std::string clientMain = Read(
+            root / "src/client/cl_main.cpp");
         const std::string clientScreen = Read(
             root / "src/client/cl_scrn.cpp");
         const std::string promptLabels = Read(
@@ -2184,6 +2751,122 @@ int main(const int argumentCount, char** arguments)
             root / "tools/configurator/compatibility_probe_win32.cpp");
         const std::string configuratorBuild = Read(
             root / "tools/configurator/CMakeLists.txt");
+        Check(
+            rendererBackend.find(
+                "KISAK_SP_VR_PACKED_SAVED_SCREEN_ISOLATION_V114") !=
+                    std::string::npos &&
+                rendererBackend.find(
+                    "RB_ShouldCaptureSavedScreenForCurrentView()") !=
+                    std::string::npos &&
+                CountOccurrences(
+                    rendererBackend,
+                    "RB_ResolvePackedSavedScreenBlend(") == 3u &&
+                rendererBackend.find(
+                    "V114 deferred shellshock saved-screen capture") !=
+                    std::string::npos,
+            "issue #48 V114 must defer packed saved-screen capture and map shellshock feedback to the current VR view");
+        Check(
+            rendererDraw3d.find(
+                "KISAK_SP_VR_PACKED_POSTFX_ISOLATION_V113") !=
+                    std::string::npos &&
+                rendererDraw3d.find(
+                    "UseEyeLocalColorOnly(") !=
+                    std::string::npos &&
+                rendererDraw3d.find(
+                    "RB_ApplyColorManipulationViewport(viewInfo);") !=
+                    std::string::npos &&
+                rendererDraw3d.find(
+                    "fullscreen glow/DOF/blur") !=
+                    std::string::npos &&
+                rendererPostFx.find(
+                    "void __cdecl RB_ApplyColorManipulationViewport(") !=
+                    std::string::npos &&
+                rendererPostFx.find(
+                    "RB_SplitScreenFilter(rgp.postFxColorMaterial, viewInfo);") !=
+                    std::string::npos,
+            "issue #49 V113 must bypass unsafe fullscreen image filters in packed stereo while retaining viewport-local film color");
+        Check(
+            clientInput.find(
+                "KISAK_SP_VR_ISSUE65_STANCE_NEUTRAL_ENTRY_V110") !=
+                    std::string::npos &&
+                CountOccurrences(
+                    clientInput,
+                    "UpdateGameplayButtonGate(") == 2u &&
+                clientInput.find("&vrLowerStanceGate") !=
+                    std::string::npos &&
+                clientInput.find("&vrStanceGate") !=
+                    std::string::npos &&
+                clientInput.find(
+                    "void CL_ResetVrStanceInputGates()") !=
+                    std::string::npos &&
+                CountOccurrences(
+                    clientMain,
+                    "CL_ResetVrStanceInputGates();") >= 2u,
+            "issue #65 V110 must neutral-gate both stance controls and explicitly reset them across mission loading");
+        Check(
+            cgameEntities.find(
+                "KISAK_SP_VR_ISSUE67_VEHICLE_MATERIAL_TIME_V109") !=
+                    std::string::npos &&
+                cgameEntities.find(
+                    "cent->currentState.u.vehicle.materialTime < 0") !=
+                    std::string::npos &&
+                cgameEntities.find(
+                    "p_nextState->lerp.u.vehicle.materialTime -") !=
+                    std::string::npos &&
+                cgameEntities.find(
+                    "cgameGlob->frameInterpolation") !=
+                    std::string::npos &&
+                cgameEntities.find(
+                    "cgameGlob->time - materialTimeReference") !=
+                    std::string::npos &&
+                cgameEntities.find(
+                    "cent->pose.origin, 0.0f); // KISAKTODO") ==
+                    std::string::npos,
+            "issue #67 V109 must submit the interpolated server-owned vehicle material phase instead of the global scene clock");
+        Check(
+            runtime.find(
+                "KISAK_SP_VR_HUD_RANGE_CLAMP_V106") !=
+                    std::string::npos &&
+                CountOccurrences(
+                    runtime,
+                    "VR_ReadConfiguratorClampedFloat(") == 8u &&
+                runtime.find(
+                    "[VR][CONFIG] Clamping %s='%s' to %.3f.") !=
+                    std::string::npos &&
+                runtime.find(
+                    "VrHud::kMinimumSafeArea") !=
+                    std::string::npos &&
+                runtime.find(
+                    "\"KISAK_VR_COMPASS_SIZE\"") !=
+                    std::string::npos,
+            "issue #75 V106 runtime should preserve valid compact HUD values and clamp finite out-of-range HUD values instead of replacing them with defaults");
+        Check(
+            runtime.find(
+                "KISAK_SP_VR_RETIRED_JAVELIN_TRACE_GATE_V112") !=
+                    std::string::npos &&
+                runtime.find(
+                    "KISAK_VR_LEGACY_JAVELIN_TRACE") !=
+                    std::string::npos &&
+                runtimeHeader.find(
+                    "bool VR_LegacyJavelinDiagnosticsEnabled();") !=
+                    std::string::npos &&
+                CountOccurrences(
+                    weapons,
+                    "VR_LegacyJavelinDiagnosticsEnabled()") == 1u &&
+                CountOccurrences(
+                    cgameView,
+                    "VR_LegacyJavelinDiagnosticsEnabled()") == 1u &&
+                CountOccurrences(
+                    draw,
+                    "VR_LegacyJavelinDiagnosticsEnabled()") == 1u &&
+                CountOccurrences(
+                    reticles,
+                    "VR_LegacyJavelinDiagnosticsEnabled()") == 1u &&
+                weapons.find(
+                    "VR_VerboseDiagnosticsEnabled() ||\n"
+                    "        weaponNum != 7") ==
+                    std::string::npos,
+            "issue #64 V112 must keep the retired level-local weapon-slot-7 log storm behind a separate developer-only flag");
         const std::size_t interactionPriority =
             runtime.find(
                 "KISAK_SP_VR_OFFHAND_INTERACTION_PRIORITY_V86");
@@ -2268,7 +2951,7 @@ int main(const int argumentCount, char** arguments)
                     "VR_PublishLeftControllerPalmPose(") !=
                     std::string::npos &&
                 runtime.find(
-                    "openVrIndexOffHand\n                    ? controllerPalmPose") !=
+                    "controllerPalmPose,\n                poseValid && semanticPalmPose") !=
                     std::string::npos &&
                 runtime.find(
                     "VR_PublishLeftControllerForegripPose(\n                controllerGripPose") !=
@@ -2283,6 +2966,38 @@ int main(const int argumentCount, char** arguments)
                     "openVrIndexGripBasis") ==
                     std::string::npos,
             "issue #35 V102 must use the Index render model's dedicated openxr_handmodel pose only for the off-hand visual while preserving V98 squeeze input and the existing support/reload grip basis");
+        Check(
+            runtime.find(
+                "KISAK_SP_VR_OPENVR_RAW_HAND_BASIS_V107") !=
+                    std::string::npos &&
+                runtime.find(
+                    "const bool openVrOffHand =") !=
+                    std::string::npos &&
+                runtime.find(
+                    "if (openVrOffHand)") !=
+                    std::string::npos &&
+                runtime.find(
+                    "renderPose.palmValid =\n            poseValid && semanticPalmPose") !=
+                    std::string::npos &&
+                runtime.find(
+                    "grip-frame anatomy instead of mislabeling") !=
+                    std::string::npos &&
+                runtime.find(
+                    "it as palm_ext/pose") !=
+                    std::string::npos &&
+                runtime.find(
+                    "openVrIndexOffHand\n                    ? controllerPalmPose") ==
+                    std::string::npos &&
+                weapons.find(
+                    "KISAK_SP_VR_CONTROLLER_LOCAL_HAND_OFFSETS_V107") !=
+                    std::string::npos &&
+                weapons.find(
+                    "controllerLocalOffset[0] *\n                leftControllerAxis[0][component]") !=
+                    std::string::npos &&
+                weapons.find(
+                    "controllerLocalOffset[0] *\n                wristAxis[0][component]") ==
+                    std::string::npos,
+            "issue #76 V107 must not label an OpenVR raw/grip pose as palm_ext, and free-hand position calibration must retain controller-local axes after visual rotation");
         Check(
             interactionPriority != std::string::npos &&
                 magazinePriority != std::string::npos &&
@@ -3093,7 +3808,7 @@ int main(const int argumentCount, char** arguments)
         Check(
             configurator.find("Setup & Compatibility") !=
                     std::string::npos &&
-                configurator.find("v0.10.0-beta.14") !=
+                configurator.find("v0.10.0-beta.16") !=
                     std::string::npos &&
                 configurator.find("Rescan system") !=
                     std::string::npos &&
@@ -3166,7 +3881,7 @@ int main(const int argumentCount, char** arguments)
                     std::string::npos &&
                 configurator.find("*.vrstock") !=
                     std::string::npos,
-            "the beta.14 menu should retain compatibility, handed interactions, weapon/gunstock, metric, calibration, and both visual HUD workflows");
+            "the Configurator should retain compatibility, handed interactions, weapon/gunstock, metric, calibration, and both visual HUD workflows");
     }
 
     if (argumentCount >= 6)
@@ -3433,6 +4148,16 @@ int main(const int argumentCount, char** arguments)
         !HasError(messages, "KISAK_VR_BIND_USE"),
         "a Boolean action should accept a cross-controller directional chord");
 
+    values = kc::BuiltInDefaults();
+    values["KISAK_VR_BACKEND"] = "openvr";
+    messages = kc::ValidateSettings(values);
+    Check(
+        HasWarning(messages, "KISAK_VR_BIND_NIGHT_VISION"),
+        "issue #74 V105 should warn that thumbrest touch is unavailable on legacy OpenVR");
+    Check(
+        HasWarning(messages, "KISAK_VR_BIND_MENU"),
+        "issue #74 V105 should warn that OpenVR secondary/menu inputs may share ApplicationMenu");
+
     values["KISAK_VR_BIND_USE"] =
         "right.thumbrest_touch+right.thumbrest_touch";
     messages = kc::ValidateSettings(values);
@@ -3480,6 +4205,41 @@ int main(const int argumentCount, char** arguments)
     values["KISAK_VR_GRENADE_MAX_STRENGTH"] = "0.80";
     messages = kc::ValidateSettings(values);
     Check(HasError(messages, "KISAK_VR_GRENADE_MAX_STRENGTH"), "inverted grenade strength range should be rejected");
+
+    values = kc::BuiltInDefaults();
+    Check(
+        kc::ApplyPreset("OpenVR safe controls", &values),
+        "issue #74 V105 OpenVR safe controls preset should exist");
+    Check(
+        values["KISAK_VR_BACKEND"] == "openvr" &&
+            values["KISAK_VR_BIND_JUMP_ALT"] == "unbound" &&
+            values["KISAK_VR_BIND_MELEE"] ==
+                "left.trigger+left.primary_axis.up" &&
+            values["KISAK_VR_BIND_NEXT_WEAPON"] ==
+                "right.thumbstick_click" &&
+            values["KISAK_VR_BIND_MENU"] == "left.secondary" &&
+            values["KISAK_VR_BIND_NIGHT_VISION"] ==
+                "left.trigger+left.primary_axis.down" &&
+            values["KISAK_VR_BIND_AIRSTRIKE"] ==
+                "left.trigger+left.primary_axis.left" &&
+            values["KISAK_VR_BIND_C4"] ==
+                "left.trigger+left.primary_axis.right",
+        "issue #74 V105 OpenVR preset should avoid both thumbrest and menu/secondary conflicts");
+    Check(
+        kc::ValidateSettings(values).empty(),
+        "issue #74 V105 OpenVR safe controls preset should validate cleanly");
+
+    values = kc::BuiltInDefaults();
+    Check(
+        kc::ApplyPreset("Left-handed", &values) &&
+            kc::ApplyPreset("OpenVR safe controls", &values) &&
+            values["KISAK_VR_BIND_MELEE"] ==
+                "right.trigger+right.primary_axis.up" &&
+            values["KISAK_VR_BIND_MENU"] == "right.secondary",
+        "issue #74 V105 OpenVR safe controls should mirror for left-handed play");
+    Check(
+        kc::ValidateSettings(values).empty(),
+        "left-handed OpenVR safe controls should validate cleanly");
 
     values = kc::BuiltInDefaults();
     Check(kc::ApplyPreset("Performance", &values), "performance preset should exist");
@@ -3685,11 +4445,21 @@ int main(const int argumentCount, char** arguments)
             &openVrActive) && openVrActive,
         "OpenVR joystick click should resolve from its discovered axis");
     Check(
-        vi::GetOpenVrBooleanSourceState(
+        !vi::GetOpenVrBooleanSourceState(
             openVrHands,
             vi::Source::LeftThumbrestTouch,
-            &openVrActive) && openVrActive,
-        "OpenVR joystick touch should back the thumb-contact source");
+            &openVrActive) && !openVrActive &&
+            !vi::IsOpenVrSourceAvailable(
+                vi::Source::LeftThumbrestTouch),
+        "issue #74 V105 OpenVR joystick touch must not masquerade as an independent thumbrest source");
+    Check(
+        vi::OpenVrSourcesMayAlias(
+            vi::Source::LeftSecondary,
+            vi::Source::LeftMenu) &&
+            !vi::OpenVrSourcesMayAlias(
+                vi::Source::LeftPrimary,
+                vi::Source::LeftMenu),
+        "issue #74 V105 should identify only the legacy secondary/menu alias pair");
     Check(
         vi::GetOpenVrBooleanSourceState(
             openVrHands,
@@ -3917,6 +4687,59 @@ int main(const int argumentCount, char** arguments)
         preservedV4.messages.empty(),
         "an existing V4 grenade-launcher binding should remain valid");
 
+    const std::filesystem::path openVrV4UserFile =
+        temp / "VR-User-Settings-OpenVR-V4.bat";
+    {
+        std::ofstream current(openVrV4UserFile, std::ios::binary);
+        current << "@echo off\r\n"
+                << "set \"KISAK_VR_INPUT_BINDINGS_VERSION=4\"\r\n"
+                << "set \"KISAK_VR_BACKEND=openvr\"\r\n";
+    }
+
+    const kc::LoadResult migratedOpenVrV4 = kc::LoadSettings(
+        temp / "missing-defaults.bat",
+        openVrV4UserFile);
+    Check(
+        migratedOpenVrV4.values.at("KISAK_VR_BIND_MELEE") ==
+                "left.trigger+left.primary_axis.up" &&
+            migratedOpenVrV4.values.at("KISAK_VR_BIND_NEXT_WEAPON") ==
+                "right.thumbstick_click" &&
+            migratedOpenVrV4.values.at("KISAK_VR_BIND_MENU") ==
+                "left.secondary" &&
+            migratedOpenVrV4.values.at("KISAK_VR_BIND_NIGHT_VISION") ==
+                "left.trigger+left.primary_axis.down",
+        "issue #74 V105 should migrate the untouched explicit-OpenVR layout to safe bindings");
+    Check(
+        migratedOpenVrV4.messages.empty(),
+        "the automatically migrated OpenVR safe layout should validate cleanly");
+
+    const std::filesystem::path customOpenVrV4UserFile =
+        temp / "VR-User-Settings-Custom-OpenVR-V4.bat";
+    {
+        std::ofstream current(customOpenVrV4UserFile, std::ios::binary);
+        current << "@echo off\r\n"
+                << "set \"KISAK_VR_INPUT_BINDINGS_VERSION=4\"\r\n"
+                << "set \"KISAK_VR_BACKEND=openvr\"\r\n"
+                << "set \"KISAK_VR_BIND_NEXT_WEAPON=left.primary\"\r\n";
+    }
+
+    const kc::LoadResult preservedCustomOpenVrV4 = kc::LoadSettings(
+        temp / "missing-defaults.bat",
+        customOpenVrV4UserFile);
+    Check(
+        preservedCustomOpenVrV4.values.at("KISAK_VR_BIND_NEXT_WEAPON") ==
+                "left.primary" &&
+            preservedCustomOpenVrV4.values.at("KISAK_VR_BIND_MENU") ==
+                "left.menu" &&
+            preservedCustomOpenVrV4.values.at("KISAK_VR_BIND_NIGHT_VISION") ==
+                "right.thumbrest_touch+left.primary_axis.down",
+        "issue #74 V105 should preserve a customized OpenVR layout instead of partially rewriting it");
+    Check(
+        HasWarning(
+            preservedCustomOpenVrV4.messages,
+            "KISAK_VR_BIND_NIGHT_VISION"),
+        "a preserved custom OpenVR layout should explain that saved thumbrest bindings are unavailable");
+
     const std::filesystem::path userFile = temp / "VR-User-Settings.bat";
     values = kc::BuiltInDefaults();
     values["KISAK_VR_SNAP_TURN_ANGLE"] = "30";
@@ -3937,9 +4760,9 @@ int main(const int argumentCount, char** arguments)
     Check(saved.backupPath.empty(), "first save should not create a backup");
     Check(Read(userFile).find("\r\n") != std::string::npos, "saved batch file should use CRLF");
     Check(
-        Read(userFile).find("generated by beta.14 Configurator (Unified Setup/Compatibility)") !=
+        Read(userFile).find("generated by v0.10.0-beta.16 Configurator (Unified Setup/Compatibility)") !=
             std::string::npos,
-        "saved settings should identify the beta.14 unified-compatibility schema");
+        "saved settings should identify the beta.16 unified-compatibility schema");
     Check(
         Read(userFile).find("KISAK_VR_SETTINGS_REVISION=" + saved.revision) !=
             std::string::npos,

@@ -114,6 +114,7 @@ void __cdecl CL_CmdButtons(usercmd_s *cmd);
 void __cdecl CL_SetUsercmdButtonsWeapons(int buttons, int weapon, int offhand);
 void __cdecl CL_FinishMove(usercmd_s *cmd);
 int __cdecl CG_HandleLocationSelectionInput(int localClientNum, usercmd_s *cmd);
+void CL_ResetVrStanceInputGates();
 void __cdecl CL_CreateCmd(usercmd_s *result);
 void __cdecl CL_CreateNewCommands();
 void __cdecl CL_WritePacket();

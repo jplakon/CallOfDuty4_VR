@@ -129,6 +129,80 @@ struct ActionDefinition
     bool gameplayConflictGroup = true;
 };
 
+struct BindingLayoutEntry
+{
+    Action action = Action::Attack;
+    const char* binding = "unbound";
+    const char* alternateBinding = "unbound";
+};
+
+// Gameplay transitions can expose a controller button that was already held
+// while a menu or loading screen owned input.  Require one observed release
+// before publishing edges so that carried input cannot become a fresh action
+// on the first playable frame.
+struct GameplayButtonGateState
+{
+    bool armed = false;
+    bool wasHeld = false;
+};
+
+struct GameplayButtonGateUpdate
+{
+    bool inputAccepted = false;
+    bool pressedThisFrame = false;
+    bool releasedThisFrame = false;
+};
+
+inline void ResetGameplayButtonGate(
+    GameplayButtonGateState* const state)
+{
+    if (state == nullptr)
+    {
+        return;
+    }
+
+    state->armed = false;
+    state->wasHeld = false;
+}
+
+inline GameplayButtonGateUpdate UpdateGameplayButtonGate(
+    GameplayButtonGateState* const state,
+    const bool gameplayInputAvailable,
+    const bool held)
+{
+    GameplayButtonGateUpdate update;
+    if (state == nullptr)
+    {
+        return update;
+    }
+
+    if (!gameplayInputAvailable)
+    {
+        state->armed = false;
+        state->wasHeld = held;
+        return update;
+    }
+
+    if (!state->armed)
+    {
+        state->wasHeld = held;
+        if (!held)
+        {
+            state->armed = true;
+            update.inputAccepted = true;
+        }
+        return update;
+    }
+
+    update.inputAccepted = true;
+    update.pressedThisFrame = held && !state->wasHeld;
+    update.releasedThisFrame = !held && state->wasHeld;
+    state->wasHeld = held;
+    return update;
+}
+
+constexpr std::size_t kOpenVrSafeBindingCount = 7u;
+
 // A slot is an AND-chord: every listed source must be active at once. The
 // primary and alternate slots remain OR alternatives for the action.
 struct Binding
@@ -139,6 +213,8 @@ struct Binding
 
 const std::array<SourceDefinition, kSourceCount>& SourceDefinitions();
 const std::array<ActionDefinition, kActionCount>& ActionDefinitions();
+const std::array<BindingLayoutEntry, kOpenVrSafeBindingCount>&
+OpenVrSafeBindingLayout();
 
 const SourceDefinition& GetSourceDefinition(Source source);
 const ActionDefinition& GetActionDefinition(Action action);
@@ -161,6 +237,16 @@ std::string BindingLabel(const Binding& binding);
 bool IsDirectionalSource(Source source);
 Source PhysicalSource(Source source);
 ValueType PhysicalSourceValueType(Source source);
+// SteamVR's legacy controller-state API has no independent capacitive
+// thumbrest component. Treating joystick touch as thumbrest touch makes a
+// resting thumb look like a deliberate modifier press.
+bool IsOpenVrSourceAvailable(Source source);
+
+// Most legacy OpenVR controller profiles publish both the portable secondary
+// action and menu action through the ApplicationMenu bit. This is a
+// capability warning rather than a universal identity because a few mixed-
+// reality drivers expose secondary through their joystick click instead.
+bool OpenVrSourcesMayAlias(Source first, Source second);
 Source DirectionalSource(
     Source vectorSource,
     float x,

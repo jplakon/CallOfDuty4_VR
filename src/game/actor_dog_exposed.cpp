@@ -24,6 +24,16 @@ bool __cdecl Actor_Dog_Exposed_Start(actor_s *self, ai_state_t ePrevState)
     time = level.time;
     self->ProneInfo.iProneTrans = 500;
     self->ProneInfo.iProneTime = time;
+
+    static bool loggedIssue46BodyPlantFix = false;
+    if (!loggedIssue46BodyPlantFix)
+    {
+        Com_Printf(
+            0,
+            "[VR] V115 dog body-plant pitch and height outputs are isolated.\n");
+        loggedIssue46BodyPlantFix = true;
+    }
+
     Actor_SetSubState(self, STATE_EXPOSED_COMBAT);
     return 1;
 }
@@ -501,4 +511,3 @@ LABEL_15:
         return ACTOR_THINK_DONE;
     }
 }
-

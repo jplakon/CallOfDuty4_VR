@@ -17,6 +17,7 @@
 #include <regex>
 #include <sstream>
 #include <system_error>
+#include <utility>
 
 namespace kisak::configurator
 {
@@ -316,21 +317,21 @@ const std::vector<SettingDefinition> kCatalog = {
     Decimal(
         "KISAK_VR_HUD_SAFE_X",
         "HUD horizontal safe area",
-        "Smaller values pull edge-aligned HUD elements toward the center. The visual editor is the recommended way to change this.",
+        "Smaller values pull edge-aligned HUD elements toward the center. Values down to 0.25 support wide or canted-FOV headsets; the visual editor is recommended.",
         SettingPage::Hud,
         "0.50",
-        0.50,
-        1.00,
+        kisak::vr::hud::kMinimumSafeArea,
+        kisak::vr::hud::kMaximumSafeArea,
         2,
         true),
     Decimal(
         "KISAK_VR_HUD_SAFE_Y",
         "HUD vertical safe area",
-        "Smaller values pull top and bottom HUD elements toward the center. The visual editor is the recommended way to change this.",
+        "Smaller values pull top and bottom HUD elements toward the center. Values down to 0.25 support wide or canted-FOV headsets; the visual editor is recommended.",
         SettingPage::Hud,
         "1.00",
-        0.50,
-        1.00,
+        kisak::vr::hud::kMinimumSafeArea,
+        kisak::vr::hud::kMaximumSafeArea,
         2,
         true),
     Integer(
@@ -354,11 +355,11 @@ const std::vector<SettingDefinition> kCatalog = {
     Decimal(
         "KISAK_VR_HUD_BOTTOM_LEFT_SCALE",
         "Ammo/action HUD scale",
-        "Scale for the bottom-left weapon, ammunition, and action-slot cluster. Drag its resize handle in the visual editor.",
+        "Scale for the bottom-left weapon, ammunition, and action-slot cluster. Values down to 0.25 are supported; drag its resize handle in the visual editor.",
         SettingPage::Hud,
         "0.50",
-        0.50,
-        2.00,
+        kisak::vr::hud::kMinimumScale,
+        kisak::vr::hud::kMaximumScale,
         2,
         true),
     Toggle(
@@ -370,11 +371,11 @@ const std::vector<SettingDefinition> kCatalog = {
     Decimal(
         "KISAK_VR_COMPASS_SIZE",
         "Compass size",
-        "Scale for the compass and its objective icons.",
+        "Scale for the compass and its objective icons. Values down to 0.25 are supported.",
         SettingPage::Hud,
         "1.00",
-        0.50,
-        2.00,
+        kisak::vr::hud::kMinimumScale,
+        kisak::vr::hud::kMaximumScale,
         2,
         true),
     Toggle(
@@ -422,11 +423,11 @@ const std::vector<SettingDefinition> kCatalog = {
     Decimal(
         "KISAK_VR_GAME_MESSAGE_SCALE",
         "Game-text scale",
-        "Scale mission notifications and status messages.",
+        "Scale mission notifications and status messages down to 0.25.",
         SettingPage::Hud,
         "1.00",
-        0.50,
-        2.00,
+        kisak::vr::hud::kMinimumScale,
+        kisak::vr::hud::kMaximumScale,
         2,
         true),
     Integer(
@@ -450,11 +451,11 @@ const std::vector<SettingDefinition> kCatalog = {
     Decimal(
         "KISAK_VR_OBJECTIVE_MESSAGE_SCALE",
         "Objective/banner scale",
-        "Scale bold objective and mission-status banners.",
+        "Scale bold objective and mission-status banners down to 0.25.",
         SettingPage::Hud,
         "1.00",
-        0.50,
-        2.00,
+        kisak::vr::hud::kMinimumScale,
+        kisak::vr::hud::kMaximumScale,
         2,
         true),
     Toggle(
@@ -490,11 +491,11 @@ const std::vector<SettingDefinition> kCatalog = {
     Decimal(
         "KISAK_VR_SUBTITLE_SCALE",
         "Subtitle scale",
-        "Scale spoken-dialogue subtitles without changing notification text.",
+        "Scale spoken-dialogue subtitles down to 0.25 without changing notification text.",
         SettingPage::Hud,
         "1.00",
-        0.50,
-        2.00,
+        kisak::vr::hud::kMinimumScale,
+        kisak::vr::hud::kMaximumScale,
         2,
         true),
 
@@ -570,7 +571,7 @@ const std::vector<SettingDefinition> kCatalog = {
     PhysicalDecimal(
         "KISAK_VR_LEFT_HAND_OFFSET_FORWARD",
         "Off-hand forward offset",
-        "Move the floating off-hand glove along controller forward.",
+        "Move the floating off-hand glove along tracked-controller forward; visual angle adjustments do not rotate this direction.",
         SettingPage::Weapons,
         "0.00",
         -8.0,
@@ -582,7 +583,7 @@ const std::vector<SettingDefinition> kCatalog = {
     PhysicalDecimal(
         "KISAK_VR_LEFT_HAND_OFFSET_LEFT",
         "Off-hand left offset",
-        "Move the floating off-hand glove along controller left.",
+        "Move the floating off-hand glove along tracked-controller left; visual angle adjustments do not rotate this direction.",
         SettingPage::Weapons,
         "0.00",
         -8.0,
@@ -594,7 +595,7 @@ const std::vector<SettingDefinition> kCatalog = {
     PhysicalDecimal(
         "KISAK_VR_LEFT_HAND_OFFSET_UP",
         "Off-hand up offset",
-        "Move the floating off-hand glove along controller up.",
+        "Move the floating off-hand glove along tracked-controller up; visual angle adjustments do not rotate this direction.",
         SettingPage::Weapons,
         "0.00",
         -8.0,
@@ -1101,7 +1102,7 @@ const std::vector<SettingDefinition> kCatalog = {
     Toggle(
         "KISAK_VR_VERBOSE_DIAGNOSTICS",
         "Verbose VR diagnostics",
-        "Enable high-volume controller, pose, and retired mission traces in console.log.",
+        "Enable periodic controller and pose diagnostics in console.log. Retired per-frame mission traces remain disabled.",
         SettingPage::Advanced,
         false),
     Toggle(
@@ -1389,6 +1390,88 @@ void Set(SettingsMap* values, const char* key, const char* value)
     }
 }
 
+std::string BindingForDominantHand(
+    const char* const rightHandedBinding,
+    const bool leftDominant)
+{
+    return leftDominant
+        ? kisak::vr::interactions::MirrorBindingHands(
+              rightHandedBinding)
+        : std::string(rightHandedBinding);
+}
+
+void SetOpenVrSafeControllerBindings(SettingsMap* const values)
+{
+    if (values == nullptr)
+    {
+        return;
+    }
+
+    const auto dominant = values->find("KISAK_VR_DOMINANT_HAND");
+    const bool leftDominant =
+        dominant != values->end() && dominant->second == "left";
+    const auto setBinding = [values, leftDominant](
+        const char* const key,
+        const char* const rightHandedBinding)
+    {
+        (*values)[key] = BindingForDominantHand(
+            rightHandedBinding,
+            leftDominant);
+    };
+
+    // KISAK_SP_VR_OPENVR_SAFE_BINDINGS_V105
+    // Legacy OpenVR cannot expose thumbrest touch independently, and most
+    // controller profiles map secondary/menu to the same ApplicationMenu bit.
+    // Keep menu on the off-hand face/menu button, move weapon cycling to the
+    // dominant stick click, and use a guarded off-hand trigger + stick selector
+    // for melee and mission shortcuts. This layout was also exercised by the
+    // reporter-supplied PSVR2 profile from issue #68.
+    for (const kisak::vr::input::BindingLayoutEntry& layout :
+         kisak::vr::input::OpenVrSafeBindingLayout())
+    {
+        const kisak::vr::input::ActionDefinition& definition =
+            kisak::vr::input::GetActionDefinition(layout.action);
+        setBinding(definition.settingKey, layout.binding);
+        setBinding(
+            definition.alternateSettingKey,
+            layout.alternateBinding);
+    }
+}
+
+bool HasPortableDefaultBindings(const SettingsMap& values)
+{
+    const auto dominant = values.find("KISAK_VR_DOMINANT_HAND");
+    const bool leftDominant =
+        dominant != values.end() && dominant->second == "left";
+
+    namespace input = kisak::vr::input;
+    for (const input::BindingLayoutEntry& layout :
+         input::OpenVrSafeBindingLayout())
+    {
+        const input::ActionDefinition& definition =
+            input::GetActionDefinition(layout.action);
+        for (const auto& [key, defaultBinding] : {
+                 std::pair<const char*, const char*>{
+                     definition.settingKey,
+                     definition.defaultBinding},
+                 std::pair<const char*, const char*>{
+                     definition.alternateSettingKey,
+                     definition.defaultAlternateBinding}})
+        {
+            const auto current = values.find(key);
+            if (current == values.end() ||
+                current->second != BindingForDominantHand(
+                    defaultBinding,
+                    leftDominant))
+            {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
 void UpgradeControllerBindings(SettingsMap* const values)
 {
     if (values == nullptr)
@@ -1403,11 +1486,6 @@ void UpgradeControllerBindings(SettingsMap* const values)
         : std::atoi(versionValue->second.c_str());
 
     namespace input = kisak::vr::input;
-    if (version >= 4)
-    {
-        return;
-    }
-
     if (version < 3)
     {
         for (const input::Action action : {
@@ -1512,7 +1590,18 @@ void UpgradeControllerBindings(SettingsMap* const values)
         values->erase("KISAK_VR_BIND_RAISE_STANCE_ALT");
     }
 
-    (*values)["KISAK_VR_INPUT_BINDINGS_VERSION"] = "4";
+    if (version < 4)
+    {
+        (*values)["KISAK_VR_INPUT_BINDINGS_VERSION"] = "4";
+    }
+
+    const auto backend = values->find("KISAK_VR_BACKEND");
+    if (backend != values->end() &&
+        backend->second == "openvr" &&
+        HasPortableDefaultBindings(*values))
+    {
+        SetOpenVrSafeControllerBindings(values);
+    }
 }
 
 } // namespace
@@ -2171,6 +2260,191 @@ std::vector<ValidationMessage> ValidateSettings(
     }
 
     namespace input = kisak::vr::input;
+
+    if (valueOf("KISAK_VR_BACKEND") == "openvr")
+    {
+        std::string unavailableWarningKey;
+        std::string unavailableWarningText;
+        std::vector<const input::ActionDefinition*> unavailableActions;
+        for (const input::ActionDefinition& action :
+             input::ActionDefinitions())
+        {
+            bool actionUsesUnavailableSource = false;
+            for (const char* const key :
+                 {action.settingKey, action.alternateSettingKey})
+            {
+                input::Binding binding;
+                if (!input::ParseBinding(
+                        action.action,
+                        valueOf(key),
+                        &binding))
+                {
+                    continue;
+                }
+
+                for (std::size_t sourceIndex = 0u;
+                     sourceIndex < binding.sourceCount;
+                     ++sourceIndex)
+                {
+                    if (!input::IsOpenVrSourceAvailable(
+                            binding.sources[sourceIndex]))
+                    {
+                        actionUsesUnavailableSource = true;
+                        break;
+                    }
+                }
+            }
+
+            if (actionUsesUnavailableSource)
+            {
+                unavailableActions.push_back(&action);
+            }
+        }
+
+        if (!unavailableActions.empty())
+        {
+            std::ostringstream warning;
+            warning << "Legacy OpenVR cannot expose thumbrest touch "
+                    << "independently from joystick touch, so thumbrest "
+                    << "sources are disabled. Affected actions: ";
+            for (std::size_t index = 0u;
+                 index < unavailableActions.size();
+                 ++index)
+            {
+                if (index != 0u)
+                {
+                    warning << ", ";
+                }
+                warning << unavailableActions[index]->label;
+            }
+            warning << ". Apply the OpenVR safe controls preset or choose "
+                    << "another modifier.";
+
+            unavailableWarningKey =
+                unavailableActions.front()->settingKey;
+            unavailableWarningText = warning.str();
+        }
+
+        const auto openVrBindingId = [](input::Binding binding)
+        {
+            for (std::size_t sourceIndex = 0u;
+                 sourceIndex < binding.sourceCount;
+                 ++sourceIndex)
+            {
+                input::Source& source = binding.sources[sourceIndex];
+                if (input::OpenVrSourcesMayAlias(
+                        source,
+                        input::Source::LeftSecondary))
+                {
+                    source = input::Source::LeftSecondary;
+                }
+                else if (input::OpenVrSourcesMayAlias(
+                             source,
+                             input::Source::RightSecondary))
+                {
+                    source = input::Source::RightSecondary;
+                }
+            }
+            std::sort(
+                binding.sources.begin(),
+                binding.sources.begin() + binding.sourceCount);
+            return input::BindingId(binding);
+        };
+
+        const input::ActionDefinition& pauseAction =
+            input::GetActionDefinition(input::Action::PauseMenu);
+        std::vector<std::string> pauseBindings;
+        for (const char* const key : {
+                 pauseAction.settingKey,
+                 pauseAction.alternateSettingKey})
+        {
+            input::Binding binding;
+            if (input::ParseBinding(
+                    pauseAction.action,
+                    valueOf(key),
+                    &binding) &&
+                binding.sourceCount != 0u)
+            {
+                pauseBindings.push_back(openVrBindingId(binding));
+            }
+        }
+
+        std::vector<const input::ActionDefinition*> pauseConflicts;
+        for (const input::ActionDefinition& action :
+             input::ActionDefinitions())
+        {
+            if (!action.gameplayConflictGroup)
+            {
+                continue;
+            }
+
+            bool conflicts = false;
+            for (const char* const key :
+                 {action.settingKey, action.alternateSettingKey})
+            {
+                input::Binding binding;
+                if (!input::ParseBinding(
+                        action.action,
+                        valueOf(key),
+                        &binding) ||
+                    binding.sourceCount == 0u)
+                {
+                    continue;
+                }
+
+                const std::string physicalId = openVrBindingId(binding);
+                conflicts = std::find(
+                    pauseBindings.begin(),
+                    pauseBindings.end(),
+                    physicalId) != pauseBindings.end();
+                if (conflicts)
+                {
+                    break;
+                }
+            }
+
+            if (conflicts)
+            {
+                pauseConflicts.push_back(&action);
+            }
+        }
+
+        if (!pauseConflicts.empty())
+        {
+            std::ostringstream warning;
+            warning << "Legacy OpenVR commonly maps secondary and menu to "
+                    << "the same ApplicationMenu button. Pause shares its "
+                    << "physical input with ";
+            for (std::size_t index = 0u;
+                 index < pauseConflicts.size();
+                 ++index)
+            {
+                if (index != 0u)
+                {
+                    warning << ", ";
+                }
+                warning << pauseConflicts[index]->label;
+            }
+            warning << ". Apply the OpenVR safe controls preset or remap "
+                    << "one action.";
+
+            messages.push_back({
+                ValidationMessage::Severity::Warning,
+                pauseAction.settingKey,
+                warning.str(),
+            });
+        }
+
+        if (!unavailableWarningText.empty())
+        {
+            messages.push_back({
+                ValidationMessage::Severity::Warning,
+                unavailableWarningKey,
+                unavailableWarningText,
+            });
+        }
+    }
+
     std::map<std::string, std::vector<const input::ActionDefinition*>>
         gameplayAssignments;
 
@@ -2315,7 +2589,7 @@ std::string SerializeUserSettings(
 
     std::ostringstream output;
     output << "@echo off\r\n";
-    output << "rem KisakCOD VR user settings - generated by beta.14 Configurator (Unified Setup/Compatibility)\r\n";
+    output << "rem KisakCOD VR user settings - generated by v0.10.0-beta.16 Configurator (Unified Setup/Compatibility)\r\n";
     output << "rem Stored separately so extracting a future release cannot erase preferences.\r\n";
     output << "rem Profile: " << safeProfile << "\r\n";
     output << "rem Revision: " << safeRevision << "\r\n";
@@ -2624,6 +2898,13 @@ bool ApplyPreset(
         return true;
     }
 
+    if (presetName == "OpenVR safe controls")
+    {
+        Set(values, "KISAK_VR_BACKEND", "openvr");
+        SetOpenVrSafeControllerBindings(values);
+        return true;
+    }
+
     if (presetName == "Performance")
     {
         *values = BuiltInDefaults();
@@ -2701,6 +2982,7 @@ std::vector<std::string> PresetNames()
 {
     return {
         "Tested Quest 3",
+        "OpenVR safe controls",
         "Performance",
         "Pimax Crystal Light",
         "Right-handed",
