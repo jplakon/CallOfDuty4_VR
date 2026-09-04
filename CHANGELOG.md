@@ -6,11 +6,11 @@ _No changes yet._
 
 ## v0.10.0-beta.16
 
-Cumulative V105-V116 VR fixes over `v0.10.0-beta.15`. Issues #46 and #67, plus
-the original attach/release snap in #61, have headset hardware confirmation.
-The remaining issue-specific fixes below have
-passed their available automated checks but still await confirmation on the
-reported headset/runtime combinations.
+Cumulative V105-V116 VR fixes over `v0.10.0-beta.15`. Issues #46 and #75
+passed focused Quest 3 / VDXR headset tests; issue #67 and the original
+attach/release snap in #61 have reporter hardware confirmation. The remaining
+issue-specific fixes below passed their available automated checks but still
+await confirmation on the reported headset/runtime combinations.
 
 - V116 completes the issue #46 correction for distant dogs flipping, sinking,
   rising, or clipping while running toward the player. The earlier V115 change
@@ -96,6 +96,9 @@ reported headset/runtime combinations.
 - Finite HUD environment overrides now clamp to the nearest legal value instead
   of reverting to an unrelated default. Malformed and non-finite values still
   fail safely to the tested default.
+- The `0.30` and exact `0.25` ranges, persistence across relaunch, and both-eye
+  usability passed focused Quest 3 / VDXR testing. The reporter's Apple Vision
+  Pro / ALVR configuration still awaits confirmation.
 - V105 fixes issue #74 on the legacy OpenVR controller path: joystick contact
   can no longer masquerade as an independent thumbrest touch in gameplay or
   press-to-bind.

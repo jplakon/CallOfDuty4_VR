@@ -78,9 +78,12 @@ contact no longer masquerades as an independent thumbrest touch, and the new
 OpenVR-safe control preset separates guarded mission actions, Pause, and
 weapon cycling.
 
-Only issue #67 and the original #61 snapping defect have reporter hardware
-confirmation so far. The other beta.16 changes remain candidate fixes
-pending validation on their reported headset/runtime combinations.
+Issue #67 and the original #61 snapping defect have reporter hardware
+confirmation. Issues #46 and #75 also passed focused Quest 3 / VDXR headset
+tests during beta.16 release validation; #75's original Apple Vision Pro / ALVR
+configuration still awaits reporter confirmation. The other beta.16 changes
+remain candidate fixes pending validation on their reported headset/runtime
+combinations.
 
 Beta.14 fixes the remaining stereo-menu and legacy-crosshair defects, adds
 a full-FOV Pimax Crystal Light scope layout, routes Safehouse and Heat
