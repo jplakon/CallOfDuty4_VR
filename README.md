@@ -17,10 +17,11 @@ copy of the original game.
 The current public beta is `v0.10.0-beta.16`.
 
 Beta.16 addresses issue #46's distant dog tumbling and
-ground clipping. COD4's reconstructed body-ground helper had swapped its roll
-angle and vertical height outputs, causing a dog's ground angle to be applied
-as a height offset. The corrected output routing matches current upstream
-KisakCOD and also repairs the same mix-up for planted actor corpses.
+ground clipping. COD4's reconstructed ground-orientation path had swapped its
+roll-angle and vertical-height outputs, treated a small negative slope as an
+almost complete positive turn, and doubled the final pitch/roll rotation. The
+complete corrected path matches current upstream KisakCOD and also repairs the
+same ground-orientation errors for planted actor corpses.
 
 It addresses issue #48's brief yellow/pink NPC and
 vehicle frames during scripted screen flashes. Packed VR now saves one coherent

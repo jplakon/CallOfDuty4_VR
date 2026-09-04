@@ -2751,6 +2751,36 @@ int main(const int argumentCount, char** arguments)
             root / "tools/configurator/compatibility_probe_win32.cpp");
         const std::string configuratorBuild = Read(
             root / "tools/configurator/CMakeLists.txt");
+        const std::string actorCorpse = Read(
+            root / "src/game/actor_corpse.cpp");
+        const std::string actorDogExposed = Read(
+            root / "src/game/actor_dog_exposed.cpp");
+        const std::string cgamePose = Read(
+            root / "src/cgame/cg_pose.cpp");
+        const std::string commonMath = Read(
+            root / "src/universal/com_math.cpp");
+        Check(
+            actorCorpse.find(
+                "KISAK_SP_VR_ISSUE46_DOG_BODY_PLANT_OUTPUTS_V115") !=
+                    std::string::npos &&
+                actorCorpse.find("if (pfRoll)") != std::string::npos &&
+                actorCorpse.find("*pfHeight = v17;") != std::string::npos &&
+                cgamePose.find(
+                    "KISAK_SP_VR_ISSUE46_DOG_ROTATION_MATH_V116") !=
+                    std::string::npos &&
+                CountOccurrences(
+                    cgamePose,
+                    "0.0087266462f;") == 2u &&
+                commonMath.find(
+                    "KISAK_SP_VR_ISSUE46_DOG_ROTATION_MATH_V116") !=
+                    std::string::npos &&
+                commonMath.find(
+                    "return (scaled - floorf(scaled + 0.5f)) * 360.0f;") !=
+                    std::string::npos &&
+                actorDogExposed.find(
+                    "[VR] V116 full dog ground-rotation math is active.") !=
+                    std::string::npos,
+            "issue #46 V116 must keep body-plant outputs isolated, use signed shortest-arc deltas, and encode actor pitch/roll as half-angle quaternions");
         Check(
             rendererBackend.find(
                 "KISAK_SP_VR_PACKED_SAVED_SCREEN_ISOLATION_V114") !=

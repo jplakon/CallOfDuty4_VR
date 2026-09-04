@@ -25,13 +25,13 @@ bool __cdecl Actor_Dog_Exposed_Start(actor_s *self, ai_state_t ePrevState)
     self->ProneInfo.iProneTrans = 500;
     self->ProneInfo.iProneTime = time;
 
-    static bool loggedIssue46BodyPlantFix = false;
-    if (!loggedIssue46BodyPlantFix)
+    static bool loggedIssue46DogRotationFix = false;
+    if (!loggedIssue46DogRotationFix)
     {
         Com_Printf(
             0,
-            "[VR] V115 dog body-plant pitch and height outputs are isolated.\n");
-        loggedIssue46BodyPlantFix = true;
+            "[VR] V116 full dog ground-rotation math is active.\n");
+        loggedIssue46DogRotationFix = true;
     }
 
     Actor_SetSubState(self, STATE_EXPOSED_COMBAT);

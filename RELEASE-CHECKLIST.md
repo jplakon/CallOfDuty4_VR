@@ -234,9 +234,10 @@ This checklist is for `v0.10.0-beta.16` over `v0.10.0-beta.15`.
 - In Ultimatum, require the sky to remain eye-local without stretched streaks.
   Trigger scripted flash and shellshock sequences and require coherent whiteout
   and actor/vehicle colors in both eyes.
-- In All Ghillied Up or Hunted, observe dogs from long range through approach
-  and attack. Require stable slope-following without tumbling, sinking,
-  floating, or ground clipping.
+- In All Ghillied Up or Hunted, observe dogs from long range while they run over
+  uneven terrain, then through close approach and attack. Require continuous,
+  stable slope-following without full flips, tumbling, sinking, floating, or
+  ground clipping.
 - Test fixed Barrett, Javelin, Stinger, mounted turret, and vehicle weapon.
 - Test Blackout rappel and One Shot, One Kill sprint-direction changes for a
   level horizon while confirming physical HMD pitch and roll still work.

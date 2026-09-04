@@ -93,13 +93,6 @@ This list applies to `v0.10.0-beta.16`.
 - `3072x1536` is incompatible with the packed renderer because it cannot hold
   two rectangular eyes plus the dedicated scope panel; the launcher rejects it.
 
-## Gameplay
-
-- Beta.16 corrects issue #46's swapped roll-angle and vertical-height outputs in
-  COD4's actor body-ground sampler. Source comparison and build checks pass,
-  but dog movement in All Ghillied Up and Hunted still requires the reporter's
-  Quest 3 / VDXR confirmation at both long and close range.
-
 ## Rendering
 
 - Synchronized dynamic shadows can have a significant performance cost.

@@ -6,19 +6,23 @@ _No changes yet._
 
 ## v0.10.0-beta.16
 
-Cumulative V105-V115 VR fixes over `v0.10.0-beta.15`. Issue #67 and the
-original attach/release snap in #61 have reporter hardware confirmation. The
-remaining issue-specific fixes below have
+Cumulative V105-V116 VR fixes over `v0.10.0-beta.15`. Issues #46 and #67, plus
+the original attach/release snap in #61, have headset hardware confirmation.
+The remaining issue-specific fixes below have
 passed their available automated checks but still await confirmation on the
 reported headset/runtime combinations.
 
-- V115 addresses issue #46's distant dogs sinking, rising, and tumbling while
-  running toward the player. The reconstructed single-player body-ground helper
-  had its roll-angle and vertical-height output blocks reversed.
-- Dog ground planting now keeps forward pitch, side roll, and vertical height
-  in their intended outputs, matching the corrected upstream KisakCOD source.
-  The change also corrects the same output mix-up for planted actor corpses;
-  reporter headset confirmation remains pending.
+- V116 completes the issue #46 correction for distant dogs flipping, sinking,
+  rising, or clipping while running toward the player. The earlier V115 change
+  corrected the reconstructed body-ground helper's reversed roll-angle and
+  vertical-height outputs, but a Quest 3 / VDXR headset test showed that dogs
+  could still flip.
+- The complete fix also restores signed shortest-arc angle differences and
+  encodes actor pitch/roll quaternions from the required half-angles. Dog
+  slope-following now matches current upstream KisakCOD; the shared body-ground
+  output correction also applies to planted actor corpses. The corrected V116
+  build passed a Quest 3 / VDXR headset test in All Ghillied Up from distant
+  approach through close-range behavior.
 - V114 addresses issue #48's brief yellow/pink NPC and vehicle frames during
   scripted flashes and shellshock. The shared 2D command list was saving the
   packed VR framebuffer once per eye, so the first save could contain an
