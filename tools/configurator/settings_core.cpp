@@ -2912,7 +2912,7 @@ bool ApplyPreset(
         Set(values, "KISAK_VR_OUTPUT_SCALE", "0.75");
         Set(values, "KISAK_VR_FSR", "1");
         Set(values, "KISAK_VR_FSR_SHARPNESS", "0.60");
-        Set(values, "KISAK_VR_SCOPE_CAPTURE_SIZE", "768");
+        Set(values, "KISAK_VR_SCOPE_CAPTURE_SIZE", "1024");
         return true;
     }
 

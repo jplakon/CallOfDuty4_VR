@@ -52,6 +52,7 @@ target_compile_definitions(
 target_link_libraries(
     KisakCOD-VR-Configurator
     PRIVATE
+        OpenVR::openvr_api
         comctl32
         comdlg32
         advapi32
@@ -84,6 +85,8 @@ set_target_properties(
 add_executable(
     KisakCOD-VR-Configurator-Tests
     ../../tests/configurator_settings_tests.cpp
+    compatibility_probe_win32.cpp
+    compatibility_probe_win32.h
     settings_core.cpp
     settings_core.h
     ../../src/vr/vr_calibration.h
@@ -118,6 +121,14 @@ target_compile_features(
     KisakCOD-VR-Configurator-Tests
     PRIVATE
         cxx_std_20
+)
+
+target_link_libraries(
+    KisakCOD-VR-Configurator-Tests
+    PRIVATE
+        OpenVR::openvr_api
+        advapi32
+        dxgi
 )
 
 if(MSVC)

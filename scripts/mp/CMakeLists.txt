@@ -72,12 +72,16 @@ target_sources(
         ${SRC_DIR}/vr/vr_openvr_input.h
         ${SRC_DIR}/vr/vr_openxr_profiles.cpp
         ${SRC_DIR}/vr/vr_openxr_profiles.h
+        ${SRC_DIR}/vr/vr_prompt_labels.cpp
+        ${SRC_DIR}/vr/vr_prompt_labels.h
         ${SRC_DIR}/vr/vr_weapon_profiles.cpp
         ${SRC_DIR}/vr/vr_weapon_profiles.h
         ${SRC_DIR}/vr/vr_d3d9ex_interop_probe.cpp
         ${SRC_DIR}/vr/vr_d3d9ex_interop_probe.h
         ${SRC_DIR}/vr/vr_openxr.h
-)
+        ${SRC_DIR}/win32/win_crash_diagnostics.cpp
+        ${SRC_DIR}/win32/win_crash_diagnostics.h
+    )
 
 target_link_libraries(
     ${PROJECT_NAME}

@@ -52,7 +52,13 @@ reported headset/runtime combinations.
   swapchains that do not exist on that backend.
 - Performance mode now splits `4768x2016` into two `1872x2016` gameplay eyes
   plus the dedicated 1024-pixel scope panel. The menu and mission renderer,
-  captured source, FSR path, and compositor therefore share one width.
+  captured source, FSR path, and compositor therefore share one width. Both
+  the named preset and the automatic compatibility recommendation retain that
+  exact 1024-pixel scope allocation.
+- Setup & Compatibility now accepts an OpenVR fallback only when the selected
+  runtime contains the 32-bit `bin\vrclient.dll` used by the bundled loader.
+  Stale path-registry entries and x64-only installations are no longer
+  reported as launch-ready.
 - V110 addresses issue #65 by neutral-gating both VR stance paths at gameplay
   entry. A lower-stance stick direction or tap/hold stance button carried
   through mission loading can no longer be interpreted as a fresh crouch or

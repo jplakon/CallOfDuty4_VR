@@ -56,6 +56,7 @@ int32_t removeMeWhenMPStopsCrashingInHere;
 // KISAK_SP_JAVELIN_DIAGNOSTICS
 // Keep this temporary trace deliberately limited to the Bog Javelin index
 // reported by CG_SelectWeaponIndex so normal weapons do not flood console.log.
+#ifdef KISAK_SP
 static uint32_t s_vrJavelinDiagnosticSequence = 0;
 
 namespace VrInteractions = kisak::vr::interactions;
@@ -77,6 +78,14 @@ static void VR_JavelinDiagnostic(
         weaponNum,
         object);
 }
+#else
+static void VR_JavelinDiagnostic(
+    const char*,
+    uint32_t,
+    const void* = nullptr)
+{
+}
+#endif
 
 #ifdef KISAK_SP
 // KISAK_SP_VR_MANUAL_MAGAZINE_RELOAD_V1

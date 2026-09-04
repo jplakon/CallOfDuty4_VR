@@ -1210,7 +1210,7 @@ void ApplyRecommendedCompatibility(AppState& state)
         state.values["KISAK_VR_OUTPUT_SCALE"] = "0.75";
         state.values["KISAK_VR_FSR"] = "1";
         state.values["KISAK_VR_FSR_SHARPNESS"] = "0.60";
-        state.values["KISAK_VR_SCOPE_CAPTURE_SIZE"] = "768";
+        state.values["KISAK_VR_SCOPE_CAPTURE_SIZE"] = "1024";
     }
     else if (recommendedGraphics == "native")
     {

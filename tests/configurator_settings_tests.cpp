@@ -1,4 +1,5 @@
 #include "../tools/configurator/settings_core.h"
+#include "../tools/configurator/compatibility_probe_win32.h"
 #include "vr/vr_hud_layout.h"
 #include "vr/vr_gestures.h"
 #include "vr/vr_input_bindings.h"
@@ -17,6 +18,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -24,6 +26,7 @@
 #include <string>
 
 namespace kc = kisak::configurator;
+namespace kcw = kisak::configurator::win32_compatibility;
 namespace vg = kisak::vr::gestures;
 namespace vi = kisak::vr::input;
 namespace vint = kisak::vr::interactions;
@@ -1822,6 +1825,110 @@ int main(const int argumentCount, char** arguments)
             "V65 should honor an explicit OpenXR-only policy instead of silently changing backends");
     }
 
+    {
+        const std::filesystem::path probeTemp =
+            std::filesystem::temp_directory_path() /
+            "kisakcod-openvr-runtime-probe-test";
+        std::error_code probeError;
+        std::filesystem::remove_all(probeTemp, probeError);
+        probeError.clear();
+        std::filesystem::create_directories(probeTemp, probeError);
+        Check(
+            !probeError,
+            "OpenVR runtime probe fixture directory should be created");
+
+        const std::filesystem::path pathRegistry =
+            probeTemp / "openvrpaths.vrpath";
+        const auto writePathRegistry = [&pathRegistry](
+            const std::filesystem::path& fixtureRuntimePath)
+        {
+            std::ofstream output(pathRegistry, std::ios::binary);
+            output << "{\n"
+                   << "  \"runtime\": [\""
+                   << fixtureRuntimePath.generic_string()
+                   << "\"],\n"
+                   << "  \"config\": [],\n"
+                   << "  \"log\": [],\n"
+                   << "  \"jsonid\": \"vrpathreg\",\n"
+                   << "  \"version\": 1\n"
+                   << "}\n";
+        };
+
+        char* existingOverride = nullptr;
+        std::size_t existingOverrideSize = 0u;
+        const errno_t readOverrideResult =
+            _dupenv_s(
+                &existingOverride,
+                &existingOverrideSize,
+                "VR_PATHREG_OVERRIDE");
+        const bool hadOverride =
+            readOverrideResult == 0 &&
+            existingOverride != nullptr;
+        const std::string savedOverride =
+            hadOverride ? existingOverride : "";
+        std::free(existingOverride);
+        Check(
+            _putenv_s(
+                "VR_PATHREG_OVERRIDE",
+                pathRegistry.string().c_str()) == 0,
+            "OpenVR runtime probe fixture should override the path registry");
+
+        std::filesystem::path resolvedClient = "sentinel";
+        writePathRegistry(probeTemp / "stale-runtime");
+        Check(
+            !kcw::FindOpenVrX86Client(&resolvedClient) &&
+                resolvedClient.empty(),
+            "beta.16 RC2 must reject a stale OpenVR path registry");
+
+        const std::filesystem::path x64OnlyRuntime =
+            probeTemp / "x64-only-runtime";
+        std::filesystem::create_directories(
+            x64OnlyRuntime / "bin" / "win64",
+            probeError);
+        std::ofstream(
+            x64OnlyRuntime / "bin" / "win64" /
+                "vrclient_x64.dll",
+            std::ios::binary)
+            .put('\0');
+        std::ofstream(
+            x64OnlyRuntime / "bin" / "vrclient_x64.dll",
+            std::ios::binary)
+            .put('\0');
+        writePathRegistry(x64OnlyRuntime);
+        resolvedClient = "sentinel";
+        Check(
+            !kcw::FindOpenVrX86Client(&resolvedClient) &&
+                resolvedClient.empty(),
+            "beta.16 RC2 must reject an OpenVR runtime with only an x64 client");
+
+        const std::filesystem::path x86Runtime =
+            probeTemp / "x86-runtime";
+        const std::filesystem::path expectedClient =
+            x86Runtime / "bin" / "vrclient.dll";
+        probeError.clear();
+        std::filesystem::create_directories(
+            expectedClient.parent_path(),
+            probeError);
+        std::ofstream(expectedClient, std::ios::binary).put('\0');
+        writePathRegistry(x86Runtime);
+        resolvedClient.clear();
+        Check(
+            kcw::FindOpenVrX86Client(&resolvedClient) &&
+                resolvedClient == expectedClient,
+            "beta.16 RC2 must accept the path registry's architecture-matched x86 OpenVR client");
+
+        Check(
+            _putenv_s(
+                "VR_PATHREG_OVERRIDE",
+                hadOverride ? savedOverride.c_str() : "") == 0,
+            "OpenVR runtime probe fixture should restore the path-registry override");
+        probeError.clear();
+        std::filesystem::remove_all(probeTemp, probeError);
+        Check(
+            !probeError,
+            "OpenVR runtime probe fixture should clean up");
+    }
+
     const auto& catalog = kc::SettingsCatalog();
     Check(catalog.size() == 142u, "V65 should retain all 142 verified settings");
     Check(vi::kActionCount == 23u, "V57 input V4 should expose 23 actions");
@@ -2692,7 +2799,7 @@ int main(const int argumentCount, char** arguments)
             runtimePath.parent_path().parent_path().parent_path();
         const std::string screenPlacement = Read(
             root / "src/client/screen_placement.cpp");
-        const std::string messages = Read(
+        const std::string consoleSource = Read(
             root / "src/client/cl_console.cpp");
         const std::string compass = Read(
             root / "src/cgame/cg_compass.cpp");
@@ -2712,6 +2819,8 @@ int main(const int argumentCount, char** arguments)
             root / "src/cgame/cg_main.cpp");
         const std::string cgameView = Read(
             root / "src/cgame/cg_view.cpp");
+        const std::string winMain = Read(
+            root / "src/win32/win_main.cpp");
         Check(
             cgameView.find("VR_RecenterAtFirstGameplayCamera()") !=
                     std::string::npos &&
@@ -2749,8 +2858,16 @@ int main(const int argumentCount, char** arguments)
             root / "src/vr/vr_openxr.h");
         const std::string compatibilityProbe = Read(
             root / "tools/configurator/compatibility_probe_win32.cpp");
+        const std::string configuratorSource = Read(
+            root / "tools/configurator/configurator.cpp");
         const std::string configuratorBuild = Read(
             root / "tools/configurator/CMakeLists.txt");
+        const std::string multiplayerBuild = Read(
+            root / "scripts/mp/CMakeLists.txt");
+        const std::string dedicatedBuild = Read(
+            root / "scripts/dedi/CMakeLists.txt");
+        const std::string dedicatedVrStubs = Read(
+            root / "src/vr/vr_dedicated_stubs.cpp");
         const std::string actorCorpse = Read(
             root / "src/game/actor_corpse.cpp");
         const std::string actorDogExposed = Read(
@@ -2897,6 +3014,41 @@ int main(const int argumentCount, char** arguments)
                     "        weaponNum != 7") ==
                     std::string::npos,
             "issue #64 V112 must keep the retired level-local weapon-slot-7 log storm behind a separate developer-only flag");
+        Check(
+            reticles.find(
+                "#ifdef KISAK_SP\n"
+                "static uint32_t s_vrJavelinReticleDiagnosticSequence") !=
+                    std::string::npos &&
+                reticles.find(
+                    "static void VR_JavelinReticleDiagnostic(int32_t, const char*) {}") !=
+                    std::string::npos &&
+                weapons.find(
+                    "#ifdef KISAK_SP\n"
+                    "static uint32_t s_vrJavelinDiagnosticSequence") !=
+                    std::string::npos &&
+                rendererScene.find(
+                    "const bool vrStereoSunShadowsDisabled = false;") !=
+                    std::string::npos &&
+                winMain.find(
+                    "static void KisakCrash_SetFrameNumber(unsigned int) {}") !=
+                    std::string::npos,
+            "beta.16 RC2 must keep SP-only diagnostics and VR renderer calls out of non-VR MP/dedicated compile scopes while retaining crash-recorder no-op coverage");
+        Check(
+            multiplayerBuild.find(
+                "${SRC_DIR}/vr/vr_prompt_labels.cpp") !=
+                    std::string::npos &&
+                multiplayerBuild.find(
+                    "${SRC_DIR}/win32/win_crash_diagnostics.cpp") !=
+                    std::string::npos &&
+                dedicatedBuild.find(
+                    "${SRC_DIR}/vr/vr_dedicated_stubs.cpp") !=
+                    std::string::npos &&
+                dedicatedVrStubs.find("#ifndef KISAK_DEDICATED") !=
+                    std::string::npos &&
+                dedicatedVrStubs.find(
+                    "bool VR_D3D9IsSameFrameStereoEnabled()") !=
+                    std::string::npos,
+            "beta.16 RC2 MP must link its VR prompt/crash implementations and dedicated servers must use non-VR stubs for shared client/renderer calls");
         const std::size_t interactionPriority =
             runtime.find(
                 "KISAK_SP_VR_OFFHAND_INTERACTION_PRIORITY_V86");
@@ -2912,6 +3064,27 @@ int main(const int argumentCount, char** arguments)
             runtime.find(
                 "if (beltGrabPressed",
                 interactionPriority);
+        const std::size_t recommendedPerformanceStart =
+            configuratorSource.find(
+                "if (recommendedGraphics == \"performance\")");
+        const std::size_t recommendedNativeStart =
+            configuratorSource.find(
+                "else if (recommendedGraphics == \"native\")",
+                recommendedPerformanceStart);
+        const std::string recommendedPerformanceBlock =
+            recommendedPerformanceStart != std::string::npos &&
+                    recommendedNativeStart > recommendedPerformanceStart
+                ? configuratorSource.substr(
+                      recommendedPerformanceStart,
+                      recommendedNativeStart - recommendedPerformanceStart)
+                : std::string();
+        Check(
+            recommendedPerformanceBlock.find(
+                "state.values[\"KISAK_VR_SCOPE_CAPTURE_SIZE\"] = \"1024\";") !=
+                    std::string::npos &&
+                recommendedPerformanceBlock.find("\"768\"") ==
+                    std::string::npos,
+            "beta.16 RC2 compatibility recommendations must preserve the same 1024-pixel Performance scope panel as the named preset");
         Check(
             compatibilityProbe.find(
                 "KISAK_SP_VR_PIMAX_X86_RUNTIME_V86") !=
@@ -3716,9 +3889,9 @@ int main(const int argumentCount, char** arguments)
                     std::string::npos &&
                 compass.find("TransformCompassRect") !=
                     std::string::npos &&
-                messages.find("layout.objectiveOffsetX") !=
+                consoleSource.find("layout.objectiveOffsetX") !=
                     std::string::npos &&
-                messages.find("layout.subtitleScale") !=
+                consoleSource.find("layout.subtitleScale") !=
                     std::string::npos &&
                 draw.find("VR_DrawHudEditorOverlay") !=
                     std::string::npos &&
@@ -4276,6 +4449,9 @@ int main(const int argumentCount, char** arguments)
     Check(values["VR_CUSTOM_MODE"] == "4768x2016", "performance preset should use lower packed mode");
     Check(values["KISAK_VR_OUTPUT_SCALE"] == "0.75", "performance preset should use 0.75 output scale");
     Check(values["KISAK_VR_FSR"] == "1", "performance preset should enable FSR");
+    Check(
+        values["KISAK_VR_SCOPE_CAPTURE_SIZE"] == "1024",
+        "performance preset should preserve the documented 1024-pixel scope panel");
     Check(kc::ValidateSettings(values).empty(), "performance preset should validate cleanly");
 
     values = kc::BuiltInDefaults();

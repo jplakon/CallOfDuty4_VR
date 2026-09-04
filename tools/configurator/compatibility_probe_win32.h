@@ -8,6 +8,14 @@
 namespace kisak::configurator::win32_compatibility
 {
 
+// Resolves the runtime selected by OpenVR's own path-registry shim and accepts
+// it only when the architecture-matched 32-bit client file exists at the path
+// used by the pinned OpenVR loader. This deliberately rejects stale path
+// registries and x64-only installations before they are presented as a usable
+// fallback.
+bool FindOpenVrX86Client(
+    std::filesystem::path* clientPath);
+
 kisak::vr::compatibility::Probe ProbeSystem(
     const std::filesystem::path& gameDirectory,
     const std::filesystem::path& runtimeReceiptPath,

@@ -19,6 +19,7 @@ static void KisakCrash_RecordFatalError(const char*) {}
 static void KisakCrash_MarkExpectedExit(const char*, int) {}
 static void KisakCrash_PrepareCurrentThread(const char*) {}
 static void KisakCrash_ReinstallUnhandledExceptionFilter() {}
+static void KisakCrash_SetFrameNumber(unsigned int) {}
 #endif
 
 //#include "resource.h"

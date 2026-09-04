@@ -1793,6 +1793,7 @@ void __cdecl R_GenerateSortedDrawSurfs(
         if (gfxDrawMethod.drawScene == GFX_DRAW_SCENE_STANDARD)
         {
             R_AddAllBspDrawSurfacesCamera();
+#if defined(XR_USE_GRAPHICS_API_D3D11)
             const bool vrStereoSunShadowsDisabled =
                 VR_D3D9IsSameFrameStereoEnabled() &&
                 !R_VrStereoShadowMapsRequested();
@@ -1811,6 +1812,9 @@ void __cdecl R_GenerateSortedDrawSurfs(
                     loggedVrStereoSunShadowDisable = true;
                 }
             }
+#else
+            const bool vrStereoSunShadowsDisabled = false;
+#endif
 
             if ((!sm_sunEnable->current.enabled ||
                  vrStereoSunShadowsDisabled) &&

@@ -2,6 +2,7 @@
 
 #include <windows.h>
 #include <dxgi.h>
+#include <openvr.h>
 
 #include <algorithm>
 #include <array>
@@ -19,6 +20,75 @@
 
 namespace kisak::configurator::win32_compatibility
 {
+
+bool FindOpenVrX86Client(
+    std::filesystem::path* const clientPath)
+{
+    if (clientPath != nullptr)
+    {
+        clientPath->clear();
+    }
+
+    std::array<char, 32768u> runtimePath = {};
+    std::uint32_t requiredSize = 0u;
+    if (!::vr::VR_GetRuntimePath(
+            runtimePath.data(),
+            static_cast<std::uint32_t>(runtimePath.size()),
+            &requiredSize) ||
+        requiredSize == 0u ||
+        requiredSize > runtimePath.size())
+    {
+        return false;
+    }
+
+    std::filesystem::path runtimeDirectory;
+    const int wideSize = MultiByteToWideChar(
+        CP_UTF8,
+        MB_ERR_INVALID_CHARS,
+        runtimePath.data(),
+        -1,
+        nullptr,
+        0);
+    if (wideSize > 0)
+    {
+        std::vector<wchar_t> widePath(
+            static_cast<std::size_t>(wideSize));
+        if (MultiByteToWideChar(
+                CP_UTF8,
+                MB_ERR_INVALID_CHARS,
+                runtimePath.data(),
+                -1,
+                widePath.data(),
+                wideSize) <= 0)
+        {
+            return false;
+        }
+        runtimeDirectory = widePath.data();
+    }
+    else
+    {
+        runtimeDirectory = runtimePath.data();
+    }
+
+    const std::filesystem::path candidate =
+        runtimeDirectory /
+        L"bin" / L"vrclient.dll";
+    std::error_code filesystemError;
+    if (!std::filesystem::is_regular_file(
+            candidate,
+            filesystemError) ||
+        filesystemError)
+    {
+        return false;
+    }
+
+    if (clientPath != nullptr)
+    {
+        *clientPath = candidate;
+    }
+    return true;
+}
+
 namespace
 {
 
@@ -339,64 +409,15 @@ void DetectGpu(
     *memoryBytes = largestMemory;
 }
 
-std::filesystem::path LocalAppDataDirectory()
-{
-    std::array<wchar_t, 32768u> value = {};
-    const DWORD length = GetEnvironmentVariableW(
-        L"LOCALAPPDATA",
-        value.data(),
-        static_cast<DWORD>(value.size()));
-    if (length == 0u || length >= value.size())
-    {
-        return {};
-    }
-    return std::filesystem::path(value.data());
-}
-
 void DetectOpenVr(
     bool* const installed,
     std::string* const evidence)
 {
-    const std::filesystem::path localAppData = LocalAppDataDirectory();
-    if (!localAppData.empty())
+    std::filesystem::path x86Client;
+    if (FindOpenVrX86Client(&x86Client))
     {
-        const std::filesystem::path vrPaths =
-            localAppData / L"openvr" / L"openvrpaths.vrpath";
-        const std::string text = ReadTextFile(vrPaths);
-        if (!text.empty() && text.find("runtime") != std::string::npos)
-        {
-            *installed = true;
-            *evidence = WideToUtf8(vrPaths.wstring());
-            return;
-        }
-    }
-
-    std::wstring steamPath;
-    if (!ReadRegistryString(
-            HKEY_CURRENT_USER,
-            L"Software\\Valve\\Steam",
-            L"SteamPath",
-            0u,
-            &steamPath))
-    {
-        return;
-    }
-
-    const std::filesystem::path steamVr =
-        std::filesystem::path(steamPath) /
-        L"steamapps" / L"common" / L"SteamVR";
-    const std::array<std::filesystem::path, 2> candidates = {
-        steamVr / L"bin" / L"win32" / L"vrclient.dll",
-        steamVr / L"bin" / L"win64" / L"vrclient_x64.dll",
-    };
-    for (const std::filesystem::path& candidate : candidates)
-    {
-        if (std::filesystem::is_regular_file(candidate))
-        {
-            *installed = true;
-            *evidence = WideToUtf8(candidate.wstring());
-            return;
-        }
+        *installed = true;
+        *evidence = WideToUtf8(x86Client.wstring());
     }
 }
 

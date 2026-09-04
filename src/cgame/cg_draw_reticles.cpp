@@ -15,6 +15,7 @@
 #endif
 
 // KISAK_SP_JAVELIN_RETICLE_DIAGNOSTICS
+#ifdef KISAK_SP
 static uint32_t s_vrJavelinReticleDiagnosticSequence = 0;
 
 static bool VR_JavelinReticleDiagnosticActive(int32_t localClientNum)
@@ -41,6 +42,9 @@ static void VR_JavelinReticleDiagnostic(
         ++s_vrJavelinReticleDiagnosticSequence,
         stage);
 }
+#else
+static void VR_JavelinReticleDiagnostic(int32_t, const char*) {}
+#endif
 
 void __cdecl CG_CalcCrosshairPosition(const cg_s *cgameGlob, float *x, float *y)
 {

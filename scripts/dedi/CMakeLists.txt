@@ -56,6 +56,15 @@ add_executable(${PROJECT_NAME}
     ${STEAM_HEADERS}
 )
 
+# Dedicated servers compile shared client/renderer sources but never start a
+# VR runtime. Provide neutral implementations for the shared VR queries rather
+# than linking the OpenXR client stack into the server executable.
+target_sources(
+    ${PROJECT_NAME}
+    PRIVATE
+        ${SRC_DIR}/vr/vr_dedicated_stubs.cpp
+)
+
 target_compile_definitions(${PROJECT_NAME} PUBLIC KISAK_MP KISAK_DEDICATED DEDICATED)
 
 # We need all of the pre/post-build commands
