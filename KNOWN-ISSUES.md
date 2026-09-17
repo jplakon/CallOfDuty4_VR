@@ -1,6 +1,6 @@
 # Known issues
 
-This list applies to `v0.10.0-beta.16`.
+This list applies to `v0.10.0-beta.17`.
 
 ## Setup and compatibility
 
@@ -95,6 +95,11 @@ This list applies to `v0.10.0-beta.16`.
 
 ## Rendering
 
+- Beta.17 fixes issue #78's continuous cyan/green/blue world corruption by
+  keeping the Float-Z full-scene depth clear in each installed eye viewport's
+  local coordinates. Automated checks, the OpenXR Simulator, and Quest 3 / VDXR
+  hardware validation passed; confirmation on the reporter's original Quest 3S
+  / VDXR configuration is still welcome.
 - Synchronized dynamic shadows can have a significant performance cost.
 - V114 isolates COD4's saved-screen shellshock/flash feedback across packed VR
   views. Captures now occur only after the final view, and each eye samples its

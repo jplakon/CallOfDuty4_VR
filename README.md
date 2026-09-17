@@ -14,7 +14,16 @@ copy of the original game.
 
 ## Current status
 
-The current public beta is `v0.10.0-beta.16`.
+The current public beta is `v0.10.0-beta.17`.
+
+Beta.17 fixes issue #78's continuous cyan/green/blue world corruption in the
+packed stereo Float-Z depth-clear path. Once an eye viewport is installed, the
+clear quad now uses viewport-local coordinates instead of applying the packed
+render-target origin a second time. Automated checks, the OpenXR Simulator,
+and a focused Quest 3 / Virtual Desktop VDXR headset test with `r_zFeather 1`
+and repeated two-hand/ADS transitions passed. Desktop/non-VR behavior is
+unchanged; confirmation on the original reporter's Quest 3S system is still
+welcome.
 
 Beta.16 addresses issue #46's distant dog tumbling and
 ground clipping. COD4's reconstructed ground-orientation path had swapped its

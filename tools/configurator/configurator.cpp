@@ -55,7 +55,7 @@ constexpr wchar_t kHudEditorClass[] =
 constexpr wchar_t kWeaponEditorClass[] =
     L"KisakCODVrWeaponCalibrationEditorV65";
 constexpr wchar_t kWindowTitle[] =
-    L"KisakCOD VR Configurator - v0.10.0-beta.16";
+    L"KisakCOD VR Configurator - v0.10.0-beta.17";
 
 // KISAK_VR_CONFIGURATOR_RESIZABLE_WINDOW_V96
 // The original fixed outer size was only barely larger than the rightmost

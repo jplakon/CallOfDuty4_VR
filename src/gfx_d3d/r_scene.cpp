@@ -3,6 +3,7 @@
 #include "vr/vr_openxr.h"
 #if defined(XR_USE_GRAPHICS_API_D3D11)
 #include "vr/vr_d3d9_capture.h"
+#include "vr/vr_postfx_policy.h"
 #endif
 #include <qcommon/mem_track.h>
 #include "r_init.h"
@@ -2239,6 +2240,23 @@ void __cdecl R_SetFullSceneViewMesh(int viewInfoIndex, GfxViewInfo *viewInfo)
     y = (float)viewInfo->sceneViewport.y;
     width = (float)viewInfo->sceneViewport.width;
     height = (float)viewInfo->sceneViewport.height;
+
+#if defined(KISAK_SP) && defined(XR_USE_GRAPHICS_API_D3D11)
+    // KISAK_SP_VR_ISSUE78_FLOAT_Z_VIEWPORT_V117
+    const kisak::vr::postfx::FullSceneDepthQuad depthQuad =
+        kisak::vr::postfx::ResolveFullSceneDepthQuad(
+            VR_D3D9IsSameFrameStereoEnabled(),
+            x,
+            y,
+            width,
+            height);
+
+    x = depthQuad.x;
+    y = depthQuad.y;
+    width = depthQuad.width;
+    height = depthQuad.height;
+#endif
+
     if (x != quadMesh->x || y != quadMesh->y || width != quadMesh->width || height != quadMesh->height)
     {
         R_SyncRenderThread();

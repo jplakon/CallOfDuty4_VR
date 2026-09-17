@@ -4,6 +4,21 @@
 
 _No changes yet._
 
+## v0.10.0-beta.17
+
+Focused V117 rendering hotfix over `v0.10.0-beta.16`.
+
+- Fixes issue #78's continuous cyan/green/blue world corruption when COD4's
+  Float-Z depth clear runs in packed stereo, including the reported transition
+  into two-hand grip or ADS.
+- The full-scene depth quad now uses viewport-local coordinates after the D3D
+  eye viewport is installed. The right eye no longer applies its packed render
+  target origin twice; desktop/non-VR coordinates remain unchanged.
+- Automated regression checks, an OpenXR Simulator run, and a focused Quest 3
+  / Virtual Desktop VDXR headset test with `r_zFeather 1` and repeated
+  two-hand/ADS transitions passed without the cyan/blue corruption. Confirmation
+  on the original reporter's Quest 3S / VDXR system is still welcome.
+
 ## v0.10.0-beta.16
 
 Cumulative V105-V116 VR fixes over `v0.10.0-beta.15`. Issues #46 and #75

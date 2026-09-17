@@ -1,6 +1,6 @@
 # Release checklist
 
-This checklist is for `v0.10.0-beta.16` over `v0.10.0-beta.15`.
+This checklist is for `v0.10.0-beta.17` over `v0.10.0-beta.16`.
 
 ## Documentation blockers
 
@@ -41,7 +41,7 @@ This checklist is for `v0.10.0-beta.16` over `v0.10.0-beta.15`.
   `KisakCOD-VR-Input-Mapper`, and `KisakCOD-VR-Configurator-Tests` in Win32
   Release configuration from the committed source.
 - Run the settings tests against `release/package/VR-Settings.bat` and require
-  all 142 catalog settings plus beta.16 compatibility, launcher, runtime,
+  all 142 catalog settings plus beta.17 compatibility, launcher, runtime,
   configurator, HUD/menu, Pimax, and mounted-gun contracts to pass.
 - Confirm `git status --porcelain --untracked-files=no` remains empty.
 - Copy nothing from `bin/Debug` into the player package.
@@ -63,7 +63,7 @@ This checklist is for `v0.10.0-beta.16` over `v0.10.0-beta.15`.
 
 - Open **Setup & Compatibility** on the primary VDXR/Quest 3/RTX 3080 Ti
   system. Require file, DirectX, OS, GPU, and 32-bit OpenXR checks to pass;
-  before the first beta.16 run, require honest headset/controller warnings.
+  before the first beta.17 run, require honest headset/controller warnings.
 - Apply the recommendation only after verifying its confirmation lists the
   exact backend/graphics delta. Snapshot all other settings before/after and
   require handedness, units, comfort, input, HUD, height, interactions, and
@@ -255,7 +255,7 @@ This checklist is for `v0.10.0-beta.16` over `v0.10.0-beta.15`.
 
 ## Tag and package
 
-- Create annotated tag `v0.10.0-beta.16` only after the compatibility,
+- Create annotated tag `v0.10.0-beta.17` only after the compatibility,
   Metric/Imperial, per-weapon/gunstock, handed-interaction, controller, menu,
   rendering, crash-diagnostic, tracked-hand, reload, grenade, OpenVR two-hand,
   Automatic-proximity release, detonator, and campaign state is validated.
@@ -267,7 +267,7 @@ This checklist is for `v0.10.0-beta.16` over `v0.10.0-beta.15`.
 
   ```powershell
   python tools/package_release.py `
-    --version 0.10.0-beta.16 `
+    --version 0.10.0-beta.17 `
     --repository-url https://github.com/jplakon/CallOfDuty4_VR `
     --patreon-url https://www.patreon.com/c/J_Play `
     --output-directory releases
