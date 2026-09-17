@@ -89,7 +89,9 @@ void VR_PublishPhysicalSniperScopePoseWorld(
     const float scopeOrigin[3],
     const float scopeAxis[3][3],
     const float cameraOrigin[3],
-    const float cameraAxis[3][3]);
+    const float cameraAxis[3][3],
+    float lensRadiusMeters,
+    bool exactModelLensSurface);
 
 bool VR_GetPhysicalSniperScopeAimWorld(
     float scopeOrigin[3],

@@ -55,7 +55,7 @@ constexpr wchar_t kHudEditorClass[] =
 constexpr wchar_t kWeaponEditorClass[] =
     L"KisakCODVrWeaponCalibrationEditorV65";
 constexpr wchar_t kWindowTitle[] =
-    L"KisakCOD VR Configurator - v0.10.0-beta.17";
+    L"KisakCOD VR Configurator - v0.10.0-beta.18";
 
 // KISAK_VR_CONFIGURATOR_RESIZABLE_WINDOW_V96
 // The original fixed outer size was only barely larger than the rightmost
@@ -110,6 +110,10 @@ constexpr int kIdWeaponPollTimer = 129;
 constexpr int kIdSetupRescan = 130;
 constexpr int kIdSetupApplyRecommended = 131;
 constexpr int kIdSetupCopyReport = 132;
+constexpr int kIdChordSourceList = 160;
+static_assert(
+    kIdChordSourceList != IDOK && kIdChordSourceList != IDCANCEL,
+    "The chord source list must not alias a dialog command.");
 constexpr int kIdSetupOpenReport = 133;
 constexpr int kIdCalibrationRecenterPosition = 134;
 constexpr int kIdCalibrationRecenterDirectionLevel = 135;
@@ -2174,7 +2178,7 @@ void EditControllerChord(
         76,
         568,
         430,
-        1,
+        kIdChordSourceList,
         WS_EX_CLIENTEDGE);
 
     vi::Binding currentBinding;

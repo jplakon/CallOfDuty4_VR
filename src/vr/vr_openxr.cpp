@@ -115,11 +115,16 @@ bool g_vrOpenVrLoggedMissionSelector = false;
 
 // KISAK_SP_VR_OPENXR_MISSION_SELECTOR_V103
 // Reuse the V79 neutral-entry state machine for native OpenXR controllers.
-// Quest thumbrest contact must not suppress locomotion or complete a mission
-// shortcut unless contact began while both physical primary axes were neutral.
+// Keep the legacy right-thumbrest + left-stick layout guarded for customized
+// profiles, and guard the V5 locomotion-safe left-thumbrest + right-stick
+// layout independently so its selection axis cannot also turn or change
+// stance.
 VrInput::OpenVrMissionSelectorState
-    g_vrOpenXrMissionSelector = {};
-bool g_vrOpenXrLoggedMissionSelector = false;
+    g_vrOpenXrLegacyMissionSelector = {};
+VrInput::OpenVrMissionSelectorState
+    g_vrOpenXrSafeMissionSelector = {};
+bool g_vrOpenXrLoggedLegacyMissionSelector = false;
+bool g_vrOpenXrLoggedSafeMissionSelector = false;
 
 // KISAK_SP_VR_OPENVR_SEMANTIC_CONTROLLER_POSES_V77
 // OpenVR's tracked-device pose is the driver's controller origin, not a
@@ -422,6 +427,21 @@ bool g_vrRightControllerFinalWeaponAxisCameraLocalValid = false;
 // authoritative world-space scope ray used for ballistic convergence.
 float g_vrPhysicalSniperScopeOffsetWeaponLocal[3] = {};
 bool g_vrPhysicalSniperScopeOffsetWeaponLocalValid = false;
+float g_vrPhysicalSniperScopeLensRadiusMeters = 0.0f;
+bool g_vrPhysicalSniperScopeLensRadiusValid = false;
+
+// KISAK_VR_EXACT_SCOPE_LENS_POSE_V3
+// Preserve the lens pose in the same camera-local coordinates that rendered
+// the viewmodel.  Reconstructing it later from the filtered OpenXR grip loses
+// the viewmodel's final grip-tag correction and can detach the compositor
+// aperture from the glass by most of an eye image.
+float g_vrPhysicalSniperScopeOriginCameraLocal[3] = {};
+float g_vrPhysicalSniperScopeAxisCameraLocal[3][3] = {
+    {1.0f, 0.0f, 0.0f},
+    {0.0f, 1.0f, 0.0f},
+    {0.0f, 0.0f, 1.0f},
+};
+bool g_vrPhysicalSniperScopePoseCameraLocalValid = false;
 
 float g_vrPhysicalSniperScopeOriginWorld[3] = {};
 float g_vrPhysicalSniperScopeForwardWorld[3] = {
@@ -2025,7 +2045,7 @@ const VrConfiguratorSettings& VR_GetConfiguratorSettings()
 
         Com_Printf(
             0,
-            "[VR][CONTROLS] Controller Input V4 loaded %u actions "
+            "[VR][CONTROLS] Controller Input V5 loaded %u actions "
             "with primary/alternate slots and input chords.\n",
             static_cast<unsigned int>(VrInput::kActionCount));
 
@@ -3235,6 +3255,7 @@ struct VrScopeConstants
     float sample[4];
     float bounds[4];
     float viewport[4];
+    float reticle[4];
 };
 
 struct VrCompositorConstants
@@ -3920,6 +3941,7 @@ cbuffer ScopeConstants : register(b0)
     float4 scopeSample;
     float4 scopeBounds;
     float4 scopeViewport;
+    float4 scopeReticle;
 };
 
 float4 PSScope(PixelInput input) : SV_TARGET
@@ -3955,10 +3977,14 @@ float4 PSScope(PixelInput input) : SV_TARGET
     }
 
     float2 sourceUv = float2(0.0f, 0.0f);
-
     if (scopeLens.w > 0.5f)
     {
-        // KISAK_VR_DEDICATED_SCOPE_CAMERA_V2_VERTICAL_FLIP_FIX
+        // KISAK_SP_VR_WAW_SCOPE_MAPPING_V117
+        // Match the stable World at War physical-scope compositor: the
+        // dedicated camera is already centered on the rifle's authoritative
+        // aim ray, so map the complete source directly across the measured
+        // lens.  The former eye-relative offset could push the entire sample
+        // outside its source panel and turn an otherwise aligned scope black.
         const float2 dedicatedScopeLensDelta =
             float2(
                 lensDelta.x,
@@ -4041,20 +4067,25 @@ float4 PSScope(PixelInput input) : SV_TARGET
         float3(0.005f, 0.007f, 0.009f),
         edge);
 
+    const float2 reticleDelta = lensDelta;
+
+    const float reticleRadius =
+        length(reticleDelta);
+
     const float centerGap =
-        smoothstep(0.055f, 0.09f, lensRadius);
+        smoothstep(0.055f, 0.09f, reticleRadius);
 
     const float verticalLine =
         1.0f - smoothstep(
             0.008f,
             0.016f,
-            abs(lensDelta.x));
+            abs(reticleDelta.x));
 
     const float horizontalLine =
         1.0f - smoothstep(
             0.008f,
             0.016f,
-            abs(lensDelta.y));
+            abs(reticleDelta.y));
 
     const float reticle =
         max(verticalLine, horizontalLine) *
@@ -8266,7 +8297,7 @@ void VR_RenderPhysicalSniperScope(
     const std::uint32_t eyeIndex,
     const int32_t viewportWidth,
     const int32_t viewportHeight,
-    const XrView& sourceView)
+    const std::array<XrView, kVrStereoEyeCount>& sourceViews)
 {
     if (eyeIndex >= g_vrViews.size() ||
         eyeIndex >= g_vrBlitVertexBuffers.size() ||
@@ -8278,6 +8309,9 @@ void VR_RenderPhysicalSniperScope(
     {
         return;
     }
+
+    const XrView& sourceView =
+        sourceViews[eyeIndex];
 
     bool scopeActive = false;
     float adsFraction = 0.0f;
@@ -8311,12 +8345,34 @@ void VR_RenderPhysicalSniperScope(
     bool finalWeaponAxisCameraLocalValid = false;
     float scopeOffsetWeaponLocal[3] = {};
     bool scopeOffsetWeaponLocalValid = false;
+    float scopeOriginCameraLocal[3] = {};
+    float scopeAxisCameraLocal[3][3] = {};
+    bool scopePoseCameraLocalValid = false;
+    float scopeLensRadiusMeters =
+        g_vrScopeLensRadiusMeters;
 
     {
         std::lock_guard<std::mutex> lock(
             g_vrWeaponControllerPoseMutex);
 
-        if (!g_vrRightControllerWeaponFilterValid)
+        scopePoseCameraLocalValid =
+            g_vrPhysicalSniperScopePoseCameraLocalValid;
+
+        if (scopePoseCameraLocalValid)
+        {
+            std::memcpy(
+                scopeOriginCameraLocal,
+                g_vrPhysicalSniperScopeOriginCameraLocal,
+                sizeof(scopeOriginCameraLocal));
+
+            std::memcpy(
+                scopeAxisCameraLocal,
+                g_vrPhysicalSniperScopeAxisCameraLocal,
+                sizeof(scopeAxisCameraLocal));
+        }
+
+        if (!scopePoseCameraLocalValid &&
+            !g_vrRightControllerWeaponFilterValid)
         {
             return;
         }
@@ -8348,6 +8404,12 @@ void VR_RenderPhysicalSniperScope(
                 g_vrPhysicalSniperScopeOffsetWeaponLocal,
                 sizeof(scopeOffsetWeaponLocal));
         }
+
+        if (g_vrPhysicalSniperScopeLensRadiusValid)
+        {
+            scopeLensRadiusMeters =
+                g_vrPhysicalSniperScopeLensRadiusMeters;
+        }
     }
 
     VrHeadVector scopeForward =
@@ -8365,7 +8427,92 @@ void VR_RenderPhysicalSniperScope(
             controllerOrientation,
             {0.0f, 1.0f, 0.0f});
 
-    if (finalWeaponAxisCameraLocalValid)
+    XrVector3f lensCenter = {};
+
+    if (scopePoseCameraLocalValid)
+    {
+        const XrQuaternionf headOrientation =
+            VR_NormalizeQuaternion(
+                sourceViews[0].pose.orientation);
+
+        const XrVector3f headCenter = {
+            0.5f *
+                (sourceViews[0].pose.position.x +
+                 sourceViews[1].pose.position.x),
+            0.5f *
+                (sourceViews[0].pose.position.y +
+                 sourceViews[1].pose.position.y),
+            0.5f *
+                (sourceViews[0].pose.position.z +
+                 sourceViews[1].pose.position.z),
+        };
+
+        const VrHeadVector scopeOriginHeadLocal = {
+            -scopeOriginCameraLocal[1] /
+                kVrGameUnitsPerMeter,
+            scopeOriginCameraLocal[2] /
+                kVrGameUnitsPerMeter,
+            -scopeOriginCameraLocal[0] /
+                kVrGameUnitsPerMeter,
+        };
+
+        const VrHeadVector scopeForwardHeadLocal = {
+            -scopeAxisCameraLocal[0][1],
+            scopeAxisCameraLocal[0][2],
+            -scopeAxisCameraLocal[0][0],
+        };
+
+        const VrHeadVector scopeRightHeadLocal = {
+            scopeAxisCameraLocal[1][1],
+            -scopeAxisCameraLocal[1][2],
+            scopeAxisCameraLocal[1][0],
+        };
+
+        const VrHeadVector scopeUpHeadLocal = {
+            -scopeAxisCameraLocal[2][1],
+            scopeAxisCameraLocal[2][2],
+            -scopeAxisCameraLocal[2][0],
+        };
+
+        const VrHeadVector scopeOriginAppOffset =
+            VR_RotateHeadVector(
+                headOrientation,
+                scopeOriginHeadLocal);
+
+        lensCenter = {
+            headCenter.x + scopeOriginAppOffset.x,
+            headCenter.y + scopeOriginAppOffset.y,
+            headCenter.z + scopeOriginAppOffset.z,
+        };
+
+        scopeForward =
+            VR_RotateHeadVector(
+                headOrientation,
+                scopeForwardHeadLocal);
+
+        scopeRight =
+            VR_RotateHeadVector(
+                headOrientation,
+                scopeRightHeadLocal);
+
+        scopeUp =
+            VR_RotateHeadVector(
+                headOrientation,
+                scopeUpHeadLocal);
+
+        static bool loggedExactScopeLensPose = false;
+
+        if (!loggedExactScopeLensPose)
+        {
+            Com_Printf(
+                0,
+                "[VR] Physical sniper aperture now uses the exact "
+                "captured-frame camera-local lens pose.\n");
+
+            loggedExactScopeLensPose = true;
+        }
+    }
+    else if (finalWeaponAxisCameraLocalValid)
     {
         const XrQuaternionf headOrientation =
             VR_NormalizeQuaternion(
@@ -8420,61 +8567,64 @@ void VR_RenderPhysicalSniperScope(
         }
     }
 
-    const float scopeForwardMeters =
-        scopeOffsetWeaponLocalValid
-            ? scopeOffsetWeaponLocal[0] /
-                kVrGameUnitsPerMeter
-            : 0.22f +
-                g_vrScopeForwardCalibrationMeters;
+    if (!scopePoseCameraLocalValid)
+    {
+        const float scopeForwardMeters =
+            scopeOffsetWeaponLocalValid
+                ? scopeOffsetWeaponLocal[0] /
+                    kVrGameUnitsPerMeter
+                : 0.22f +
+                    g_vrScopeForwardCalibrationMeters;
 
-    const float scopeLeftMeters =
-        scopeOffsetWeaponLocalValid
-            ? scopeOffsetWeaponLocal[1] /
-                kVrGameUnitsPerMeter
-            : g_vrScopeLeftCalibrationMeters;
+        const float scopeLeftMeters =
+            scopeOffsetWeaponLocalValid
+                ? scopeOffsetWeaponLocal[1] /
+                    kVrGameUnitsPerMeter
+                : g_vrScopeLeftCalibrationMeters;
 
-    const float scopeUpMeters =
-        scopeOffsetWeaponLocalValid
-            ? scopeOffsetWeaponLocal[2] /
-                kVrGameUnitsPerMeter
-            : 0.055f +
-                g_vrScopeUpCalibrationMeters;
+        const float scopeUpMeters =
+            scopeOffsetWeaponLocalValid
+                ? scopeOffsetWeaponLocal[2] /
+                    kVrGameUnitsPerMeter
+                : 0.055f +
+                    g_vrScopeUpCalibrationMeters;
 
-    XrVector3f lensCenter =
-        VR_ControllerAddScaled(
-            controllerPosition,
-            scopeForward,
-            scopeForwardMeters);
+        lensCenter =
+            VR_ControllerAddScaled(
+                controllerPosition,
+                scopeForward,
+                scopeForwardMeters);
 
-    lensCenter =
-        VR_ControllerAddScaled(
-            lensCenter,
-            scopeRight,
-            -scopeLeftMeters);
+        lensCenter =
+            VR_ControllerAddScaled(
+                lensCenter,
+                scopeRight,
+                -scopeLeftMeters);
 
-    lensCenter =
-        VR_ControllerAddScaled(
-            lensCenter,
-            scopeUp,
-            scopeUpMeters);
+        lensCenter =
+            VR_ControllerAddScaled(
+                lensCenter,
+                scopeUp,
+                scopeUpMeters);
+    }
 
     const XrVector3f lensRight =
         VR_ControllerAddScaled(
             lensCenter,
             scopeRight,
-            g_vrScopeLensRadiusMeters);
+            scopeLensRadiusMeters);
 
     const XrVector3f lensUp =
         VR_ControllerAddScaled(
             lensCenter,
             scopeUp,
-            g_vrScopeLensRadiusMeters);
+            scopeLensRadiusMeters);
 
     const XrVector3f aimPoint =
         VR_ControllerAddScaled(
             lensCenter,
             scopeForward,
-            32.0f);
+            1000.0f);
 
     // The captured source is now rendered with a centered symmetric
     // frustum.  Project its magnified sample through that same source
@@ -8520,27 +8670,34 @@ void VR_RenderPhysicalSniperScope(
     float lensUpY = 0.0f;
     float aimX = 0.0f;
     float aimY = 0.0f;
+    float eyeAimX = 0.0f;
+    float eyeAimY = 0.0f;
 
     if (!VR_ProjectAppSpacePointToEye(
             lensCenter,
-            g_vrViews[eyeIndex],
+            sourceView,
             &lensCenterX,
             &lensCenterY) ||
         !VR_ProjectAppSpacePointToEye(
             lensRight,
-            g_vrViews[eyeIndex],
+            sourceView,
             &lensRightX,
             &lensRightY) ||
         !VR_ProjectAppSpacePointToEye(
             lensUp,
-            g_vrViews[eyeIndex],
+            sourceView,
             &lensUpX,
             &lensUpY) ||
         !VR_ProjectAppSpacePointToEye(
             aimPoint,
             symmetricSourceView,
             &aimX,
-            &aimY))
+            &aimY) ||
+        !VR_ProjectAppSpacePointToEye(
+            aimPoint,
+            sourceView,
+            &eyeAimX,
+            &eyeAimY))
     {
         return;
     }
@@ -8562,6 +8719,27 @@ void VR_RenderPhysicalSniperScope(
 
     const float lensUpV =
         0.5f * (1.0f - lensUpY);
+
+    static bool loggedProjectedScopeLens[kVrStereoEyeCount] = {};
+    if (!loggedProjectedScopeLens[eyeIndex])
+    {
+        Com_Printf(
+            0,
+            "[VR][SCOPE PROFILE] Eye %u projected lens UV "
+            "(%.4f %.4f), right UV (%.4f %.4f), "
+            "up UV (%.4f %.4f), aim UV (%.4f %.4f).\n",
+            eyeIndex,
+            lensCenterU,
+            lensCenterV,
+            lensRightU,
+            lensRightV,
+            lensUpU,
+            lensUpV,
+            0.5f * (eyeAimX + 1.0f),
+            0.5f * (1.0f - eyeAimY));
+
+        loggedProjectedScopeLens[eyeIndex] = true;
+    }
 
     // KISAK_VR_RIFLE_ATTACHED_SCOPE_V1
     // Preserve the optic's physical angular size.  The former 11.5 percent
@@ -8702,6 +8880,11 @@ void VR_RenderPhysicalSniperScope(
     constants.basis[1] = basisRightV;
     constants.basis[2] = basisUpU;
     constants.basis[3] = basisUpV;
+
+    // KISAK_SP_VR_WAW_SCOPE_MAPPING_V117
+    // Keep the reticle centered just as the World at War compositor does.
+    // The dedicated camera is already aligned to the authoritative rifle aim
+    // ray, so a second eye-relative offset only destabilizes the optic.
 
     if (dedicatedScopeSource)
     {
@@ -9080,8 +9263,10 @@ void VR_DestroyControllerInput()
     g_vrInputActionPreviousHeld.fill(false);
     g_vrDirectionalTermLatched = {};
     g_vrMissionShortcutArmed = true;
-    g_vrOpenXrMissionSelector = {};
-    g_vrOpenXrLoggedMissionSelector = false;
+    g_vrOpenXrLegacyMissionSelector = {};
+    g_vrOpenXrSafeMissionSelector = {};
+    g_vrOpenXrLoggedLegacyMissionSelector = false;
+    g_vrOpenXrLoggedSafeMissionSelector = false;
     g_vrNightVisionVisorGesture = {};
     g_vrLoggedNightVisionVisorGesture = false;
 
@@ -9140,6 +9325,8 @@ void VR_DestroyControllerInput()
         g_vrRightControllerFinalWeaponAimValid = false;
         g_vrRightControllerFinalWeaponAxisCameraLocalValid = false;
         g_vrPhysicalSniperScopeOffsetWeaponLocalValid = false;
+        g_vrPhysicalSniperScopeLensRadiusValid = false;
+        g_vrPhysicalSniperScopePoseCameraLocalValid = false;
         g_vrPhysicalSniperScopePoseWorldValid = false;
         g_vrRightControllerFinalWeaponMuzzleValid = false;
         g_vrRightControllerFinalWeaponMuzzleBlocked = false;
@@ -9202,6 +9389,22 @@ void VR_DestroyControllerInput()
             0,
             sizeof(
                 g_vrPhysicalSniperScopeOffsetWeaponLocal));
+
+        memset(
+            g_vrPhysicalSniperScopeOriginCameraLocal,
+            0,
+            sizeof(
+                g_vrPhysicalSniperScopeOriginCameraLocal));
+
+        memset(
+            g_vrPhysicalSniperScopeAxisCameraLocal,
+            0,
+            sizeof(
+                g_vrPhysicalSniperScopeAxisCameraLocal));
+
+        g_vrPhysicalSniperScopeAxisCameraLocal[0][0] = 1.0f;
+        g_vrPhysicalSniperScopeAxisCameraLocal[1][1] = 1.0f;
+        g_vrPhysicalSniperScopeAxisCameraLocal[2][2] = 1.0f;
 
         memset(
             g_vrPhysicalSniperScopeOriginWorld,
@@ -10052,13 +10255,13 @@ bool VR_SuggestControllerBindings()
         Com_PrintWarning(
             0,
             "[VR][CONTROLS] No OpenXR controller profile accepted "
-            "Controller Input V4 bindings.\n");
+            "Controller Input V5 bindings.\n");
         return false;
     }
 
     Com_Printf(
         0,
-        "[VR][CONTROLS] Controller Input V4 enabled %u OpenXR "
+        "[VR][CONTROLS] Controller Input V5 enabled %u OpenXR "
         "interaction profiles.\n",
         acceptedProfileCount);
 
@@ -11515,6 +11718,8 @@ void VR_InvalidateRightControllerWeaponPose()
         g_vrRightControllerFinalWeaponAimValid = false;
         g_vrRightControllerFinalWeaponAxisCameraLocalValid = false;
         g_vrPhysicalSniperScopeOffsetWeaponLocalValid = false;
+        g_vrPhysicalSniperScopeLensRadiusValid = false;
+        g_vrPhysicalSniperScopePoseCameraLocalValid = false;
         g_vrPhysicalSniperScopePoseWorldValid = false;
         g_vrRightControllerFinalWeaponMuzzleValid = false;
         g_vrRightControllerFinalWeaponMuzzleBlocked = false;
@@ -12371,7 +12576,7 @@ void VR_ApplyControllerInputState(
     {
         Com_Printf(
             0,
-            "[VR][CONTROLS] Controller Input V4 is routing "
+            "[VR][CONTROLS] Controller Input V5 is routing "
             "gameplay actions through %s independently of "
             "controller model.\n",
             backendLabel != nullptr ? backendLabel : "the active runtime");
@@ -12672,13 +12877,15 @@ void VR_UpdateControllerActions(
     VrInputHeldState inputHeld = {};
     VrInputVectorState inputVectors = {};
     VrInputActiveState inputVectorActive = {};
-    bool missionMovementLockHeld = false;
     const VrConfiguratorSettings& configurable =
         VR_GetConfiguratorSettings();
 
-    const XrAction missionTouchAction =
+    const XrAction legacyMissionTouchAction =
         VR_FindInputTermActionForPhysicalSource(
             VrInput::Source::RightThumbrestTouch);
+    const XrAction safeMissionTouchAction =
+        VR_FindInputTermActionForPhysicalSource(
+            VrInput::Source::LeftThumbrestTouch);
     const XrAction leftPrimaryAxisAction =
         VR_FindInputTermActionForPhysicalSource(
             VrInput::Source::LeftPrimaryAxis);
@@ -12686,15 +12893,25 @@ void VR_UpdateControllerActions(
         VR_FindInputTermActionForPhysicalSource(
             VrInput::Source::RightPrimaryAxis);
 
-    bool missionTouchHeld = false;
-    bool missionTouchActive = false;
-    const bool missionTouchValid =
-        missionTouchAction != XR_NULL_HANDLE &&
+    bool legacyMissionTouchHeld = false;
+    bool legacyMissionTouchActive = false;
+    const bool legacyMissionTouchValid =
+        legacyMissionTouchAction != XR_NULL_HANDLE &&
         VR_GetControllerBooleanState(
-            missionTouchAction,
+            legacyMissionTouchAction,
             XR_NULL_PATH,
-            &missionTouchHeld,
-            &missionTouchActive);
+            &legacyMissionTouchHeld,
+            &legacyMissionTouchActive);
+
+    bool safeMissionTouchHeld = false;
+    bool safeMissionTouchActive = false;
+    const bool safeMissionTouchValid =
+        safeMissionTouchAction != XR_NULL_HANDLE &&
+        VR_GetControllerBooleanState(
+            safeMissionTouchAction,
+            XR_NULL_PATH,
+            &safeMissionTouchHeld,
+            &safeMissionTouchActive);
 
     XrVector2f leftPrimaryAxis = {};
     bool leftPrimaryAxisActive = false;
@@ -12716,27 +12933,97 @@ void VR_UpdateControllerActions(
             &rightPrimaryAxis,
             &rightPrimaryAxisActive);
 
-    const VrInput::OpenVrMissionSelectorUpdate missionSelector =
+    const VrInput::OpenVrMissionSelectorUpdate legacyMissionSelector =
         VrInput::UpdateOpenVrMissionSelector(
-            &g_vrOpenXrMissionSelector,
-            missionTouchValid && missionTouchActive,
-            missionTouchHeld,
+            &g_vrOpenXrLegacyMissionSelector,
+            legacyMissionTouchValid && legacyMissionTouchActive,
+            legacyMissionTouchHeld,
             {leftPrimaryAxis.x, leftPrimaryAxis.y},
             leftPrimaryAxisValid && leftPrimaryAxisActive,
             {rightPrimaryAxis.x, rightPrimaryAxis.y},
             rightPrimaryAxisValid && rightPrimaryAxisActive);
 
-    if (missionSelector.available &&
-        !g_vrOpenXrLoggedMissionSelector)
+    const VrInput::OpenVrMissionSelectorUpdate safeMissionSelector =
+        VrInput::UpdateOpenVrMissionSelector(
+            &g_vrOpenXrSafeMissionSelector,
+            safeMissionTouchValid && safeMissionTouchActive,
+            safeMissionTouchHeld,
+            {rightPrimaryAxis.x, rightPrimaryAxis.y},
+            rightPrimaryAxisValid && rightPrimaryAxisActive,
+            {leftPrimaryAxis.x, leftPrimaryAxis.y},
+            leftPrimaryAxisValid && leftPrimaryAxisActive);
+
+    if (legacyMissionSelector.available &&
+        !g_vrOpenXrLoggedLegacyMissionSelector)
     {
         Com_Printf(
             0,
-            "[VR][OPENXR][CONTROLS] V103 guarded mission selector is "
+            "[VR][OPENXR][CONTROLS] V103 legacy mission selector is "
             "active: start with both sticks centered, touch the right "
             "thumbrest, then move the left stick; right-stick movement "
             "cancels selection.\n");
-        g_vrOpenXrLoggedMissionSelector = true;
+        g_vrOpenXrLoggedLegacyMissionSelector = true;
     }
+
+    if (safeMissionSelector.available &&
+        !g_vrOpenXrLoggedSafeMissionSelector)
+    {
+        Com_Printf(
+            0,
+            "[VR][OPENXR][CONTROLS] V5 locomotion-safe mission selector "
+            "is active: start with both sticks centered, touch the left "
+            "thumbrest, then move the right stick; left-stick movement "
+            "cancels selection.\n");
+        g_vrOpenXrLoggedSafeMissionSelector = true;
+    }
+
+    const auto selectorAction = [](const VrInput::Action action)
+    {
+        return action == VrInput::Action::GrenadeLauncher ||
+            action == VrInput::Action::NightVision ||
+            action == VrInput::Action::Airstrike ||
+            action == VrInput::Action::C4;
+    };
+    const auto hasMissionSelectorBinding =
+        [&](
+            const VrInput::Source modifier,
+            const VrInput::Source selectionAxis)
+    {
+        for (const VrInput::ActionDefinition& action :
+             VrInput::ActionDefinitions())
+        {
+            if (!selectorAction(action.action))
+            {
+                continue;
+            }
+
+            const std::size_t actionIndex =
+                static_cast<std::size_t>(action.action);
+            for (const VrInput::Binding& binding :
+                 configurable.bindings[actionIndex])
+            {
+                if (VrInput::UsesMissionSelector(
+                        binding,
+                        modifier,
+                        selectionAxis))
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+
+    const bool missionMovementLockHeld =
+        hasMissionSelectorBinding(
+            VrInput::Source::RightThumbrestTouch,
+            VrInput::Source::LeftPrimaryAxis) &&
+        legacyMissionSelector.modifierHeld;
+    const bool missionTurnLockHeld =
+        hasMissionSelectorBinding(
+            VrInput::Source::LeftThumbrestTouch,
+            VrInput::Source::RightPrimaryAxis) &&
+        safeMissionSelector.modifierHeld;
 
     bool nightVisionGestureGripPressed = false;
     bool nightVisionGestureGripActive = false;
@@ -12784,17 +13071,20 @@ void VR_UpdateControllerActions(
                     continue;
                 }
 
-                const bool selectorAction =
-                    action.action == VrInput::Action::GrenadeLauncher ||
-                    action.action == VrInput::Action::NightVision ||
-                    action.action == VrInput::Action::Airstrike ||
-                    action.action == VrInput::Action::C4;
-                const bool guardedMissionBinding =
-                    selectorAction &&
+                const bool isSelectorAction =
+                    selectorAction(action.action);
+                const bool guardedLegacyMissionBinding =
+                    isSelectorAction &&
                     VrInput::UsesMissionSelector(
                         binding,
                         VrInput::Source::RightThumbrestTouch,
                         VrInput::Source::LeftPrimaryAxis);
+                const bool guardedSafeMissionBinding =
+                    isSelectorAction &&
+                    VrInput::UsesMissionSelector(
+                        binding,
+                        VrInput::Source::LeftThumbrestTouch,
+                        VrInput::Source::RightPrimaryAxis);
 
                 bool chordHeld = true;
                 for (std::size_t termIndex = 0u;
@@ -12871,17 +13161,32 @@ void VR_UpdateControllerActions(
                         termHeld = false;
                     }
 
-                    if (guardedMissionBinding &&
+                    if (guardedLegacyMissionBinding &&
                         source == VrInput::Source::RightThumbrestTouch)
                     {
-                        termHeld = missionSelector.modifierHeld;
+                        termHeld = legacyMissionSelector.modifierHeld;
                     }
 
-                    if (selectorAction &&
-                        source == VrInput::Source::RightThumbrestTouch &&
-                        termHeld)
+                    if (guardedSafeMissionBinding &&
+                        source == VrInput::Source::LeftThumbrestTouch)
                     {
-                        missionMovementLockHeld = true;
+                        termHeld = safeMissionSelector.modifierHeld;
+                    }
+
+                    if (!isSelectorAction &&
+                        VrInput::IsDirectionalSource(source))
+                    {
+                        const VrInput::Source physicalSource =
+                            VrInput::PhysicalSource(source);
+                        if ((missionMovementLockHeld &&
+                             physicalSource ==
+                                 VrInput::Source::LeftPrimaryAxis) ||
+                            (missionTurnLockHeld &&
+                             physicalSource ==
+                                 VrInput::Source::RightPrimaryAxis))
+                        {
+                            termHeld = false;
+                        }
                     }
 
                     chordHeld = chordHeld && termHeld;
@@ -12932,6 +13237,14 @@ void VR_UpdateControllerActions(
                 selectedMagnitudeSquared = magnitudeSquared;
             }
         }
+    }
+
+    if (missionTurnLockHeld)
+    {
+        const std::size_t turnIndex =
+            static_cast<std::size_t>(VrInput::Action::Turn);
+        inputVectors[turnIndex] = {};
+        inputVectorActive[turnIndex] = false;
     }
 
     if (nightVisionGesture.toggledThisFrame)
@@ -14954,7 +15267,7 @@ bool VR_RenderSolidColorFrame(
                     eyeIndex,
                     eyeSwapchain.width,
                     eyeSwapchain.height,
-                    submissionViews[eyeIndex]);
+                    submissionViews);
             }
         }
 
@@ -14972,7 +15285,7 @@ bool VR_RenderSolidColorFrame(
                     eyeIndex,
                     eyeSwapchain.width,
                     eyeSwapchain.height,
-                    submissionViews[eyeIndex]);
+                    submissionViews);
             }
         }
 
@@ -15564,7 +15877,7 @@ bool VR_RenderOpenVrEye(
                 eyeIndex,
                 eyeTarget.width,
                 eyeTarget.height,
-                submissionViews[eyeIndex]);
+                submissionViews);
         }
     }
 
@@ -15581,7 +15894,7 @@ bool VR_RenderOpenVrEye(
                 eyeIndex,
                 eyeTarget.width,
                 eyeTarget.height,
-                submissionViews[eyeIndex]);
+                submissionViews);
         }
     }
 
@@ -15621,8 +15934,10 @@ void VR_ResetState()
     g_vrOpenVrLoggedController.fill(false);
     g_vrOpenVrMissionSelector = {};
     g_vrOpenVrLoggedMissionSelector = false;
-    g_vrOpenXrMissionSelector = {};
-    g_vrOpenXrLoggedMissionSelector = false;
+    g_vrOpenXrLegacyMissionSelector = {};
+    g_vrOpenXrSafeMissionSelector = {};
+    g_vrOpenXrLoggedLegacyMissionSelector = false;
+    g_vrOpenXrLoggedSafeMissionSelector = false;
     g_vrOpenVrControllerPoseComponents = {};
     g_vrNightVisionVisorGesture = {};
     g_vrLoggedNightVisionVisorGesture = false;
@@ -19554,7 +19869,7 @@ bool VR_GetTurnYawDelta(
     }
 
     // Turning consumes only deliberate horizontal axis motion. Vertical
-    // movement is ignored here; Controller Input V4 routes the default
+    // movement is ignored here; Controller Input V5 routes the default
     // right-axis up gesture through Jump and right-axis down through Lower
     // stance step.
     if (std::abs(g_vrRightThumbstickX) <
@@ -22253,7 +22568,7 @@ bool VR_InitOpenVrFallback(
     Com_Printf(
         0,
         "[VR][OPENVR] V57 x86 SteamVR fallback is ready: "
-        "head/controller poses, Controller Input V4, and stereo "
+        "head/controller poses, Controller Input V5, and stereo "
         "submission enabled.\n");
 
     VR_AppendCompatibilityRuntimeReceipt();
@@ -25124,7 +25439,9 @@ void VR_PublishPhysicalSniperScopePoseWorld(
     const float scopeOrigin[3],
     const float scopeAxis[3][3],
     const float cameraOrigin[3],
-    const float cameraAxis[3][3])
+    const float cameraAxis[3][3],
+    const float lensRadiusMeters,
+    const bool exactModelLensSurface)
 {
     if (scopeOrigin == nullptr ||
         scopeAxis == nullptr ||
@@ -25134,36 +25451,51 @@ void VR_PublishPhysicalSniperScopePoseWorld(
         return;
     }
 
+    const float forwardCalibrationMeters =
+        exactModelLensSurface
+            ? 0.0f
+            : g_vrScopeForwardCalibrationMeters;
+
+    const float leftCalibrationMeters =
+        exactModelLensSurface
+            ? 0.0f
+            : g_vrScopeLeftCalibrationMeters;
+
+    const float upCalibrationMeters =
+        exactModelLensSurface
+            ? 0.0f
+            : g_vrScopeUpCalibrationMeters;
+
     const float calibratedScopeOrigin[3] = {
         scopeOrigin[0] +
             scopeAxis[0][0] *
-                g_vrScopeForwardCalibrationMeters *
+                forwardCalibrationMeters *
                 kVrGameUnitsPerMeter +
             scopeAxis[1][0] *
-                g_vrScopeLeftCalibrationMeters *
+                leftCalibrationMeters *
                 kVrGameUnitsPerMeter +
             scopeAxis[2][0] *
-                g_vrScopeUpCalibrationMeters *
+                upCalibrationMeters *
                 kVrGameUnitsPerMeter,
         scopeOrigin[1] +
             scopeAxis[0][1] *
-                g_vrScopeForwardCalibrationMeters *
+                forwardCalibrationMeters *
                 kVrGameUnitsPerMeter +
             scopeAxis[1][1] *
-                g_vrScopeLeftCalibrationMeters *
+                leftCalibrationMeters *
                 kVrGameUnitsPerMeter +
             scopeAxis[2][1] *
-                g_vrScopeUpCalibrationMeters *
+                upCalibrationMeters *
                 kVrGameUnitsPerMeter,
         scopeOrigin[2] +
             scopeAxis[0][2] *
-                g_vrScopeForwardCalibrationMeters *
+                forwardCalibrationMeters *
                 kVrGameUnitsPerMeter +
             scopeAxis[1][2] *
-                g_vrScopeLeftCalibrationMeters *
+                leftCalibrationMeters *
                 kVrGameUnitsPerMeter +
             scopeAxis[2][2] *
-                g_vrScopeUpCalibrationMeters *
+                upCalibrationMeters *
                 kVrGameUnitsPerMeter,
     };
 
@@ -25220,6 +25552,25 @@ void VR_PublishPhysicalSniperScopePoseWorld(
         }
     }
 
+    static bool loggedPublishedScopeCameraPose = false;
+    if (!loggedPublishedScopeCameraPose)
+    {
+        Com_Printf(
+            0,
+            "[VR][SCOPE PROFILE] Published camera-local lens origin "
+            "(%.3f %.3f %.3f), forward (%.4f %.4f %.4f), "
+            "radius %.4f m.\n",
+            scopeOriginCameraLocal[0],
+            scopeOriginCameraLocal[1],
+            scopeOriginCameraLocal[2],
+            scopeAxisCameraLocal[0][0],
+            scopeAxisCameraLocal[0][1],
+            scopeAxisCameraLocal[0][2],
+            lensRadiusMeters);
+
+        loggedPublishedScopeCameraPose = true;
+    }
+
     std::lock_guard<std::mutex> lock(
         g_vrWeaponControllerPoseMutex);
 
@@ -25239,6 +25590,29 @@ void VR_PublishPhysicalSniperScopePoseWorld(
         sizeof(g_vrPhysicalSniperScopeAxisWorld));
 
     g_vrPhysicalSniperScopePoseWorldValid = true;
+
+    std::memcpy(
+        g_vrPhysicalSniperScopeOriginCameraLocal,
+        scopeOriginCameraLocal,
+        sizeof(scopeOriginCameraLocal));
+
+    std::memcpy(
+        g_vrPhysicalSniperScopeAxisCameraLocal,
+        scopeAxisCameraLocal,
+        sizeof(scopeAxisCameraLocal));
+
+    g_vrPhysicalSniperScopePoseCameraLocalValid = true;
+
+    g_vrPhysicalSniperScopeLensRadiusValid =
+        std::isfinite(lensRadiusMeters) &&
+        lensRadiusMeters >= 0.005f &&
+        lensRadiusMeters <= 0.10f;
+
+    if (g_vrPhysicalSniperScopeLensRadiusValid)
+    {
+        g_vrPhysicalSniperScopeLensRadiusMeters =
+            lensRadiusMeters;
+    }
 
     if (!g_vrRightControllerWeaponPoseValid)
     {

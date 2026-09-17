@@ -1,6 +1,6 @@
 # Controls
 
-Controller Input V4 uses controller-neutral bindings instead of assuming Meta
+Controller Input V5 uses controller-neutral bindings instead of assuming Meta
 Quest button names. The same saved profile works through OpenXR and the
 SteamVR/OpenVR compatibility backend. Every action has a primary and optional
 alternate slot, and either may use one input or an AND-chord of up to four
@@ -33,7 +33,7 @@ main thumbstick, or the trackpad on a Vive wand.
 | Menu confirm / back | Weapon-hand primary / weapon-hand secondary |
 | Menu cursor | Off-hand primary axis |
 | Grenade launcher / weapon slot 5 | Physical right grip / squeeze |
-| Other mission shortcuts | Right thumbrest touch + left primary-axis direction |
+| Other mission shortcuts | Left thumbrest touch + right primary-axis direction |
 | Mounted-scope zoom | Off-hand primary axis |
 
 The upward gesture is shown directly as the primary binding for **Jump**. It
@@ -81,8 +81,9 @@ hand's primary axis, explicit thumbstick, or explicit trackpad. A boolean
 input cannot be assigned to an axis action, or vice versa.
 
 Choose **Chord...** to select two through four inputs that must be held at the
-same time. For example, the tested night-vision default is **Right thumbrest
-touch + Left primary stick / trackpad down**. The primary and alternate slots
+same time. For example, the night-vision default is **Left thumbrest touch +
+Right primary stick / trackpad down**. This keeps ordinary movement on the left
+stick from arming a mission shortcut. The primary and alternate slots
 are OR alternatives; inputs inside either slot are an AND-chord. Selecting a
 single dropdown item replaces that slot with a normal one-input binding.
 
@@ -95,7 +96,8 @@ gameplay action.
 The grenade-launcher shortcut uses the physical **Right grip / squeeze** in a
 fresh/default profile. Night vision, airstrike, and C4 remain visible chord
 bindings and can be replaced with single inputs on controllers that do not
-expose a thumbrest touch sensor. Existing profiles keep their saved binding.
+expose a thumbrest touch sensor. Controller Input V5 migrates only the exact
+former mission defaults; custom profile bindings are preserved.
 The remaining directional layout is:
 
 | Direction | Action |

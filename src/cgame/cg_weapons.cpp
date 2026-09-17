@@ -119,6 +119,296 @@ struct VrManualGrenadeRenderObject
 static VrManualGrenadeRenderObject
     s_vrManualGrenadeRenderObjects[128] = {};
 
+static void VR_MultiplySkelMat(
+    const DObjSkelMat& first,
+    const DObjSkelMat& second,
+    DObjSkelMat* output);
+
+// KISAK_SP_VR_SCOPE_MODEL_PROFILE_V116
+// Several COD4 scoped viewmodels, including the campaign M21, do not expose
+// a rear-glass bone.  Like the WaW scope profiles, derive a precise weapon-
+// local lens center and aperture from the model's dedicated lens surface
+// instead of falling back to a controller-relative point in empty space.
+static bool VR_FindViewmodelScopeLensProfile(
+    const cpose_t* viewModelPose,
+    const DObj_s* viewModelDObj,
+    float lensCenterPoseLocal[3],
+    float* lensRadiusMeters)
+{
+    if (viewModelPose == nullptr ||
+        viewModelDObj == nullptr ||
+        lensCenterPoseLocal == nullptr ||
+        lensRadiusMeters == nullptr)
+    {
+        return false;
+    }
+
+    constexpr float kVrGameUnitsPerMeter =
+        39.37007874015748f;
+
+    int posePartBits[4] = {};
+
+    for (int boneIndex = 0;
+         boneIndex < viewModelDObj->numBones;
+         ++boneIndex)
+    {
+        posePartBits[boneIndex >> 5] |=
+            static_cast<int>(
+                0x80000000u >>
+                (boneIndex & 31));
+    }
+
+    DObjAnimMat* posedBones =
+        CG_DObjCalcPose(
+            viewModelPose,
+            viewModelDObj,
+            posePartBits);
+
+    if (posedBones == nullptr)
+    {
+        return false;
+    }
+
+    int modelBoneBase = 0;
+
+    for (uint8_t modelIndex = 0;
+         modelIndex < viewModelDObj->numModels;
+         ++modelIndex)
+    {
+        const XModel* model =
+            viewModelDObj->models[modelIndex];
+
+        if (model == nullptr ||
+            model->surfs == nullptr ||
+            model->materialHandles == nullptr ||
+            model->baseMat == nullptr)
+        {
+            if (model != nullptr)
+            {
+                modelBoneBase += model->numBones;
+            }
+
+            continue;
+        }
+
+        for (uint8_t surfaceIndex = 0;
+             surfaceIndex < model->numsurfs;
+             ++surfaceIndex)
+        {
+            const Material* material =
+                model->materialHandles[surfaceIndex];
+
+            if (material == nullptr ||
+                material->info.name == nullptr ||
+                std::strstr(
+                    material->info.name,
+                    "scope_lens") == nullptr)
+            {
+                continue;
+            }
+
+            const XSurface& surface =
+                model->surfs[surfaceIndex];
+
+            if (surface.verts0 == nullptr ||
+                surface.vertCount == 0 ||
+                surface.deformed ||
+                surface.vertList == nullptr ||
+                surface.vertListCount == 0)
+            {
+                continue;
+            }
+
+            bool boundsInitialized = false;
+            float minimum[3] = {};
+            float maximum[3] = {};
+            uint32_t vertexIndex = 0u;
+
+            for (uint32_t rigidListIndex = 0u;
+                 rigidListIndex < surface.vertListCount;
+                 ++rigidListIndex)
+            {
+                const XRigidVertList& rigidList =
+                    surface.vertList[rigidListIndex];
+
+                const int localBoneIndex =
+                    rigidList.boneOffset >> 6;
+
+                const int dobjBoneIndex =
+                    modelBoneBase +
+                    localBoneIndex;
+
+                if (localBoneIndex < 0 ||
+                    localBoneIndex >= model->numBones ||
+                    dobjBoneIndex < 0 ||
+                    dobjBoneIndex >= viewModelDObj->numBones)
+                {
+                    boundsInitialized = false;
+                    break;
+                }
+
+                DObjSkelMat inverseBaseMatrix = {};
+                DObjSkelMat posedMatrix = {};
+                DObjSkelMat deformationMatrix = {};
+
+                ConvertQuatToInverseSkelMat(
+                    &model->baseMat[localBoneIndex],
+                    &inverseBaseMatrix);
+
+                ConvertQuatToSkelMat(
+                    &posedBones[dobjBoneIndex],
+                    &posedMatrix);
+
+                VR_MultiplySkelMat(
+                    inverseBaseMatrix,
+                    posedMatrix,
+                    &deformationMatrix);
+
+                for (uint16_t rigidVertexIndex = 0;
+                     rigidVertexIndex < rigidList.vertCount;
+                     ++rigidVertexIndex)
+                {
+                    if (vertexIndex >= surface.vertCount)
+                    {
+                        boundsInitialized = false;
+                        break;
+                    }
+
+                    const float* source =
+                        surface.verts0[vertexIndex].xyz;
+
+                    const float posedVertex[3] = {
+                        source[0] * deformationMatrix.axis[0][0] +
+                            source[1] * deformationMatrix.axis[1][0] +
+                            source[2] * deformationMatrix.axis[2][0] +
+                            deformationMatrix.origin[0],
+                        source[0] * deformationMatrix.axis[0][1] +
+                            source[1] * deformationMatrix.axis[1][1] +
+                            source[2] * deformationMatrix.axis[2][1] +
+                            deformationMatrix.origin[1],
+                        source[0] * deformationMatrix.axis[0][2] +
+                            source[1] * deformationMatrix.axis[1][2] +
+                            source[2] * deformationMatrix.axis[2][2] +
+                            deformationMatrix.origin[2],
+                    };
+
+                    if (!boundsInitialized)
+                    {
+                        std::memcpy(
+                            minimum,
+                            posedVertex,
+                            sizeof(minimum));
+
+                        std::memcpy(
+                            maximum,
+                            posedVertex,
+                            sizeof(maximum));
+
+                        boundsInitialized = true;
+                    }
+                    else
+                    {
+                        for (int component = 0;
+                             component < 3;
+                             ++component)
+                        {
+                            minimum[component] =
+                                (std::min)(
+                                    minimum[component],
+                                    posedVertex[component]);
+
+                            maximum[component] =
+                                (std::max)(
+                                    maximum[component],
+                                    posedVertex[component]);
+                        }
+                    }
+
+                    ++vertexIndex;
+                }
+
+                if (!boundsInitialized)
+                {
+                    break;
+                }
+            }
+
+            if (!boundsInitialized ||
+                vertexIndex != surface.vertCount)
+            {
+                continue;
+            }
+
+            const float halfLeftExtent =
+                0.5f *
+                (maximum[1] - minimum[1]);
+
+            const float halfUpExtent =
+                0.5f *
+                (maximum[2] - minimum[2]);
+
+            const float radiusGameUnits =
+                0.5f *
+                (halfLeftExtent + halfUpExtent);
+
+            const float radiusMeters =
+                radiusGameUnits /
+                kVrGameUnitsPerMeter;
+
+            if (!std::isfinite(radiusMeters) ||
+                radiusMeters < 0.005f ||
+                radiusMeters > 0.10f)
+            {
+                continue;
+            }
+
+            for (int component = 0;
+                 component < 3;
+                 ++component)
+            {
+                lensCenterPoseLocal[component] =
+                    0.5f *
+                    (minimum[component] +
+                     maximum[component]);
+            }
+
+            *lensRadiusMeters = radiusMeters;
+
+            static bool loggedScopeLensSurfaceProfile = false;
+            if (!loggedScopeLensSurfaceProfile)
+            {
+                Com_Printf(
+                    0,
+                    "[VR][SCOPE PROFILE] Model '%s' surface %u material "
+                    "'%s': posed bounds [(%.3f %.3f %.3f) to "
+                    "(%.3f %.3f %.3f)], center (%.3f %.3f %.3f), "
+                    "radius %.4f m.\n",
+                    model->name != nullptr ? model->name : "<unnamed>",
+                    static_cast<unsigned int>(surfaceIndex),
+                    material->info.name,
+                    minimum[0],
+                    minimum[1],
+                    minimum[2],
+                    maximum[0],
+                    maximum[1],
+                    maximum[2],
+                    lensCenterPoseLocal[0],
+                    lensCenterPoseLocal[1],
+                    lensCenterPoseLocal[2],
+                    radiusMeters);
+
+                loggedScopeLensSurfaceProfile = true;
+            }
+
+            return true;
+        }
+
+        modelBoneBase += model->numBones;
+    }
+
+    return false;
+}
+
 // KISAK_SP_VR_TRACKED_HANDS_V27_MAGAZINE_GRIP_POSE
 // V27 preserves V26's corrected XR_EXT_palm_pose orientation and adds the
 // missing third left-hand render state: neutral tracking, weapon support, or
@@ -7447,21 +7737,18 @@ void __cdecl CG_AddPlayerWeapon(
 #ifdef KISAK_SP
                 if (VR_IsPhysicalSniperScopeAimActive())
                 {
-                    const char* scopeTagCandidates[] = {
+                    const char* exactRearScopeTagCandidates[] = {
                         "tag_scope_rear",
                         "tag_scope_rear_lid_animate",
-                        "tag_scope",
-                        "tag_scope_animate",
-                        "tag_sights",
-                        "tag_sight",
-                        "tag_reticle",
                     };
 
                     float vrScopeOriginWorld[3] = {};
+                    float vrScopeLensRadiusMeters = 0.0f;
+                    bool vrScopeExactModelLensSurface = false;
                     const char* selectedScopeAnchor = nullptr;
 
                     for (const char* scopeTagName :
-                         scopeTagCandidates)
+                         exactRearScopeTagCandidates)
                     {
                         const uint32_t scopeTag =
                             SL_FindString(
@@ -7478,6 +7765,75 @@ void __cdecl CG_AddPlayerWeapon(
                                 scopeTagName;
 
                             break;
+                        }
+                    }
+
+                    if (selectedScopeAnchor == nullptr)
+                    {
+                        float lensCenterPoseLocal[3] = {};
+
+                        if (VR_FindViewmodelScopeLensProfile(
+                                &cgameGlob->viewModelPose,
+                                weapInfo->viewModelDObj,
+                                lensCenterPoseLocal,
+                                &vrScopeLensRadiusMeters))
+                        {
+                            // CG_DObjCalcPose applies the complete animated
+                            // viewmodel pose and subtracts refdef.viewOffset.
+                            // Its skinned vertices are therefore already in
+                            // pose-local world space, exactly like tag matrices.
+                            // Re-applying viewModelAxis here double-transforms
+                            // the lens and visibly detaches the aperture.
+                            for (int worldComponent = 0;
+                                 worldComponent < 3;
+                                 ++worldComponent)
+                            {
+                                vrScopeOriginWorld[worldComponent] =
+                                    cgameGlob->refdef.viewOffset[
+                                        worldComponent] +
+                                    lensCenterPoseLocal[
+                                        worldComponent];
+                            }
+
+                            selectedScopeAnchor =
+                                "measured rear-lens surface";
+                            vrScopeExactModelLensSurface = true;
+                        }
+                    }
+
+                    // Generic optic/sight tags are frequently authored at
+                    // the mount or sight pivot rather than the rear glass.
+                    // Prefer the measured lens surface above, just as WaW's
+                    // weapon profiles correct generic tags to the real lens.
+                    if (selectedScopeAnchor == nullptr)
+                    {
+                        const char* genericScopeTagCandidates[] = {
+                            "tag_scope",
+                            "tag_scope_animate",
+                            "tag_sights",
+                            "tag_sight",
+                            "tag_reticle",
+                        };
+
+                        for (const char* scopeTagName :
+                             genericScopeTagCandidates)
+                        {
+                            const uint32_t scopeTag =
+                                SL_FindString(
+                                    scopeTagName);
+
+                            if (scopeTag != 0 &&
+                                CG_DObjGetWorldTagPos(
+                                    &cgameGlob->viewModelPose,
+                                    weapInfo->viewModelDObj,
+                                    scopeTag,
+                                    vrScopeOriginWorld))
+                            {
+                                selectedScopeAnchor =
+                                    scopeTagName;
+
+                                break;
+                            }
                         }
                     }
 
@@ -7525,7 +7881,9 @@ void __cdecl CG_AddPlayerWeapon(
                             vrScopeOriginWorld,
                             cgameGlob->viewModelAxis,
                             cgameGlob->refdef.vieworg,
-                            cgameGlob->refdef.viewaxis);
+                            cgameGlob->refdef.viewaxis,
+                            vrScopeLensRadiusMeters,
+                            vrScopeExactModelLensSurface);
 
                         static bool
                             loggedVrScopeAnchorPublication =

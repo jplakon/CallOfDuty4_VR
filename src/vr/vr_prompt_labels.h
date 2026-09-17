@@ -25,7 +25,7 @@ struct BindingLabels
     std::size_t count = 0u;
 };
 
-// Maps COD4's native command names to the semantic Controller Input V4 action
+// Maps COD4's native command names to the semantic Controller Input V5 action
 // that performs the same operation in VR. Unknown commands deliberately
 // return null so the caller can preserve COD4's keyboard resolver.
 const input::ActionDefinition* FindPromptAction(

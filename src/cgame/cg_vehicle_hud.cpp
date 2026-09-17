@@ -407,6 +407,32 @@ int __cdecl WorldDirToScreenPos(int localClientNum, const float *worldDir, float
     AnglesToAxis(targetViewAngles, axis);
     MatrixTransposeTransformVector(worldDir, (const mat3x3&)axis, transformed);
     v5 = (float)(cls.vidConfig.aspectRatioWindow * (float)480.0);
+
+    // KISAK_SP_VR_JAVELIN_EYE_LOCAL_TARGETS_V118
+    // Packed VR's desktop aspect includes two eyes and the reserved scope
+    // panel.  Using it here expands controller-projected Javelin markers far
+    // beyond either eye, so the green target squares appear missing.  Convert
+    // the active eye width into the exact virtual coordinate span used by
+    // ScrPlace instead.  The non-VR projection remains byte-for-byte stock.
+    if (vrLockOnWeaponActive &&
+        scrPlaceView[localClientNum].realViewportSize[0] > 0.0f &&
+        scrPlaceView[localClientNum].scaleRealToVirtual[0] > 0.0f)
+    {
+        v5 =
+            scrPlaceView[localClientNum].realViewportSize[0] *
+            scrPlaceView[localClientNum].scaleRealToVirtual[0];
+
+        static bool loggedVrEyeLocalJavelinTargets = false;
+        if (!loggedVrEyeLocalJavelinTargets)
+        {
+            Com_Printf(
+                0,
+                "[VR][JAVELIN] Projecting lock-on squares in one-eye "
+                "HUD coordinates (virtual width %.1f).\n",
+                v5);
+            loggedVrEyeLocalJavelinTargets = true;
+        }
+    }
     if (transformed[0] <= 0.0)
     {
         v9 = -transformed[1];
@@ -1340,4 +1366,3 @@ void __cdecl CG_TargetsChanged(int localClientNum, unsigned int num)
         v8->entNum = ENTITYNUM_NONE;
     }
 }
-

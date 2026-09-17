@@ -659,7 +659,7 @@ int main(const int argumentCount, char** arguments)
                     guardedBinding,
                     vi::Source::RightThumbrestTouch,
                     vi::Source::LeftPrimaryAxis),
-            "V79 should guard the default OpenVR mission-selector chord");
+            "V79 should continue guarding a legacy left-movement-axis mission-selector chord");
         Check(
             vi::ParseBinding(
                 vi::Action::NightVision,
@@ -2278,8 +2278,8 @@ int main(const int argumentCount, char** arguments)
         values = kc::BuiltInDefaults();
     }
     Check(
-        values["KISAK_VR_INPUT_BINDINGS_VERSION"] == "4",
-        "built-in defaults should use Controller Input V4");
+        values["KISAK_VR_INPUT_BINDINGS_VERSION"] == "5",
+        "built-in defaults should use Controller Input V5");
     Check(
         values["KISAK_VR_BIND_ATTACK"] == "right.trigger",
         "fire should retain the beta.7 right-trigger default");
@@ -2344,18 +2344,18 @@ int main(const int argumentCount, char** arguments)
         "formerly shared auxiliary axes should have independent bindings");
     Check(
         values["KISAK_VR_BIND_NIGHT_VISION"] ==
-            "right.thumbrest_touch+left.primary_axis.down",
-        "night vision should expose the proven beta.7 modifier chord");
+            "left.thumbrest_touch+right.primary_axis.down",
+        "issue #52 should keep night vision off the locomotion stick");
     Check(
         values["KISAK_VR_BIND_GRENADE_LAUNCHER"] ==
                 "right.squeeze",
         "grenade launcher should use the physical right grip by default");
     Check(
         values["KISAK_VR_BIND_AIRSTRIKE"] ==
-                "right.thumbrest_touch+left.primary_axis.left" &&
+                "left.thumbrest_touch+right.primary_axis.left" &&
             values["KISAK_VR_BIND_C4"] ==
-                "right.thumbrest_touch+left.primary_axis.right",
-        "the remaining directional mission shortcuts should retain their ordinary chords");
+                "left.thumbrest_touch+right.primary_axis.right",
+        "issue #52 directional mission shortcuts should require a deliberate opposite-hand chord without claiming locomotion");
     Check(
         values["KISAK_VR_BIND_OFFHAND"] == "unbound",
         "the redundant native off-hand action should remain unbound by default");
@@ -2407,10 +2407,10 @@ int main(const int argumentCount, char** arguments)
             &nightVisionDefault) &&
             nightVisionDefault.sourceCount == 2u &&
             nightVisionDefault.sources[0] ==
-                vi::Source::RightThumbrestTouch &&
+                vi::Source::LeftThumbrestTouch &&
             nightVisionDefault.sources[1] ==
-                vi::Source::LeftPrimaryAxisDown,
-        "Night vision should evaluate as right-thumbrest AND left-stick down");
+                vi::Source::RightPrimaryAxisDown,
+        "issue #52 night vision should evaluate as left-thumbrest AND right-stick down");
     Check(
         vi::DirectionalSourcePressed(
             nightVisionDefault.sources[1],
@@ -2420,7 +2420,7 @@ int main(const int argumentCount, char** arguments)
                 nightVisionDefault.sources[1],
                 0.0f,
                 0.80f),
-        "the night-vision chord should accept left-stick down and reject left-stick up");
+        "the night-vision chord should accept right-stick down and reject right-stick up");
 
     if (argumentCount >= 2)
     {
@@ -2447,17 +2447,17 @@ int main(const int argumentCount, char** arguments)
             runtime.find("void VR_UpdateControllerActions(");
         const std::size_t openVrControllerUpdateStart =
             runtime.find("bool VR_UpdateOpenVrControllerActions()");
-        const std::size_t openXrMissionSelector =
+        const std::size_t openXrSafeMissionSelector =
             runtime.find(
-                "&g_vrOpenXrMissionSelector,",
+                "&g_vrOpenXrSafeMissionSelector,",
                 openXrControllerUpdate);
         const std::size_t openXrGuardedBinding =
             runtime.find(
-                "const bool guardedMissionBinding =",
-                openXrMissionSelector);
+                "const bool guardedSafeMissionBinding =",
+                openXrSafeMissionSelector);
         const std::size_t openXrGuardedModifier =
             runtime.find(
-                "termHeld = missionSelector.modifierHeld;",
+                "termHeld = safeMissionSelector.modifierHeld;",
                 openXrGuardedBinding);
         Check(
             runtime.find(
@@ -2468,17 +2468,23 @@ int main(const int argumentCount, char** arguments)
                     std::string::npos &&
                 openXrControllerUpdate != std::string::npos &&
                 openVrControllerUpdateStart != std::string::npos &&
-                openXrMissionSelector != std::string::npos &&
+                openXrSafeMissionSelector != std::string::npos &&
                 openXrGuardedBinding != std::string::npos &&
                 openXrGuardedModifier != std::string::npos &&
-                openXrControllerUpdate < openXrMissionSelector &&
-                openXrMissionSelector < openXrGuardedBinding &&
+                openXrControllerUpdate < openXrSafeMissionSelector &&
+                openXrSafeMissionSelector < openXrGuardedBinding &&
                 openXrGuardedBinding < openXrGuardedModifier &&
                 openXrGuardedModifier < openVrControllerUpdateStart &&
                 runtime.find(
-                    "[VR][OPENXR][CONTROLS] V103 guarded mission selector") !=
+                    "[VR][OPENXR][CONTROLS] V5 locomotion-safe mission selector") !=
+                    std::string::npos &&
+                runtime.find(
+                    "const bool missionTurnLockHeld =") !=
+                    std::string::npos &&
+                runtime.find(
+                    "inputVectorActive[turnIndex] = false;") !=
                     std::string::npos,
-            "issues #52/#60 V103 must apply the neutral-entry mission selector to native OpenXR before any Quest thumbrest chord can lock locomotion");
+            "issue #52 V5 must neutral-gate the left-thumbrest plus right-stick mission selector and consume ordinary right-stick actions only while it is armed");
         const std::size_t packedLayoutStart =
             runtime.find(
                 "bool VR_GetPhysicalSniperScopeCaptureLayout(");
@@ -2856,6 +2862,8 @@ int main(const int argumentCount, char** arguments)
             root / "src/cgame/cg_draw.cpp");
         const std::string reticles = Read(
             root / "src/cgame/cg_draw_reticles.cpp");
+        const std::string vehicleHud = Read(
+            root / "src/cgame/cg_vehicle_hud.cpp");
         const std::string cgameMain = Read(
             root / "src/cgame/cg_main.cpp");
         const std::string cgameView = Read(
@@ -2917,6 +2925,17 @@ int main(const int argumentCount, char** arguments)
             root / "src/cgame/cg_pose.cpp");
         const std::string commonMath = Read(
             root / "src/universal/com_math.cpp");
+        Check(
+            configuratorSource.find(
+                "constexpr int kIdChordSourceList = 160;") !=
+                    std::string::npos &&
+                configuratorSource.find(
+                    "kIdChordSourceList != IDOK && kIdChordSourceList != IDCANCEL") !=
+                    std::string::npos &&
+                configuratorSource.find(
+                    "430,\n        kIdChordSourceList,\n        WS_EX_CLIENTEDGE") !=
+                    std::string::npos,
+            "issue #90 chord selections must use a control ID distinct from the Save and Cancel dialog commands");
         Check(
             actorCorpse.find(
                 "KISAK_SP_VR_ISSUE46_DOG_BODY_PLANT_OUTPUTS_V115") !=
@@ -3066,6 +3085,28 @@ int main(const int argumentCount, char** arguments)
                     "        weaponNum != 7") ==
                     std::string::npos,
             "issue #64 V112 must keep the retired level-local weapon-slot-7 log storm behind a separate developer-only flag");
+        Check(
+            reticles.find(
+                "KISAK_SP_VR_JAVELIN_CENTERED_OPTIC_V118") !=
+                    std::string::npos &&
+                reticles.find(
+                    "weapDef->overlayInterface ==\n"
+                    "                    WEAPOVERLAYINTERFACE_JAVELIN") !=
+                    std::string::npos &&
+                reticles.find("crosshairPos[0] = 0.0f;") !=
+                    std::string::npos &&
+                reticles.find("crosshairPos[1] = 0.0f;") !=
+                    std::string::npos &&
+                vehicleHud.find(
+                    "KISAK_SP_VR_JAVELIN_EYE_LOCAL_TARGETS_V118") !=
+                    std::string::npos &&
+                vehicleHud.find(
+                    "scrPlaceView[localClientNum].realViewportSize[0] *") !=
+                    std::string::npos &&
+                vehicleHud.find(
+                    "scrPlaceView[localClientNum].scaleRealToVirtual[0]") !=
+                    std::string::npos,
+            "V118 Javelin must center its full-eye optic and project lock markers in one-eye HUD coordinates");
         Check(
             reticles.find(
                 "#ifdef KISAK_SP\n"
@@ -4063,7 +4104,7 @@ int main(const int argumentCount, char** arguments)
         Check(
             configurator.find("Setup & Compatibility") !=
                     std::string::npos &&
-                configurator.find("v0.10.0-beta.17") !=
+                configurator.find("v0.10.0-beta.18") !=
                     std::string::npos &&
                 configurator.find("Rescan system") !=
                     std::string::npos &&
@@ -4764,6 +4805,35 @@ int main(const int argumentCount, char** arguments)
             &openVrActive) && openVrActive,
         "Index squeeze should prefer the second trigger-style axis");
 
+    std::array<vi::OpenVrHandState, 2> indexTrackpadHands = {};
+    vi::OpenVrHandState& indexTrackpadRight = indexTrackpadHands[1];
+    indexTrackpadRight.hand = vi::Hand::Right;
+    indexTrackpadRight.connected = true;
+    indexTrackpadRight.stateValid = true;
+    indexTrackpadRight.controllerType = "knuckles";
+    indexTrackpadRight.supportedButtonsKnown = true;
+    indexTrackpadRight.axisTypes.fill(vr::k_eControllerAxis_None);
+    indexTrackpadRight.axisTypes[0] = vr::k_eControllerAxis_TrackPad;
+    indexTrackpadRight.supportedButtons =
+        vr::ButtonMaskFromId(vr::k_EButton_Axis0);
+    indexTrackpadRight.controllerState.ulButtonPressed =
+        vr::ButtonMaskFromId(vr::k_EButton_Axis0);
+    indexTrackpadRight.controllerState.rAxis[0] = {0.95f, 0.0f};
+
+    Check(
+        !vi::GetOpenVrBooleanSourceState(
+            indexTrackpadHands,
+            vi::Source::RightTrackpadClick,
+            &openVrActive) && openVrActive,
+        "issue #85 should reject SteamVR's synthetic Index Axis0 press at full thumbstick deflection");
+    indexTrackpadRight.controllerState.rAxis[0] = {0.0f, 0.0f};
+    Check(
+        vi::GetOpenVrBooleanSourceState(
+            indexTrackpadHands,
+            vi::Source::RightTrackpadClick,
+            &openVrActive) && openVrActive,
+        "issue #85 should preserve a centered physical Index trackpad press");
+
     std::array<vi::OpenVrHandState, 2> digitalIndexHands = {};
     vi::OpenVrHandState& digitalIndexLeft = digitalIndexHands[0];
     digitalIndexLeft.hand = vi::Hand::Left;
@@ -4856,16 +4926,16 @@ int main(const int argumentCount, char** arguments)
         temp / "missing-defaults.bat",
         legacyUserFile);
     Check(
-        migrated.values["KISAK_VR_INPUT_BINDINGS_VERSION"] == "4",
-        "V2 user profiles should migrate to binding schema V4");
+        migrated.values["KISAK_VR_INPUT_BINDINGS_VERSION"] == "5",
+        "V2 user profiles should migrate to binding schema V5");
     Check(
         migrated.values["KISAK_VR_BIND_GRENADE_LAUNCHER"] ==
             "right.squeeze",
         "V2 profiles with an unbound launcher shortcut should recover the new right-grip default");
     Check(
         migrated.values["KISAK_VR_BIND_NIGHT_VISION"] ==
-            "right.thumbrest_touch+left.primary_axis.down",
-        "V2 profiles should recover the visible night-vision chord");
+            "left.thumbrest_touch+right.primary_axis.down",
+        "V2 profiles should recover the locomotion-safe night-vision chord");
     Check(
         migrated.values["KISAK_VR_BIND_OFFHAND"] == "unbound",
         "V2 right-grip test default should migrate to unbound");
@@ -4894,8 +4964,8 @@ int main(const int argumentCount, char** arguments)
         temp / "missing-defaults.bat",
         v3UserFile);
     Check(
-        migrated.values["KISAK_VR_INPUT_BINDINGS_VERSION"] == "4",
-        "V3 user profiles should migrate to binding schema V4");
+        migrated.values["KISAK_VR_INPUT_BINDINGS_VERSION"] == "5",
+        "V3 user profiles should migrate to binding schema V5");
     Check(
         migrated.values["KISAK_VR_BIND_JUMP"] ==
                 "right.primary_axis.up" &&
@@ -4912,12 +4982,12 @@ int main(const int argumentCount, char** arguments)
             migrated.values["KISAK_VR_BIND_GRENADE_LAUNCHER"] ==
                 "right.thumbrest_touch+left.primary_axis.up" &&
             migrated.values["KISAK_VR_BIND_NIGHT_VISION"] ==
-                "right.thumbrest_touch+left.primary_axis.down" &&
+                "left.thumbrest_touch+right.primary_axis.down" &&
             migrated.values["KISAK_VR_BIND_AIRSTRIKE"] ==
-                "right.thumbrest_touch+left.primary_axis.left" &&
+                "left.thumbrest_touch+right.primary_axis.left" &&
             migrated.values["KISAK_VR_BIND_C4"] ==
-                "right.thumbrest_touch+left.primary_axis.right",
-        "V3-to-V4 migration should preserve every requested directional default and thumbrest chord");
+                "left.thumbrest_touch+right.primary_axis.right",
+        "V3-to-V5 migration should preserve the launcher override while moving former mission defaults off locomotion");
     Check(
         migrated.values["KISAK_VR_BIND_OFFHAND"] == "unbound",
         "the native off-hand action should remain unbound after V3-to-V4 migration");
@@ -4990,8 +5060,8 @@ int main(const int argumentCount, char** arguments)
             preservedCustomOpenVrV4.values.at("KISAK_VR_BIND_MENU") ==
                 "left.menu" &&
             preservedCustomOpenVrV4.values.at("KISAK_VR_BIND_NIGHT_VISION") ==
-                "right.thumbrest_touch+left.primary_axis.down",
-        "issue #74 V105 should preserve a customized OpenVR layout instead of partially rewriting it");
+                "left.thumbrest_touch+right.primary_axis.down",
+        "issue #74 V105 should preserve customized OpenVR controls while issue #52 migrates only the former unsafe mission default");
     Check(
         HasWarning(
             preservedCustomOpenVrV4.messages,
@@ -5018,9 +5088,9 @@ int main(const int argumentCount, char** arguments)
     Check(saved.backupPath.empty(), "first save should not create a backup");
     Check(Read(userFile).find("\r\n") != std::string::npos, "saved batch file should use CRLF");
     Check(
-        Read(userFile).find("generated by v0.10.0-beta.17 Configurator (Unified Setup/Compatibility)") !=
+        Read(userFile).find("generated by v0.10.0-beta.18 Configurator (Unified Setup/Compatibility)") !=
             std::string::npos,
-        "saved settings should identify the beta.17 unified-compatibility schema");
+        "saved settings should identify the beta.18 unified-compatibility schema");
     Check(
         Read(userFile).find("KISAK_VR_SETTINGS_REVISION=" + saved.revision) !=
             std::string::npos,

@@ -13,6 +13,7 @@
 #include "cg_view.h"
 #include <gfx_d3d/r_reflection_probe.h>
 #include <gfx_d3d/r_rendercmds.h>
+#include <gfx_d3d/r_scene.h>
 #include <chrono>
 #include <cstddef>
 #include <initializer_list>
@@ -1767,6 +1768,15 @@ void __cdecl CG_DrawActive(int localClientNum)
                 scopeRefdef.dof.nearBlur = 0.0f;
                 scopeRefdef.dof.farBlur = 0.0f;
             }
+            else
+            {
+                // KISAK_SP_VR_PHYSICAL_SCOPE_NEAR_CLIP_V116
+                // Port the proven World at War physical-optic near plane.
+                // It removes rifle/hand geometry that survives surface-level
+                // viewmodel filtering without affecting either normal eye.
+                scopeRefdef.zNear =
+                    (std::max)(scopeRefdef.zNear, 48.0f);
+            }
 
             scopeRefdef.x =
                 cgArray[0].refdef.x +
@@ -1800,8 +1810,19 @@ void __cdecl CG_DrawActive(int localClientNum)
                 ->viewInfo[scopeViewInfoIndex]
                 .cmds = nullptr;
 
-            CL_RenderScene(
-                &scopeRefdef);
+            // KISAK_SP_VR_SCOPE_VISIBILITY_ISOLATION_V116
+            // The narrow scope frustum and both wider eyes share camera-view
+            // DPVS storage. Preserve the pre-scope values so an entity marked
+            // outside the magnified view can still be tested for the eyes.
+            const bool isolatedScopeVisibility =
+                R_BeginVrScopeVisibilityIsolation();
+
+            CL_RenderScene(&scopeRefdef);
+
+            if (isolatedScopeVisibility)
+            {
+                R_EndVrScopeVisibilityIsolation();
+            }
 
             if (frontEndDataOut->viewInfoCount >
                 scopeViewInfoIndex)

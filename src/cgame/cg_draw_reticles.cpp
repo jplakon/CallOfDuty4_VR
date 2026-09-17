@@ -565,10 +565,40 @@ double __cdecl CG_DrawWeapReticle(int32_t localClientNum)
 
         if (!vrPhysicalScope)
         {
-            CG_CalcCrosshairPosition(
-                cgameGlob,
-                crosshairPos,
-                &crosshairPos[1]);
+            // KISAK_SP_VR_JAVELIN_CENTERED_OPTIC_V118
+            // The Javelin's 3D view is rotated to the tracked launcher ray in
+            // CG_DrawActive.  Re-applying the controller-versus-HMD offset to
+            // its flat ADS material moves the sight and scissor rectangle out
+            // of the eye viewport, leaving only a cropped piece of the optic.
+            // Keep that material centered in each eye; the world view and HUD
+            // target projection already follow the controller independently.
+            const bool vrJavelinOptic =
+                VR_IsInitialized() &&
+                weapDef->overlayInterface ==
+                    WEAPOVERLAYINTERFACE_JAVELIN;
+
+            if (vrJavelinOptic)
+            {
+                crosshairPos[0] = 0.0f;
+                crosshairPos[1] = 0.0f;
+
+                static bool loggedVrCenteredJavelinOptic = false;
+                if (!loggedVrCenteredJavelinOptic)
+                {
+                    Com_Printf(
+                        0,
+                        "[VR][JAVELIN] Centered the full ADS sight and "
+                        "scissor rectangle independently in each eye.\n");
+                    loggedVrCenteredJavelinOptic = true;
+                }
+            }
+            else
+            {
+                CG_CalcCrosshairPosition(
+                    cgameGlob,
+                    crosshairPos,
+                    &crosshairPos[1]);
+            }
 
             VR_JavelinReticleDiagnostic(localClientNum, "before ADS overlay");
             CG_DrawAdsOverlay(

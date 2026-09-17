@@ -11,6 +11,7 @@ namespace
 {
 
 constexpr float kAnalogButtonThreshold = 0.55f;
+constexpr float kIndexSyntheticTrackpadPressThreshold = 0.80f;
 
 std::size_t HandIndex(const Hand hand)
 {
@@ -419,6 +420,23 @@ bool GetOpenVrBooleanSourceState(
         case Source::RightTrackpadClick:
             *active = trackpadAxis >= 0 &&
                 ButtonSupported(*state, trackpad);
+            if (*active &&
+                IsOpenVrIndexController(*state) &&
+                !AxisIsNeutral(
+                    {
+                        state->controllerState.rAxis[trackpadAxis].x,
+                        state->controllerState.rAxis[trackpadAxis].y,
+                    },
+                    kIndexSyntheticTrackpadPressThreshold))
+            {
+                // Issue #85: SteamVR's legacy Index profile aliases the
+                // trackpad and thumbstick to Axis0, then synthesizes an Axis0
+                // press near full thumbstick travel. Do not turn that
+                // synthetic stick press into a configured trackpad action
+                // such as magazine eject. A centered physical trackpad press
+                // remains available.
+                return false;
+            }
             return ButtonPressed(*state, trackpad);
 
         case Source::LeftThumbrestTouch:

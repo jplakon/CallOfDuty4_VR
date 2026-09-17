@@ -8,7 +8,7 @@
 namespace kisak::vr::input
 {
 
-// Controller Input V4 deliberately stores semantic, controller-neutral source
+// Controller Input V5 deliberately stores semantic, controller-neutral source
 // identifiers.  The OpenXR and OpenVR adapters translate these identifiers to
 // the active controller's concrete component paths at runtime.
 enum class ValueType

@@ -1,6 +1,6 @@
 # Known issues
 
-This list applies to `v0.10.0-beta.17`.
+This list applies to `v0.10.0-beta.18`.
 
 ## Setup and compatibility
 
@@ -61,6 +61,11 @@ This list applies to `v0.10.0-beta.17`.
   Apple Vision Pro/ALVR, PSVR2, Index, and Vive hardware still require
   confirmation. Include controller type/profile lines from `main\console.log`
   with reports. OpenXR remains the preferred backend.
+- Beta.18 rejects SteamVR's synthetic Valve Index Axis0 press near full
+  thumbstick travel, preventing a configured trackpad action such as magazine
+  eject from firing while turning. A centered physical trackpad press remains
+  available. Automated input contracts pass; native Index confirmation is
+  still welcome.
 - V107 stops the OpenVR adapter from presenting a raw-device or grip pose as a
   valid palm surface. A dedicated SteamVR `openxr_handmodel` component is still
   used when present; otherwise only the standalone glove selects the grip-frame
@@ -124,8 +129,12 @@ This list applies to `v0.10.0-beta.17`.
   the 1024-pixel scope panel in beta.14's `7924x4082` packed surface. Magnified
   M21/SVD scope output still needs confirmation on real Pimax hardware; report
   any crop, fallback, or missing scope output.
-- Physical scope alignment can require small headset-specific calibration
-  changes in `KisakCOD-VR-Configurator.exe`.
+- Beta.18 derives rifle-attached scope placement, orientation, and radius from
+  the weapon model's exact lens surface, centers the reticle and magnified
+  image on that lens, removes nearby weapon geometry from the scope camera,
+  and isolates scope visibility from the normal eyes. A focused Quest 3 / VDXR
+  test passed, but other weapon/headset combinations should still report any
+  lens mismatch, crop, or disappearing entities.
 - Some original flat-screen post-processing and camera animation has been
   suppressed because it is uncomfortable or incorrect in VR.
 - The exact-pose capture path substantially reduces frame reuse and
@@ -175,6 +184,10 @@ This list applies to `v0.10.0-beta.17`.
   from joystick touch.
 - Input conflicts are warnings rather than errors. This permits intentional
   overlaps, but an accidental overlap activates both gameplay actions.
+- Beta.18 fixes the Chord editor's control-ID collision, so selecting a source
+  no longer triggers the dialog's Save command. Controller Input V5 moves only
+  the exact former mission-shortcut defaults off the movement stick; custom
+  chords are retained.
 - OpenXR runtimes that terminate the mapper during `xrCreateSession` cannot be
   recovered inside that process. Select `openvr`, or use a working 32-bit
   OpenXR runtime such as VDXR, before capturing.
@@ -241,6 +254,10 @@ This list applies to `v0.10.0-beta.17`.
 - Native grenade-class `hasDetonator` devices now accept the configured Fire
   action without a rendered firearm pose. Report any remaining scripted device
   that still requires a mouse click or weapon-cycle workaround.
+- Beta.18 centers the Bog Javelin optic per eye and projects its green target
+  lock-on boxes in eye-local HUD coordinates. The complete sight and lock-on
+  path passed a focused Quest 3 / VDXR headset test. Report the checkpoint and
+  runtime if another Javelin sequence still crops the optic or loses markers.
 - Bug reports should identify the mission, checkpoint, weapon, headset/runtime,
   and exact source commit from `SOURCE.txt`.
 

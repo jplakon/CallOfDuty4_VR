@@ -4,6 +4,38 @@
 
 _No changes yet._
 
+## v0.10.0-beta.18
+
+Focused V118 scope, controller, and Javelin repair over `v0.10.0-beta.17`.
+
+- Reworks rifle-attached physical scopes for issues #41 and #83 around the
+  exact lens surface in the rendered weapon model. The scope pose and radius
+  now come from the lens geometry instead of a second approximate calibration.
+- Keeps the magnified image and reticle centered and rigidly attached to the
+  lens, uses the dedicated high-resolution scope panel, and raises the scope
+  camera's near clip so nearby rifle and hand geometry cannot block the view.
+- Isolates the scope camera's narrow visibility calculation from the normal
+  stereo eyes, preventing NPCs and other entities from disappearing during
+  two-hand scope transitions. A focused Quest 3 / Virtual Desktop VDXR scope
+  test passed; Pimax confirmation remains welcome.
+- Introduces Controller Input V5 for issue #52. Fresh profiles use Left
+  thumbrest + Right stick direction for night vision, airstrike, and C4, so a
+  normal movement-stick deflection cannot arm a mission shortcut. Migration
+  changes only the exact former defaults and preserves custom chords.
+- Fixes issue #85 on SteamVR's legacy Valve Index mapping by rejecting the
+  synthetic Axis0 press generated near full thumbstick deflection while
+  preserving a centered physical trackpad press.
+- Fixes issue #90 by assigning the Chord editor list its own control ID instead
+  of colliding with the dialog's Save command.
+- Fixes issue #80's Bog Javelin view by centering the full optic in each eye
+  and projecting its green target lock-on boxes in eye-local HUD coordinates.
+  The complete Javelin sight and lock-on flow passed a focused Quest 3 /
+  Virtual Desktop VDXR headset test.
+- The complete 142-setting Configurator/runtime regression suite passed. The
+  controller corrections are covered by automated migration, neutral-gating,
+  Index input, and dialog contracts; native Index/SteamVR confirmation remains
+  welcome.
+
 ## v0.10.0-beta.17
 
 Focused V117 rendering hotfix over `v0.10.0-beta.16`.

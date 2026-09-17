@@ -1554,7 +1554,7 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
         const bool vrGameplayInputAvailable =
             !Key_IsCatcherActive(0, 0x33);
 
-        // Controller Input V4 restores the straightforward legacy layout:
+        // Controller Input V5 restores the straightforward legacy layout:
         // right primary-axis up is a normal Jump binding, while down owns the
         // separate one-step lower-stance action. Any remapped Boolean source
         // receives the same one-action-per-release behavior.
@@ -1644,7 +1644,7 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
             {
                 Com_Printf(
                     0,
-                    "[VR][INPUT] Controller Input V4 gameplay actions "
+                    "[VR][INPUT] Controller Input V5 gameplay actions "
                     "are active.\n");
 
                 loggedVrBasicButtons = true;

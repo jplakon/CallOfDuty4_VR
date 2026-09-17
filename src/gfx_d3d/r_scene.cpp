@@ -51,6 +51,61 @@
 GfxViewParms lockPvsViewParms;
 GfxScene scene;
 
+// KISAK_SP_VR_SCOPE_VISIBILITY_ISOLATION_V116
+static uint8_t
+    s_vrScopeCameraEntVisSnapshot[MAX_TOTAL_ENT_COUNT] = {};
+static uint32_t s_vrScopeCameraEntVisSnapshotCount = 0;
+static bool s_vrScopeCameraEntVisSnapshotActive = false;
+
+bool R_BeginVrScopeVisibilityIsolation()
+{
+#if defined(KISAK_SP) && defined(XR_USE_GRAPHICS_API_D3D11)
+    if (s_vrScopeCameraEntVisSnapshotActive ||
+        gfxCfg.entCount <= 0 ||
+        gfxCfg.entCount > MAX_TOTAL_ENT_COUNT ||
+        scene.dpvs.entVisData[SCENE_VIEW_CAMERA] == nullptr)
+    {
+        return false;
+    }
+
+    std::memcpy(
+        s_vrScopeCameraEntVisSnapshot,
+        scene.dpvs.entVisData[SCENE_VIEW_CAMERA],
+        static_cast<std::size_t>(gfxCfg.entCount));
+
+    s_vrScopeCameraEntVisSnapshotCount =
+        static_cast<uint32_t>(gfxCfg.entCount);
+    s_vrScopeCameraEntVisSnapshotActive = true;
+    return true;
+#else
+    return false;
+#endif
+}
+
+void R_EndVrScopeVisibilityIsolation()
+{
+#if defined(KISAK_SP) && defined(XR_USE_GRAPHICS_API_D3D11)
+    if (!s_vrScopeCameraEntVisSnapshotActive)
+    {
+        return;
+    }
+
+    if (scene.dpvs.entVisData[SCENE_VIEW_CAMERA] != nullptr &&
+        s_vrScopeCameraEntVisSnapshotCount > 0u &&
+        s_vrScopeCameraEntVisSnapshotCount <=
+            MAX_TOTAL_ENT_COUNT)
+    {
+        std::memcpy(
+            scene.dpvs.entVisData[SCENE_VIEW_CAMERA],
+            s_vrScopeCameraEntVisSnapshot,
+            s_vrScopeCameraEntVisSnapshotCount);
+    }
+
+    s_vrScopeCameraEntVisSnapshotCount = 0u;
+    s_vrScopeCameraEntVisSnapshotActive = false;
+#endif
+}
+
 // KISAK_SP_VR_STEREO_SHADOW_RESTORATION_V1
 static bool R_VrStereoShadowMapsRequested()
 {

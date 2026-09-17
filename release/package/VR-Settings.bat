@@ -124,10 +124,10 @@ set "KISAK_VR_SCOPE_UP_METERS=0.000"
 set "KISAK_VR_SCOPE_RADIUS_METERS=0.024"
 set "KISAK_VR_SCOPE_CAPTURE_SIZE=1024"
 
-rem Controller Input V4. Any gameplay action may use either controller.
+rem Controller Input V5. Any gameplay action may use either controller.
 rem Use + between inputs that must be held together; primary and alternate
 rem slots remain alternatives. Unbound disables that slot.
-set "KISAK_VR_INPUT_BINDINGS_VERSION=4"
+set "KISAK_VR_INPUT_BINDINGS_VERSION=5"
 set "KISAK_VR_BIND_ATTACK=right.trigger"
 set "KISAK_VR_BIND_ATTACK_ALT=unbound"
 set "KISAK_VR_BIND_AIM=unbound"
@@ -162,11 +162,11 @@ set "KISAK_VR_BIND_MENU_AXIS=left.primary_axis"
 set "KISAK_VR_BIND_MENU_AXIS_ALT=unbound"
 set "KISAK_VR_BIND_GRENADE_LAUNCHER=right.squeeze"
 set "KISAK_VR_BIND_GRENADE_LAUNCHER_ALT=unbound"
-set "KISAK_VR_BIND_NIGHT_VISION=right.thumbrest_touch+left.primary_axis.down"
+set "KISAK_VR_BIND_NIGHT_VISION=left.thumbrest_touch+right.primary_axis.down"
 set "KISAK_VR_BIND_NIGHT_VISION_ALT=unbound"
-set "KISAK_VR_BIND_AIRSTRIKE=right.thumbrest_touch+left.primary_axis.left"
+set "KISAK_VR_BIND_AIRSTRIKE=left.thumbrest_touch+right.primary_axis.left"
 set "KISAK_VR_BIND_AIRSTRIKE_ALT=unbound"
-set "KISAK_VR_BIND_C4=right.thumbrest_touch+left.primary_axis.right"
+set "KISAK_VR_BIND_C4=left.thumbrest_touch+right.primary_axis.right"
 set "KISAK_VR_BIND_C4_ALT=unbound"
 set "KISAK_VR_BIND_SCOPE_ZOOM_AXIS=left.primary_axis"
 set "KISAK_VR_BIND_SCOPE_ZOOM_AXIS_ALT=unbound"

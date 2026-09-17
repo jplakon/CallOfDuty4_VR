@@ -298,6 +298,15 @@ void __cdecl R_LerpDir(
 void __cdecl R_UpdateLodParms(const refdef_s *refdef, GfxLodParms *lodParms);
 void __cdecl R_CorrectLodScale(const refdef_s *refdef);
 void __cdecl R_RenderScene(const refdef_s *refdef);
+
+// KISAK_SP_VR_SCOPE_VISIBILITY_ISOLATION_V116
+// The dedicated scope camera is generated before the two eye views. Its
+// narrow frustum can mark ordinary entities as culled in the shared camera
+// visibility buffer, preventing the wider eye views from reconsidering them.
+// Preserve the incoming camera visibility state around that one extra view.
+bool R_BeginVrScopeVisibilityIsolation();
+void R_EndVrScopeVisibilityIsolation();
+
 void __cdecl R_GenerateSortedDrawSurfs(
     const GfxSceneParms *sceneParms,
     const GfxViewParms *viewParmsDpvs,

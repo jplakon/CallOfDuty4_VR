@@ -14,7 +14,28 @@ copy of the original game.
 
 ## Current status
 
-The current public beta is `v0.10.0-beta.17`.
+The current public beta is `v0.10.0-beta.18`.
+
+Beta.18 rebuilds rifle-attached sniper scopes around the weapon model's actual
+lens surface. The magnified image and reticle now stay centered on that lens,
+the dedicated scope camera renders at full panel resolution, near weapon/hand
+geometry is excluded from the magnified view, and scope-camera visibility no
+longer removes NPCs from the normal stereo eyes. This addresses the scope
+rendering and transition failures in issues #41 and #83. The final scope path
+passed a focused Quest 3 / Virtual Desktop VDXR headset test; Pimax hardware
+confirmation is still welcome.
+
+Controller Input V5 moves the default mission shortcuts away from the movement
+stick, suppresses SteamVR's synthetic Valve Index Axis0 press so full stick
+deflection cannot eject a magazine, and repairs the Configurator's Chord editor.
+Only exact former defaults are migrated, so custom chords are preserved. These
+changes address issues #52, #85, and #90 and passed the full automated settings
+suite; native Index/SteamVR confirmation remains welcome.
+
+Beta.18 also repairs issue #80's Bog Javelin view. The full optic is centered
+per eye and the green lock-on boxes are projected in eye-local HUD coordinates
+instead of the entire packed stereo surface. The complete sight and lock-on
+flow passed a focused Quest 3 / Virtual Desktop VDXR headset test.
 
 Beta.17 fixes issue #78's continuous cyan/green/blue world corruption in the
 packed stereo Float-Z depth-clear path. Once an eye viewport is installed, the
@@ -98,7 +119,7 @@ Beta.14 fixes the remaining stereo-menu and legacy-crosshair defects, adds
 a full-FOV Pimax Crystal Light scope layout, routes Safehouse and Heat
 air-support targeting through the right controller, makes the Configurator
 fully resizable, and adds a guarded guided installer beside the portable ZIP.
-Existing LocalAppData profiles and Controller Input V4 bindings remain
+Existing LocalAppData profiles and custom Controller Input V5 bindings remain
 unchanged during an update.
 
 ### Beta.15 fixes
