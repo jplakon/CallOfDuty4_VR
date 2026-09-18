@@ -7718,8 +7718,9 @@ void __cdecl CG_AddPlayerWeapon(
                         vrMuzzleBoneIndex,
                         &vrMuzzleOrientation))
                 {
-                    VR_PublishRightControllerWeaponMuzzleWorld(
-                        vrMuzzleOrientation.origin);
+                    VR_PublishRightControllerWeaponFirePose(
+                        vrMuzzleOrientation.origin,
+                        vrMuzzleOrientation.axis);
 
                     static bool loggedVrMuzzlePublication = false;
 

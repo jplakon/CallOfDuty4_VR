@@ -459,7 +459,13 @@ bool g_vrPhysicalSniperScopePoseWorldValid = false;
 bool g_vrRightControllerFinalWeaponAimValid = false;
 
 float g_vrRightControllerFinalWeaponMuzzleWorld[3] = {};
+float g_vrRightControllerFinalWeaponMuzzleAxisWorld[3][3] = {
+    {1.0f, 0.0f, 0.0f},
+    {0.0f, 1.0f, 0.0f},
+    {0.0f, 0.0f, 1.0f},
+};
 bool g_vrRightControllerFinalWeaponMuzzleValid = false;
+
 bool g_vrRightControllerFinalWeaponMuzzleBlocked = false;
 
 bool g_vrRightControllerAttackPressed = false;
@@ -9428,6 +9434,15 @@ void VR_DestroyControllerInput()
             g_vrRightControllerFinalWeaponMuzzleWorld,
             0,
             sizeof(g_vrRightControllerFinalWeaponMuzzleWorld));
+
+        std::memset(
+            g_vrRightControllerFinalWeaponMuzzleAxisWorld,
+            0,
+            sizeof(g_vrRightControllerFinalWeaponMuzzleAxisWorld));
+
+        g_vrRightControllerFinalWeaponMuzzleAxisWorld[0][0] = 1.0f;
+        g_vrRightControllerFinalWeaponMuzzleAxisWorld[1][1] = 1.0f;
+        g_vrRightControllerFinalWeaponMuzzleAxisWorld[2][2] = 1.0f;
 
         memset(
             g_vrRightControllerWeaponCalibrationCameraLocal,
@@ -19304,10 +19319,12 @@ bool VR_ApplyRightControllerToWeaponPlacement(
 }
 
 
-void VR_PublishRightControllerWeaponMuzzleWorld(
-    const float muzzleOrigin[3])
+void VR_PublishRightControllerWeaponFirePose(
+    const float muzzleOrigin[3],
+    const float muzzleAxis[3][3])
 {
-    if (muzzleOrigin == nullptr)
+    if (muzzleOrigin == nullptr ||
+        muzzleAxis == nullptr)
     {
         return;
     }
@@ -19323,6 +19340,74 @@ void VR_PublishRightControllerWeaponMuzzleWorld(
 
     g_vrRightControllerFinalWeaponMuzzleWorld[2] =
         muzzleOrigin[2];
+
+    std::memcpy(
+        g_vrRightControllerFinalWeaponMuzzleAxisWorld,
+        muzzleAxis,
+        sizeof(g_vrRightControllerFinalWeaponMuzzleAxisWorld));
+
+    g_vrRightControllerFinalWeaponMuzzleValid = true;
+}
+
+bool VR_GetRightControllerWeaponFirePose(
+    float muzzleOrigin[3],
+    float muzzleAxis[3][3],
+    bool* attackPressed)
+{
+    if (muzzleOrigin == nullptr ||
+        muzzleAxis == nullptr ||
+        attackPressed == nullptr)
+    {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(
+        g_vrWeaponControllerPoseMutex);
+
+    if (!g_vrRightControllerFinalWeaponMuzzleValid)
+    {
+        return false;
+    }
+
+    const bool manualMagazineIsOut =
+        g_vrManualMagazineReload.enabled &&
+        g_vrManualMagazineReload.supported &&
+        g_vrManualMagazineReload.stage !=
+            VrManualMagazineReloadStage::Ready;
+
+    std::memcpy(
+        muzzleOrigin,
+        g_vrRightControllerFinalWeaponMuzzleWorld,
+        sizeof(g_vrRightControllerFinalWeaponMuzzleWorld));
+
+    std::memcpy(
+        muzzleAxis,
+        g_vrRightControllerFinalWeaponMuzzleAxisWorld,
+        sizeof(g_vrRightControllerFinalWeaponMuzzleAxisWorld));
+
+    *attackPressed =
+        g_vrRightControllerFinalWeaponAimValid &&
+        g_vrRightControllerAttackPressed &&
+        !manualMagazineIsOut;
+
+    return g_vrRightControllerFinalWeaponAimValid;
+}
+
+void VR_PublishRightControllerWeaponMuzzleWorld(
+    const float muzzleOrigin[3])
+{
+    if (muzzleOrigin == nullptr)
+    {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(
+        g_vrWeaponControllerPoseMutex);
+
+    std::memcpy(
+        g_vrRightControllerFinalWeaponMuzzleWorld,
+        muzzleOrigin,
+        sizeof(g_vrRightControllerFinalWeaponMuzzleWorld));
 
     g_vrRightControllerFinalWeaponMuzzleValid = true;
 }

@@ -689,6 +689,11 @@ bool VR_GetRightControllerWeaponCommand(
 bool VR_GetRightControllerWeaponMuzzleWorld(
     float muzzleOrigin[3]);
 
+bool VR_GetRightControllerWeaponFirePose(
+    float muzzleOrigin[3],
+    float muzzleAxis[3][3],
+    bool* attackPressed);
+
 
 void VR_SetRightControllerWeaponMuzzleBlocked(
     bool blocked);
@@ -715,8 +720,16 @@ void __cdecl CalcMuzzlePoints(const gentity_s *ent, weaponParms *wp)
     float vrGunPitch = 0.0f;
     float vrGunYaw = 0.0f;
     bool vrAttackPressed = false;
+    float vrMuzzleWorld[3] = {};
+    float vrMuzzleAxis[3][3] = {};
+    const bool vrFirePoseAvailable =
+        VR_GetRightControllerWeaponFirePose(
+            vrMuzzleWorld,
+            vrMuzzleAxis,
+            &vrAttackPressed);
 
-    if (VR_GetRightControllerWeaponCommand(
+    if (!vrFirePoseAvailable &&
+        VR_GetRightControllerWeaponCommand(
             &vrGunPitch,
             &vrGunYaw,
             &vrAttackPressed))
@@ -743,7 +756,7 @@ void __cdecl CalcMuzzlePoints(const gentity_s *ent, weaponParms *wp)
             loggedVrMuzzleAim = true;
         }
     }
-    else
+    else if (!vrFirePoseAvailable)
     {
         static bool loggedMissingVrMuzzleAim = false;
 
@@ -759,7 +772,18 @@ void __cdecl CalcMuzzlePoints(const gentity_s *ent, weaponParms *wp)
     }
 #endif
 
-    AngleVectors(viewang, wp->forward, wp->right, wp->up);
+#if (defined(KISAK_MP) || defined(KISAK_SP)) && !defined(DEDICATED)
+    if (vrFirePoseAvailable)
+    {
+        std::memcpy(wp->forward, vrMuzzleAxis[0], sizeof(wp->forward));
+        std::memcpy(wp->right, vrMuzzleAxis[1], sizeof(wp->right));
+        std::memcpy(wp->up, vrMuzzleAxis[2], sizeof(wp->up));
+    }
+    else
+#endif
+    {
+        AngleVectors(viewang, wp->forward, wp->right, wp->up);
+    }
 
 #if (defined(KISAK_MP) || defined(KISAK_SP)) && !defined(DEDICATED)
     if (vrAttackPressed)
@@ -770,15 +794,13 @@ void __cdecl CalcMuzzlePoints(const gentity_s *ent, weaponParms *wp)
         {
             Com_Printf(
                 0,
-                "[VR] Muzzle aim diagnostic %d: "
-                "controller angles %.3f %.3f, "
-                "player angles %.3f %.3f, "
+                "[VR] Muzzle fire-pose diagnostic %d: "
+                "tag_flash origin %.2f %.2f %.2f, "
                 "forward %.4f %.4f %.4f.\n",
                 vrMuzzleDiagnosticCount,
-                vrGunPitch,
-                vrGunYaw,
-                ent->client->ps.viewangles[0],
-                ent->client->ps.viewangles[1],
+                vrMuzzleWorld[0],
+                vrMuzzleWorld[1],
+                vrMuzzleWorld[2],
                 wp->forward[0],
                 wp->forward[1],
                 wp->forward[2]);
@@ -793,15 +815,16 @@ void __cdecl CalcMuzzlePoints(const gentity_s *ent, weaponParms *wp)
     bool vrUsingPhysicalMuzzle = false;
 
 #if (defined(KISAK_MP) || defined(KISAK_SP)) && !defined(DEDICATED)
-    float vrMuzzleWorld[3] = {};
-
     // Default to clear on every CalcMuzzlePoints call so stale state cannot
     // suppress a later shot after the gun has moved away from geometry.
     VR_SetRightControllerWeaponMuzzleBlocked(
         false);
 
-    if (VR_GetRightControllerWeaponMuzzleWorld(
-            vrMuzzleWorld))
+    const bool vrMuzzleAvailable =
+        vrFirePoseAvailable ||
+        VR_GetRightControllerWeaponMuzzleWorld(vrMuzzleWorld);
+
+    if (vrMuzzleAvailable)
     {
         trace_t vrMuzzleObstruction = {};
 

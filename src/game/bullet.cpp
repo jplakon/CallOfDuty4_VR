@@ -26,6 +26,10 @@
 // KISAK_SP_VR_FIXED_SCOPE_SHARP_VIEW_AND_TRACER_V5
 static unsigned int
     s_vrFixedScopeBulletTraceLogCount = 0u;
+
+#if !defined(DEDICATED)
+extern const dvar_t* vr_crosshairEnabled;
+#endif
 #endif
 
 char __cdecl Bullet_Trace(
@@ -356,8 +360,24 @@ void __cdecl Bullet_Fire(
             attacker->client != nullptr &&
             VR_IsPhysicalSniperScopeAimActive();
 
+#if !defined(DEDICATED)
+        // A fixed VR crosshair is an aiming contract: it must represent the
+        // shot, not merely the centre of a random hip-fire cone. Restrict the
+        // override to the same hip-fire state in which that crosshair draws.
+        const bool vrPreciseHipFireShot =
+            attacker->client != nullptr &&
+            VR_IsInitialized() &&
+            vr_crosshairEnabled != nullptr &&
+            vr_crosshairEnabled->current.enabled &&
+            wp->weapDef->weapClass != WEAPCLASS_TURRET &&
+            attacker->client->ps.viewlocked_entNum == ENTITYNUM_NONE &&
+            attacker->client->ps.fWeaponPosFrac == 0.0f;
+#else
+        const bool vrPreciseHipFireShot = false;
+#endif
+
         const float effectiveSpread =
-            vrPhysicalScopeShot
+            vrPhysicalScopeShot || vrPreciseHipFireShot
                 ? 0.0f
                 : spread;
 
@@ -373,6 +393,21 @@ void __cdecl Bullet_Fire(
                     "bullet spread to zero.\n");
 
                 loggedVrPhysicalScopeZeroSpread = true;
+            }
+        }
+
+        if (vrPreciseHipFireShot)
+        {
+            static bool loggedVrHipFireZeroSpread = false;
+
+            if (!loggedVrHipFireZeroSpread)
+            {
+                Com_Printf(
+                    0,
+                    "[VR] Hip-fire crosshair forced authoritative "
+                    "bullet spread to zero.\n");
+
+                loggedVrHipFireZeroSpread = true;
             }
         }
 #else
