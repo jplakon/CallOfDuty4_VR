@@ -82,6 +82,9 @@ void VR_SetPhysicalSniperScopeState(
 // converge the physical muzzle ray on the reticle target.
 bool VR_IsPhysicalSniperScopeAimActive();
 
+// Invalidate the previous optic before this frame builds its viewmodel.
+void VR_BeginPhysicalSniperScopeFrame();
+
 // Publishes the final rendered viewmodel optic pose.  The compositor uses
 // the grip-relative anchor to keep the lens rigidly attached to the rifle;
 // the SP game uses the world-space ray for ballistic convergence.
@@ -149,6 +152,10 @@ const char* VR_GetFirstGameplayRecenterModeName();
 // boxes manipulated in the editor are the actual HUD groups being moved.
 bool VR_GetActiveHudLayout(
     kisak::vr::hud::Layout* layout);
+float VR_GetTransientHudMessageScale(
+    bool deathQuote);
+bool VR_GetHeldMagazineVisualOffset(
+    float offset[3]);
 std::uint64_t VR_GetHudLayoutRevision();
 bool VR_GetHudEditorSnapshot(
     kisak::vr::hud::EditorSnapshot* snapshot);
@@ -353,6 +360,10 @@ bool VR_GetBasicGameplayButtons(
     bool* useHeld,
     bool* reloadHeld);
 
+// Publish only scalar game-thread state for automatic shoulder ADS. Runtime
+// threads must not inspect the predicted player or input catchers directly.
+void VR_SetPoseAdsGameplayState(bool gameplayAllowed, bool sprintActive);
+
 // KISAK_SP_VR_FNG_CAMPAIGN_INPUT_BRIDGE_V72
 // Returns the same configured-or-physical ADS intent used by the VR
 // user-command path. Single-player scripts poll playerADS() independently of
@@ -460,6 +471,11 @@ bool VR_GetLowerStanceButton(
 bool VR_GetWeaponUtilityButtons(
     bool* offhandHeld,
     bool* leftYHeld);
+
+// COD4's enemy-grenade return prompt consumes the distinct +throw command,
+// not the normal frag/off-hand bits. This publishes its remappable VR action.
+bool VR_GetThrowBackButton(
+    bool* throwBackHeld);
 
 
 // Legacy-named compatibility API: applies a short vibration pulse to the

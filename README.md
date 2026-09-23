@@ -14,7 +14,25 @@ copy of the original game.
 
 ## Current status
 
-The current public beta is `v0.10.0-beta.18`.
+The current public beta is `v0.10.0-beta.19`.
+
+Beta.19 improves physical rifle-scope alignment and off-axis aiming, makes
+automatic shoulder aiming less likely to interrupt walking or sprinting,
+stabilizes physical grenade pickup/release and F.N.G. instructions, and repairs
+Javelin lock-on continuity in The Bog. These focused gameplay paths were
+accepted on Quest 3 through Virtual Desktop's VDXR runtime before the release
+rebuild. The Javelin's green boxes can still be slightly offset. Other
+headsets and runtimes still require their own confirmation.
+
+The release also includes additional configurable controls, HUD adjustments,
+and diagnostic/campaign candidates. These are not all confirmed fixes on the
+original reporters' hardware. See [CHANGELOG.md](CHANGELOG.md) for the exact
+scope and [KNOWN-ISSUES.md](KNOWN-ISSUES.md) for remaining limitations,
+including persistent corruption on the issue #78 reporter's configuration
+and an intermittent D3D9 device-hung crash. No new full-campaign or final-build
+long-session stability pass is claimed.
+
+### Earlier updates
 
 Beta.18 rebuilds rifle-attached sniper scopes around the weapon model's actual
 lens surface. The magnified image and reticle now stay centered on that lens,
@@ -37,14 +55,14 @@ per eye and the green lock-on boxes are projected in eye-local HUD coordinates
 instead of the entire packed stereo surface. The complete sight and lock-on
 flow passed a focused Quest 3 / Virtual Desktop VDXR headset test.
 
-Beta.17 fixes issue #78's continuous cyan/green/blue world corruption in the
+Beta.17 corrected one cause of continuous cyan/green/blue world corruption in the
 packed stereo Float-Z depth-clear path. Once an eye viewport is installed, the
 clear quad now uses viewport-local coordinates instead of applying the packed
 render-target origin a second time. Automated checks, the OpenXR Simulator,
 and a focused Quest 3 / Virtual Desktop VDXR headset test with `r_zFeather 1`
 and repeated two-hand/ADS transitions passed. Desktop/non-VR behavior is
-unchanged; confirmation on the original reporter's Quest 3S system is still
-welcome.
+unchanged. The original issue #78 reporter still reported corruption in
+beta.18, so this is not a universal resolution of that issue.
 
 Beta.16 addresses issue #46's distant dog tumbling and
 ground clipping. COD4's reconstructed ground-orientation path had swapped its

@@ -13,7 +13,7 @@ namespace kisak::vr::weapon_profiles
 constexpr std::size_t kMaximumWeaponProfiles = 128u;
 constexpr std::size_t kMaximumGunstockProfiles = 32u;
 constexpr float kMaximumOffsetInches = 12.0f;
-constexpr float kMaximumAngleDegrees = 90.0f;
+constexpr float kMaximumAngleDegrees = 180.0f;
 
 struct Pose
 {

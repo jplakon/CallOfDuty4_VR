@@ -142,7 +142,7 @@ const char * const s_warnFormat[41] =
     "too many scene entities (more than %i)",
     "TEMP_SKIN_BUF_SIZE exceeded - not skinning surface",
     "R_MAX_SKINNED_CACHE_VERTICES((1024 * 144)) exceeded - not drawing surface",
-    "MAX_SCENE_SURFS_SIZE(131072) exceeded - not drawing surface",
+    "MAX_SCENE_SURFS_SIZE(262144) exceeded - not drawing surface",
     "Portal plane buffer full - flushing",
     "GFX_PARTICLE_CLOUD_LIMIT(256) exceeded - not drawing particle cloud",
     "MAX_ADDED_DLIGHTS(32) exceeded.",

@@ -28,9 +28,13 @@ bool __cdecl RB_IsGpuFinished()
                 v1 = R_ErrorDescription(hr);
                 Com_Error(
                     ERR_FATAL,
-                    ".\\r_setstate_d3d.cpp (%i) dx.flushGpuQuery->GetData( 0, 0, (1 << 0) ) failed: %s\n",
+                    ".\\r_setstate_d3d.cpp (%i) dx.flushGpuQuery->GetData( 0, 0, (1 << 0) ) failed: HRESULT 0x%08X (%s); fence count %d, issued %d, deviceLost %d\n",
                     28,
-                    v1);
+                    static_cast<unsigned int>(hr),
+                    v1,
+                    dx.flushGpuQueryCount,
+                    static_cast<int>(dx.flushGpuQueryIssued),
+                    static_cast<int>(dx.deviceLost));
             } while (alwaysfails);
         }
         if ((uint32_t)hr > 1)

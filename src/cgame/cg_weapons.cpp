@@ -2,6 +2,7 @@
 #include <universal/com_memory.h>
 #include "vr/vr_openxr.h"
 #include "vr/vr_interactions.h"
+#include "vr/vr_scope_lens_geometry.h"
 
 #include <algorithm>
 #include <cmath>
@@ -132,11 +133,13 @@ static void VR_MultiplySkelMat(
 static bool VR_FindViewmodelScopeLensProfile(
     const cpose_t* viewModelPose,
     const DObj_s* viewModelDObj,
+    const float weaponAxis[3][3],
     float lensCenterPoseLocal[3],
     float* lensRadiusMeters)
 {
     if (viewModelPose == nullptr ||
         viewModelDObj == nullptr ||
+        weaponAxis == nullptr ||
         lensCenterPoseLocal == nullptr ||
         lensRadiusMeters == nullptr)
     {
@@ -222,6 +225,7 @@ static bool VR_FindViewmodelScopeLensProfile(
             bool boundsInitialized = false;
             float minimum[3] = {};
             float maximum[3] = {};
+            kisak::vr::scope_geometry::LensBounds lensBounds(weaponAxis);
             uint32_t vertexIndex = 0u;
 
             for (uint32_t rigidListIndex = 0u;
@@ -292,6 +296,12 @@ static bool VR_FindViewmodelScopeLensProfile(
                             deformationMatrix.origin[2],
                     };
 
+                    if (!lensBounds.AddPoint(posedVertex))
+                    {
+                        boundsInitialized = false;
+                        break;
+                    }
+
                     if (!boundsInitialized)
                     {
                         std::memcpy(
@@ -339,17 +349,15 @@ static bool VR_FindViewmodelScopeLensProfile(
                 continue;
             }
 
-            const float halfLeftExtent =
-                0.5f *
-                (maximum[1] - minimum[1]);
-
-            const float halfUpExtent =
-                0.5f *
-                (maximum[2] - minimum[2]);
-
-            const float radiusGameUnits =
-                0.5f *
-                (halfLeftExtent + halfUpExtent);
+            // KISAK_SP_VR_SCOPE_ROTATION_INVARIANT_LENS_V123
+            // Posed vertices use world axes despite their pose-local origin.
+            // Measure in the weapon plane, then return a pose-local WORLD
+            // center. The caller must still add viewOffset exactly once.
+            float radiusGameUnits = 0.0f;
+            if (!lensBounds.Measure(lensCenterPoseLocal, &radiusGameUnits))
+            {
+                continue;
+            }
 
             const float radiusMeters =
                 radiusGameUnits /
@@ -360,16 +368,6 @@ static bool VR_FindViewmodelScopeLensProfile(
                 radiusMeters > 0.10f)
             {
                 continue;
-            }
-
-            for (int component = 0;
-                 component < 3;
-                 ++component)
-            {
-                lensCenterPoseLocal[component] =
-                    0.5f *
-                    (minimum[component] +
-                     maximum[component]);
             }
 
             *lensRadiusMeters = radiusMeters;
@@ -3904,6 +3902,73 @@ static bool VR_AddAirSupportDeviceToScene(
             weaponViewModel,
             1);
 
+    // KISAK_SP_VR_AIR_SUPPORT_VISIBLE_PROXY_V121
+    // COD4's stock weapon_ac130 attachment is only a script/animation anchor:
+    // it has no render surfaces.  Submitting it as a standalone DObj therefore
+    // succeeded in V94 while still drawing nothing.  Reuse the already-loaded
+    // compact C4 handset as the visible mission-device shell; targeting and
+    // the authored tag_weapon animation remain owned by the real support
+    // weapon.  NVG geometry is a last-resort common-map fallback.
+    const XModel* const authoredDeviceModel = deviceModel;
+    const char* const authoredDeviceName =
+        authoredDeviceModel != nullptr
+            ? XModelGetName(authoredDeviceModel)
+            : nullptr;
+    const bool isNonVisualAc130Anchor =
+        authoredDeviceName != nullptr &&
+        std::strstr(
+            authoredDeviceName,
+            "weapon_ac130") != nullptr;
+
+    if (deviceModel == nullptr ||
+        deviceModel->numsurfs == 0u ||
+        isNonVisualAc130Anchor)
+    {
+        const uint32_t proxyWeaponIndex =
+            BG_FindWeaponIndexForName(
+                "c4");
+        const WeaponDef* const proxyWeaponDef =
+            proxyWeaponIndex != 0u
+                ? BG_GetWeaponDef(proxyWeaponIndex)
+                : nullptr;
+        XModel* const c4DeviceModel =
+            proxyWeaponDef != nullptr
+                ? proxyWeaponDef->gunXModel[0]
+                : nullptr;
+
+        if (c4DeviceModel != nullptr &&
+            c4DeviceModel->numsurfs != 0u)
+        {
+            deviceModel = c4DeviceModel;
+        }
+        else if (cgMedia.nightVisionGoggles != nullptr &&
+                 cgMedia.nightVisionGoggles->numsurfs != 0u)
+        {
+            deviceModel =
+                cgMedia.nightVisionGoggles;
+        }
+
+        static bool loggedVisibleDeviceProxy = false;
+        if (!loggedVisibleDeviceProxy)
+        {
+            Com_Printf(
+                0,
+                "[VR][ISSUE45][AIR SUPPORT] V121 replaced "
+                "non-visual authored device '%s' with visible "
+                "mission-device shell '%s' (%u surfaces).\n",
+                authoredDeviceModel != nullptr
+                    ? XModelGetName(authoredDeviceModel)
+                    : "<null>",
+                deviceModel != nullptr
+                    ? XModelGetName(deviceModel)
+                    : "<none>",
+                deviceModel != nullptr
+                    ? static_cast<unsigned int>(deviceModel->numsurfs)
+                    : 0u);
+            loggedVisibleDeviceProxy = true;
+        }
+    }
+
     VrAirSupportDeviceAsset* asset =
         VR_GetAirSupportDeviceAsset(
             deviceModel);
@@ -6855,6 +6920,20 @@ static void VR_AddManualReloadClipModelsToScene(
 
     if (drawHeldMagazine)
     {
+        float visualOffset[3] = {};
+        if (VR_GetHeldMagazineVisualOffset(visualOffset))
+        {
+            for (int worldComponent = 0;
+                 worldComponent < 3;
+                 ++worldComponent)
+            {
+                heldOrigin[worldComponent] +=
+                    visualOffset[0] * heldAxis[0][worldComponent] +
+                    visualOffset[1] * heldAxis[1][worldComponent] +
+                    visualOffset[2] * heldAxis[2][worldComponent];
+            }
+        }
+
         VR_SetManualReloadClipPose(
             &clipObject->heldPose,
             heldOrigin,
@@ -7735,7 +7814,12 @@ void __cdecl CG_AddPlayerWeapon(
                 }
 
 #ifdef KISAK_SP
-                if (VR_IsPhysicalSniperScopeAimActive())
+                // Publish this weapon's lens even before ADS activates. The
+                // current frame's scope state is decided later in DrawActive;
+                // using yesterday's active flag reused stale poses on entry.
+                if (weapDef->overlayInterface != WEAPOVERLAYINTERFACE_JAVELIN &&
+                    (weapDef->overlayMaterial != nullptr ||
+                     weapDef->overlayReticle != WEAPOVERLAYRETICLE_NONE))
                 {
                     const char* exactRearScopeTagCandidates[] = {
                         "tag_scope_rear",
@@ -7775,6 +7859,7 @@ void __cdecl CG_AddPlayerWeapon(
                         if (VR_FindViewmodelScopeLensProfile(
                                 &cgameGlob->viewModelPose,
                                 weapInfo->viewModelDObj,
+                                cgameGlob->viewModelAxis,
                                 lensCenterPoseLocal,
                                 &vrScopeLensRadiusMeters))
                         {

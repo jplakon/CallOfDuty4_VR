@@ -50,10 +50,18 @@ static int s_renderCmdWarnSize;
 
 void __cdecl TRACK_r_rendercmds()
 {
-    track_static_alloc_internal((void *)s_backEndData, 2346752, "s_backEndData", 18);
+    track_static_alloc_internal(
+        (void *)s_backEndData,
+        sizeof(s_backEndData),
+        "s_backEndData",
+        18);
     track_static_alloc_internal(g_viewInfo, 212352, "g_viewInfo", 18);
     track_static_alloc_internal(g_frontEndCmds, 32, "g_frontEndCmds", 18);
-    track_static_alloc_internal(&s_debugFrameGlob, 1173632, "s_debugFrameGlob", 0);
+    track_static_alloc_internal(
+        &s_debugFrameGlob,
+        sizeof(s_debugFrameGlob),
+        "s_debugFrameGlob",
+        0);
     track_static_alloc_internal(&g_debugFrontEndCmds, 16, "g_debugFrontEndCmds", 0);
 }
 
@@ -518,8 +526,9 @@ DebugGlobals *R_ToggleSmpFrame()
             "%s\n\t(frontEndDataOut->surfPos) = %i",
             "(frontEndDataOut->surfPos >= 0)",
             frontEndDataOut->surfPos);
-    if (frontEndDataOut->surfPos > 0x20000)
-        surfPos = 0x20000;
+    if (frontEndDataOut->surfPos >
+        static_cast<long>(GFX_SCENE_SURFS_BUFFER_SIZE))
+        surfPos = GFX_SCENE_SURFS_BUFFER_SIZE;
     else
         surfPos = frontEndDataOut->surfPos;
     frontEndDataOut->surfPos = surfPos;
@@ -1821,5 +1830,50 @@ void __cdecl R_EndDebugFrame()
         s_debugFrameGlob.restoreFrontEndDataOut = 0;
         iassert(rg.inFrame);
         rg.inFrame = s_debugFrameGlob.inFrame;
+    }
+}
+bool R_ReserveSceneSurfBytes(
+    const uint32_t byteCount,
+    uint32_t *const firstByte)
+{
+    iassert(frontEndDataOut);
+    iassert(firstByte);
+
+    if (frontEndDataOut == nullptr ||
+        firstByte == nullptr ||
+        byteCount > GFX_SCENE_SURFS_BUFFER_SIZE)
+    {
+        return false;
+    }
+
+    LONG current = InterlockedCompareExchange(
+        &frontEndDataOut->surfPos,
+        0,
+        0);
+
+    for (;;)
+    {
+        if (current < 0 ||
+            static_cast<uint32_t>(current) >
+                GFX_SCENE_SURFS_BUFFER_SIZE - byteCount)
+        {
+            return false;
+        }
+
+        const LONG next =
+            current + static_cast<LONG>(byteCount);
+
+        const LONG observed = InterlockedCompareExchange(
+            &frontEndDataOut->surfPos,
+            next,
+            current);
+
+        if (observed == current)
+        {
+            *firstByte = static_cast<uint32_t>(current);
+            return true;
+        }
+
+        current = observed;
     }
 }

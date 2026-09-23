@@ -1104,7 +1104,6 @@ cmd_function_s SV_MapRestart_f_VAR;
 cmd_function_s SV_FastRestart_f_VAR_SERVER;
 cmd_function_s SV_FastRestart_f_VAR;
 
-
 static int initialized_0 = 0;
 void __cdecl SV_AddOperatorCommands()
 {
@@ -1184,4 +1183,3 @@ void __cdecl SV_AddOperatorCommands()
         Cmd_AddServerCommandInternal("replay_info", SV_DemoInfo_f, &SV_DemoInfo_f_VAR_SERVER);
     }
 }
-

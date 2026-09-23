@@ -17,6 +17,10 @@
 #include "r_sunshadow.h" // SCENE_VIEW_CAMERA
 #include <universal/profile.h>
 
+#if defined(XR_USE_GRAPHICS_API_D3D11)
+#include "vr/vr_d3d9_capture.h"
+#endif
+
 #ifdef KISAK_MP
 #include <cgame_mp/cg_local_mp.h>
 #elif KISAK_SP
@@ -902,9 +906,12 @@ int __cdecl R_DrawBModel(BModelDrawInfo *bmodelInfo, const GfxBrushModel *bmodel
     else
         visibleSurfaceCount = bmodel->surfaceCountNoDecal;
     iassert( visibleSurfaceCount );
-    startSurfPos = InterlockedExchangeAdd(&frontEndDataOut->surfPos, 8 * visibleSurfaceCount + 32);
-    if (8 * (uint32_t)visibleSurfaceCount + 32 + startSurfPos <= 0x20000)
+    const uint32_t surfBytes =
+        8 * static_cast<uint32_t>(visibleSurfaceCount) + 32;
+    uint32_t reservedSurfPos = 0;
+    if (R_ReserveSceneSurfBytes(surfBytes, &reservedSurfPos))
     {
+        startSurfPos = static_cast<int>(reservedSurfPos);
         iassert( !(startSurfPos & 3) );
         newPlacement = (GfxScaledPlacement *)&frontEndDataOut->surfsBuffer[startSurfPos];
         memcpy(&frontEndDataOut->surfsBuffer[startSurfPos], placement, 0x1Cu);
@@ -970,6 +977,23 @@ void __cdecl R_DrawAllDynEnt(const GfxViewInfo *viewInfo)
     int savedregs; // [esp+70h] [ebp+0h] BYREF
 
     PROF_SCOPED("DrawDynEnt");
+
+#if defined(XR_USE_GRAPHICS_API_D3D11)
+    // The retail renderer owns exactly one sceneDynModel/sceneDynBrush slot
+    // per dynamic entity and rebuilds these arrays once per frame. Same-frame
+    // VR calls this routine once for every scope/eye camera. Appending each
+    // later view overflowed the world-owned arrays, corrupting model LODs and
+    // surface IDs (the Heat M14 scope crash). Earlier draw lists are replaced
+    // with the final view in RB_Draw3D, so rebuild the arrays in place for
+    // every additional VR camera instead of appending duplicates.
+    if (VR_D3D9IsSameFrameStereoEnabled() &&
+        frontEndDataOut != nullptr &&
+        frontEndDataOut->viewInfoIndex > 0u)
+    {
+        scene.sceneDynModelCount = 0;
+        scene.sceneDynBrushCount = 0;
+    }
+#endif
 
     for (viewIndex = 0; viewIndex < 3; ++viewIndex)
         dynEntVisData[viewIndex] = rgp.world->dpvsDyn.dynEntVisData[0][viewIndex];

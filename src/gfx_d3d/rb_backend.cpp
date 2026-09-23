@@ -182,7 +182,10 @@ void __cdecl R_InsertGpuFence()
             {
                 ++g_disableRendering;
                 v0 = R_ErrorDescription(hr);
-                Com_Error(ERR_FATAL, ".\\rb_backend.cpp (%i) dx.flushGpuQuery->Issue( (1 << 0) ) failed: %s\n", 2605, v0);
+                Com_Error(ERR_FATAL, ".\\rb_backend.cpp (%i) dx.flushGpuQuery->Issue( (1 << 0) ) failed: HRESULT 0x%08X (%s); fence count %d, issued %d, deviceLost %d\n",
+                    2605, static_cast<unsigned int>(hr), v0,
+                    dx.flushGpuQueryCount, static_cast<int>(dx.flushGpuQueryIssued),
+                    static_cast<int>(dx.deviceLost));
             } while (alwaysfails);
         }
     } while (alwaysfails);

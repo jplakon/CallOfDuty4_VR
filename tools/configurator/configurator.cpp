@@ -65,6 +65,8 @@ constexpr wchar_t kWindowTitle[] =
 // frame while preserving that full layout as its minimum tracking size.
 constexpr int kWindowClientWidth = 1160;
 constexpr int kWindowClientHeight = 750;
+constexpr int kInitialWindowClientWidth = 1280;
+constexpr int kInitialWindowClientHeight = 820;
 constexpr DWORD kMainWindowStyle =
     WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU |
     WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
@@ -159,13 +161,15 @@ const std::array<const wchar_t*, 9> kPageNames = {
     L"Advanced",
 };
 
-SIZE MainWindowOuterSize()
+SIZE MainWindowOuterSize(
+    const int clientWidth = kWindowClientWidth,
+    const int clientHeight = kWindowClientHeight)
 {
     RECT bounds = {
         0,
         0,
-        kWindowClientWidth,
-        kWindowClientHeight,
+        clientWidth,
+        clientHeight,
     };
 
     if (AdjustWindowRectEx(
@@ -175,8 +179,8 @@ SIZE MainWindowOuterSize()
             0) == FALSE)
     {
         SIZE fallback = {};
-        fallback.cx = kWindowClientWidth;
-        fallback.cy = kWindowClientHeight;
+        fallback.cx = clientWidth;
+        fallback.cy = clientHeight;
         return fallback;
     }
 
@@ -524,6 +528,12 @@ struct ControlBinding
     std::string lastRenderedCanonicalValue;
 };
 
+struct ResponsiveControl
+{
+    HWND window = nullptr;
+    RECT baseBounds = {};
+};
+
 struct AppState
 {
     HINSTANCE instance = nullptr;
@@ -559,6 +569,7 @@ struct AppState
     HWND setupRecommendation = nullptr;
     HWND setupApplyRecommended = nullptr;
     std::vector<HWND> setupControls;
+    std::vector<ResponsiveControl> responsiveControls;
     HFONT font = nullptr;
     HFONT titleFont = nullptr;
     HBRUSH backgroundBrush = nullptr;
@@ -597,6 +608,89 @@ struct AppState
     vrc::Report compatibilityReport;
     std::string compatibilityReportError;
 };
+
+void CaptureResponsiveLayout(AppState& state)
+{
+    state.responsiveControls.clear();
+    for (HWND child = GetWindow(state.window, GW_CHILD);
+         child != nullptr;
+         child = GetWindow(child, GW_HWNDNEXT))
+    {
+        RECT bounds = {};
+        if (GetWindowRect(child, &bounds) == FALSE)
+        {
+            continue;
+        }
+        MapWindowPoints(
+            nullptr,
+            state.window,
+            reinterpret_cast<POINT*>(&bounds),
+            2);
+        state.responsiveControls.push_back({child, bounds});
+    }
+}
+
+void LayoutResponsiveControls(AppState& state)
+{
+    if (state.window == nullptr || state.responsiveControls.empty())
+    {
+        return;
+    }
+
+    RECT client = {};
+    if (GetClientRect(state.window, &client) == FALSE)
+    {
+        return;
+    }
+
+    const double scaleX =
+        static_cast<double>(client.right - client.left) /
+        static_cast<double>(kWindowClientWidth);
+    const double scaleY =
+        static_cast<double>(client.bottom - client.top) /
+        static_cast<double>(kWindowClientHeight);
+
+    HDWP batch = BeginDeferWindowPos(
+        static_cast<int>(state.responsiveControls.size()));
+    for (const ResponsiveControl& control : state.responsiveControls)
+    {
+        const int x = static_cast<int>(
+            std::lround(control.baseBounds.left * scaleX));
+        const int y = static_cast<int>(
+            std::lround(control.baseBounds.top * scaleY));
+        const int width = static_cast<int>(std::lround(
+            (control.baseBounds.right - control.baseBounds.left) * scaleX));
+        const int height = static_cast<int>(std::lround(
+            (control.baseBounds.bottom - control.baseBounds.top) * scaleY));
+
+        if (batch != nullptr)
+        {
+            batch = DeferWindowPos(
+                batch,
+                control.window,
+                nullptr,
+                x,
+                y,
+                std::max(1, width),
+                std::max(1, height),
+                SWP_NOACTIVATE | SWP_NOZORDER);
+        }
+        else
+        {
+            MoveWindow(
+                control.window,
+                x,
+                y,
+                std::max(1, width),
+                std::max(1, height),
+                TRUE);
+        }
+    }
+    if (batch != nullptr)
+    {
+        EndDeferWindowPos(batch);
+    }
+}
 
 struct ChordEditorState
 {
@@ -3776,7 +3870,7 @@ void PollHudEditorStatus(AppState& state)
             SetHudStatus(
                 state,
                 saved
-                    ? L"Headset layout imported and 142/142 settings read-back verified."
+                    ? L"Headset layout imported and settings read-back verified."
                     : L"Headset layout imported, but the settings file could not be saved.");
             MessageBoxW(
                 state.window,
@@ -6806,7 +6900,9 @@ bool BuildMainWindow(AppState& state)
     state.backgroundBrush = CreateSolidBrush(RGB(246, 248, 251));
     state.previewBrush = CreateSolidBrush(RGB(255, 255, 255));
 
-    const SIZE mainWindowSize = MainWindowOuterSize();
+    const SIZE mainWindowSize = MainWindowOuterSize(
+        kInitialWindowClientWidth,
+        kInitialWindowClientHeight);
     state.window = CreateWindowExW(
         0,
         kWindowClass,
@@ -7009,6 +7105,9 @@ bool BuildMainWindow(AppState& state)
         31,
         kIdDiagnostics);
 
+    CaptureResponsiveLayout(state);
+    LayoutResponsiveControls(state);
+
     UpdateAllControls(state);
     RefreshCompatibility(state, false);
     UpdateWeaponStatusLabel(state);
@@ -7060,6 +7159,9 @@ LRESULT CALLBACK MainWindowProc(
 
     switch (message)
     {
+    case WM_SIZE:
+        LayoutResponsiveControls(*state);
+        return 0;
     case WM_COMMAND:
     {
         const int identifier = LOWORD(wParam);

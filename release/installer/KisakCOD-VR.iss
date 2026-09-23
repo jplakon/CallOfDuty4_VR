@@ -89,10 +89,12 @@ const
   BackupCompleteName = 'backup-complete.txt';
   InstallReceiptName = 'install-receipt.txt';
   PayloadManifestName = 'payload-manifest.txt';
+  XboxNormalizedFilesListName = 'xbox-normalized-files.txt';
 
 var
   DetectedEdition: String;
   DetectedLanguage: String;
+  DetectedRawXboxLayout: Boolean;
 
 function NormalizedDirectory(Value: String): String;
 begin
@@ -265,9 +267,9 @@ begin
   begin
     Reason := 'The selected folder does not contain iw3sp.exe.' + #13#10 + #13#10 +
       'Select the original 2007 Call of Duty 4 folder, not a parent folder ' +
-      'or the remastered game. Microsoft/Xbox automatic raw-layout ' +
-      'normalization is pending a verified file map; Setup will not guess ' +
-      'or move game files.';
+      'or the remastered game. For a Microsoft/Xbox installation select its ' +
+      'Content folder containing iw3sp.exe; Setup can then validate and copy ' +
+      'the raw zone\(null) fastfiles into a guarded language view.';
     Exit;
   end;
 
@@ -301,10 +303,15 @@ begin
   if not FileExists(
       AddBackslash(Root) + 'zone\' + Language + '\code_post_gfx.ff') then
   begin
-    Reason := 'The selected folder is missing zone\' + Language +
-      '\code_post_gfx.ff, which must match the language named by ' +
-      'localization.txt.';
-    Exit;
+    if not FileExists(
+        AddBackslash(Root) + 'zone\(null)\code_post_gfx.ff') then
+    begin
+      Reason := 'The selected folder is missing zone\' + Language +
+        '\code_post_gfx.ff, which must match the language named by ' +
+        'localization.txt. The guarded Microsoft/Xbox fallback also checked ' +
+        'zone\(null) but did not find a complete raw-layout source.';
+      Exit;
+    end;
   end;
 
   Reason := '';
@@ -313,7 +320,11 @@ end;
 
 function EditionForDirectory(const Directory: String): String;
 begin
-  if Pos('\steamapps\common\', Lowercase(Directory) + '\') <> 0 then
+  if FileExists(
+      AddBackslash(NormalizedDirectory(Directory)) +
+      'zone\(null)\code_post_gfx.ff') then
+    Result := 'Microsoft/Xbox raw layout'
+  else if Pos('\steamapps\common\', Lowercase(Directory) + '\') <> 0 then
     Result := 'Steam'
   else
     Result := 'classic-compatible';
@@ -445,7 +456,121 @@ begin
   Result := IsValidClassicInstall(
     WizardDirValue, DetectedLanguage, Reason);
   if Result then
+  begin
     DetectedEdition := EditionForDirectory(WizardDirValue);
+    DetectedRawXboxLayout :=
+      (not FileExists(
+        AddBackslash(NormalizedDirectory(WizardDirValue)) + 'zone\' +
+        DetectedLanguage + '\code_post_gfx.ff')) and
+      FileExists(
+        AddBackslash(NormalizedDirectory(WizardDirValue)) +
+        'zone\(null)\code_post_gfx.ff');
+  end;
+end;
+
+function NormalizeXboxRawLayout: String;
+var
+  Root: String;
+  SourceDirectory: String;
+  DestinationDirectory: String;
+  DataRoot: String;
+  ListPath: String;
+  SourcePath: String;
+  DestinationPath: String;
+  TemporaryPath: String;
+  RelativePath: String;
+  FindRec: TFindRec;
+  Created: TArrayOfString;
+  Index: Integer;
+begin
+  Result := '';
+  if not DetectedRawXboxLayout then
+    Exit;
+
+  Root := NormalizedDirectory(WizardDirValue);
+  SourceDirectory := AddBackslash(Root) + 'zone\(null)';
+  DestinationDirectory := AddBackslash(Root) + 'zone\' + DetectedLanguage;
+  DataRoot := AddBackslash(Root) + InstallerDataDirectoryName;
+  ListPath := AddBackslash(DataRoot) + XboxNormalizedFilesListName;
+  SetArrayLength(Created, 0);
+
+  if (not ForceDirectories(DestinationDirectory)) or
+     (not ForceDirectories(DataRoot)) then
+  begin
+    Result := 'Setup could not create the guarded Microsoft/Xbox language ' +
+      'view at: ' + DestinationDirectory;
+    Exit;
+  end;
+
+  if FindFirst(AddBackslash(SourceDirectory) + '*.ff', FindRec) then
+  begin
+    try
+      repeat
+        if (FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) = 0 then
+        begin
+          SourcePath := AddBackslash(SourceDirectory) + FindRec.Name;
+          DestinationPath := AddBackslash(DestinationDirectory) + FindRec.Name;
+          RelativePath := 'zone\' + DetectedLanguage + '\' + FindRec.Name;
+          if not FileExists(DestinationPath) then
+          begin
+            TemporaryPath := DestinationPath + '.kisak-normalize.tmp';
+            DeleteFile(TemporaryPath);
+            if not CopyFile(SourcePath, TemporaryPath, True) then
+            begin
+              Result := 'Setup could not stage Microsoft/Xbox fastfile: ' +
+                FindRec.Name;
+              Break;
+            end;
+            if CompareText(
+                GetSHA256OfFile(SourcePath),
+                GetSHA256OfFile(TemporaryPath)) <> 0 then
+            begin
+              DeleteFile(TemporaryPath);
+              Result := 'The staged Microsoft/Xbox fastfile failed its ' +
+                'SHA-256 verification: ' + FindRec.Name;
+              Break;
+            end;
+            if not RenameFile(TemporaryPath, DestinationPath) then
+            begin
+              DeleteFile(TemporaryPath);
+              Result := 'Setup could not commit Microsoft/Xbox fastfile: ' +
+                FindRec.Name;
+              Break;
+            end;
+            AddUnique(Created, RelativePath);
+          end;
+        end;
+      until not FindNext(FindRec);
+    finally
+      FindClose(FindRec);
+    end;
+  end
+  else
+    Result := 'The Microsoft/Xbox raw-layout folder contains no .ff files.';
+
+  if Result <> '' then
+  begin
+    for Index := 0 to GetArrayLength(Created) - 1 do
+      DeleteFile(AddBackslash(Root) + Created[Index]);
+    Exit;
+  end;
+
+  if not FileExists(
+      AddBackslash(DestinationDirectory) + 'code_post_gfx.ff') then
+  begin
+    Result := 'Microsoft/Xbox normalization did not produce the required ' +
+      'code_post_gfx.ff.';
+    for Index := 0 to GetArrayLength(Created) - 1 do
+      DeleteFile(AddBackslash(Root) + Created[Index]);
+    Exit;
+  end;
+
+  if not SavePathList(ListPath, Created) then
+  begin
+    Result := 'Setup could not save the Microsoft/Xbox normalization receipt.';
+    for Index := 0 to GetArrayLength(Created) - 1 do
+      DeleteFile(AddBackslash(Root) + Created[Index]);
+  end;
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
@@ -623,6 +748,10 @@ begin
     Exit;
   end;
 
+  Result := NormalizeXboxRawLayout;
+  if Result <> '' then
+    Exit;
+
   Result := PreparePayloadBackups;
 end;
 
@@ -689,6 +818,10 @@ var
   BackupPath: String;
   TargetPath: String;
   TemporaryTarget: String;
+  XboxNormalized: TArrayOfString;
+  XboxListPath: String;
+  XboxTargetPath: String;
+  XboxSourcePath: String;
   Index: Integer;
 begin
   Result := False;
@@ -765,6 +898,29 @@ begin
       FailureReason := 'Uninstall could not restore the original file: ' +
         RelativePath;
       Exit;
+    end;
+  end;
+
+  XboxListPath := AddBackslash(DataRoot) + XboxNormalizedFilesListName;
+  if FileExists(XboxListPath) and
+     ReadPathList(XboxListPath, XboxNormalized) then
+  begin
+    for Index := 0 to GetArrayLength(XboxNormalized) - 1 do
+    begin
+      RelativePath := NormalizedRelativePath(XboxNormalized[Index]);
+      if IsSafeRelativePath(RelativePath) then
+      begin
+        XboxTargetPath :=
+          AddBackslash(ExpandConstant('{app}')) + RelativePath;
+        XboxSourcePath :=
+          AddBackslash(ExpandConstant('{app}')) + 'zone\(null)\' +
+          ExtractFileName(RelativePath);
+        if FileExists(XboxTargetPath) and FileExists(XboxSourcePath) and
+           (CompareText(
+             GetSHA256OfFile(XboxTargetPath),
+             GetSHA256OfFile(XboxSourcePath)) = 0) then
+          DeleteFile(XboxTargetPath);
+      end;
     end;
   end;
 

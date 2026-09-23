@@ -1,6 +1,21 @@
 # Release checklist
 
-This checklist is for `v0.10.0-beta.18` over `v0.10.0-beta.17`.
+This checklist is for `v0.10.0-beta.19` over `v0.10.0-beta.18`.
+
+## Beta.19 evidence boundaries
+
+This is a checklist, not a claim that every item below passed. Focused V122
+scope, V123 movement/ADS, V124 grenade/F.N.G., and V125 Bog Javelin gameplay
+received owner Quest 3 / VDXR acceptance before the committed-source release
+rebuild. Keep the accepted V125 EXE/PDB separately; the rebuilt release hash is
+different and must not be labeled the exact headset-tested executable.
+
+The final packaged long-session/checkpoint/mission-transition soak remains
+unperformed. Intermittent D3DERR_DEVICEHUNG is unresolved. The owner accepted
+the Javelin green-box offset as non-blocking. Remaining magazine and shadow
+tests were waived, not passed. Original hardware reports and exact natural
+mission sequences remain pending as described in KNOWN-ISSUES.md. Retain
+prerelease status and these limitations in both public announcements.
 
 ## Documentation blockers
 
@@ -41,7 +56,7 @@ This checklist is for `v0.10.0-beta.18` over `v0.10.0-beta.17`.
   `KisakCOD-VR-Input-Mapper`, and `KisakCOD-VR-Configurator-Tests` in Win32
   Release configuration from the committed source.
 - Run the settings tests against `release/package/VR-Settings.bat` and require
-  all 142 catalog settings plus beta.18 compatibility, launcher, runtime,
+  all 158 catalog settings plus beta.19 compatibility, launcher, runtime,
   configurator, HUD/menu, Pimax, and mounted-gun contracts to pass.
 - Confirm `git status --porcelain --untracked-files=no` remains empty.
 - Copy nothing from `bin/Debug` into the player package.
@@ -55,15 +70,15 @@ This checklist is for `v0.10.0-beta.18` over `v0.10.0-beta.17`.
   the legacy flat crosshair to remain suppressed in VR.
 - In Safehouse and Heat, require the air-support ray, marker, and strike point
   to follow the tracked right controller. Confirm the normal right glove stays
-  stable, the broken canned arms stay hidden, and the still-invisible handheld
-  device is reported as a cosmetic limitation rather than claimed as fixed.
-- Resize, maximize, restore, and DPI-check the Configurator. Require a full
-  `1160x750` client area and prevent resizing below the point where rightmost or
-  bottom controls would be clipped.
+  stable and the handheld device remains visible. The beta.19 visibility
+  candidate must not be described as confirmed before this mission test.
+- Resize, maximize, restore, and DPI-check the Configurator. Require controls
+  to remain accessible through its responsive layout and scrolling. Verify
+  repaint without hovering; the customer still reports a redraw defect.
 
 - Open **Setup & Compatibility** on the primary VDXR/Quest 3/RTX 3080 Ti
   system. Require file, DirectX, OS, GPU, and 32-bit OpenXR checks to pass;
-  before the first beta.18 run, require honest headset/controller warnings.
+  before the first beta.19 run, require honest headset/controller warnings.
 - Apply the recommendation only after verifying its confirmation lists the
   exact backend/graphics delta. Snapshot all other settings before/after and
   require handedness, units, comfort, input, HUD, height, interactions, and
@@ -259,10 +274,11 @@ This checklist is for `v0.10.0-beta.18` over `v0.10.0-beta.17`.
 
 ## Tag and package
 
-- Create annotated tag `v0.10.0-beta.18` only after the compatibility,
+- Create annotated tag `v0.10.0-beta.19` only after the compatibility,
   Metric/Imperial, per-weapon/gunstock, handed-interaction, controller, menu,
   rendering, crash-diagnostic, tracked-hand, reload, grenade, OpenVR two-hand,
-  Automatic-proximity release, detonator, and campaign state is validated.
+  Automatic-proximity release, detonator, and campaign evidence is reviewed.
+  Distinguish performed checks from the explicit pending/waived items above.
 - Install Inno Setup 6 or 7 and make `ISCC.exe` available through
   `INNO_SETUP_COMPILER`, `PATH`, a standard install location, or `--iscc`.
 - Run `python tests/installer_builder_tests.py` and require all tests to pass.
@@ -271,7 +287,7 @@ This checklist is for `v0.10.0-beta.18` over `v0.10.0-beta.17`.
 
   ```powershell
   python tools/package_release.py `
-    --version 0.10.0-beta.18 `
+    --version 0.10.0-beta.19 `
     --repository-url https://github.com/jplakon/CallOfDuty4_VR `
     --patreon-url https://www.patreon.com/c/J_Play `
     --output-directory releases

@@ -1980,6 +1980,7 @@ int __cdecl CG_DrawActiveFrame(
     VR_JavelinFrameDiagnostic("sound listener complete");
     //CG_SetRumbleReceiver(localClientNum, cgArray[0].nextSnap->ps.clientNum, cgArray[0].refdef.vieworg); // KISAKTODO
     VR_JavelinFrameDiagnostic("before view weapon");
+    VR_BeginPhysicalSniperScopeFrame();
     CG_AddViewWeapon(localClientNum);
     VR_JavelinFrameDiagnostic("view weapon complete");
     CG_UpdateTestFX(localClientNum);

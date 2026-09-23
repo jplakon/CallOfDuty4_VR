@@ -2986,6 +2986,12 @@ void __cdecl  R_FatalLockError(HRESULT hr)
 
 const char *__cdecl R_ErrorDescription(HRESULT hr)
 {
+    // The inherited DirectX description table predates these D3D9Ex errors.
+    // Keep the distinction visible; a hung/removed GPU is not a completed fence.
+    if (hr == D3DERR_DEVICEHUNG)
+        return "D3DERR_DEVICEHUNG: the graphics device stopped responding";
+    if (hr == D3DERR_DEVICEREMOVED)
+        return "D3DERR_DEVICEREMOVED: the graphics device is no longer available";
     return DXGetErrorDescription9A(hr);
 }
 

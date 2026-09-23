@@ -16,9 +16,7 @@
 #include "cg_ents.h"
 #include <script/scr_const.h>
 #include "cg_view.h"
-
-// Implemented by src/vr/vr_openxr.cpp.
-bool VR_IsInitialized();
+#include "vr/vr_openxr.h"
 
 const dvar_t *hud_fade_sprint;
 const dvar_t *hud_health_pulserate_injured;
@@ -3230,6 +3228,14 @@ void __cdecl CG_OwnerDraw(
         CG_DrawPlayerWeaponNameBack(localClientNum, &rect, font, scale, color, material);
         break;
     case 90:
+        if (VR_IsInitialized())
+        {
+            const float vrHurtScale =
+                VR_GetTransientHudMessageScale(false);
+            rect.w *= vrHurtScale;
+            rect.h *= vrHurtScale;
+            scale *= vrHurtScale;
+        }
         CG_DrawCenterString(localClientNum, &rect, font, scale, color, textStyle);
         break;
     case 95:
@@ -3239,6 +3245,16 @@ void __cdecl CG_OwnerDraw(
         CG_DrawTankBarrel(localClientNum, &rect, material, color);
         break;
     case 97:
+        if (VR_IsInitialized())
+        {
+            const float vrDeathQuoteScale =
+                VR_GetTransientHudMessageScale(true);
+            rect.w *= vrDeathQuoteScale;
+            rect.h *= vrDeathQuoteScale;
+            text_x *= vrDeathQuoteScale;
+            text_y *= vrDeathQuoteScale;
+            scale *= vrDeathQuoteScale;
+        }
         CG_DrawDeadQuote(LocalClientGlobals, &rect, font, scale, color, textStyle, text_x, text_y);
         break;
     case 98:
@@ -3449,4 +3465,3 @@ void __cdecl CG_OwnerDraw(
         return;
     }
 }
-

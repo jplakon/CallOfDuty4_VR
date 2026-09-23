@@ -313,6 +313,19 @@ const std::vector<SettingDefinition> kCatalog = {
          {"position_only", "Position only"},
          {"direction_level_only", "Direction / level only"},
          {"full", "Full (position + direction / level)"}}),
+    PhysicalDecimal(
+        "KISAK_VR_HEAD_TRANSLATION_LIMIT",
+        "Room-scale translation limit",
+        "Maximum horizontal headset movement applied to the game camera. Zero keeps unrestricted room scale. A finite limit clamps camera translation only; it does not add world collision and can restrict movement. Experimental; leave at zero unless diagnosing a specific runtime.",
+        SettingPage::Calibration,
+        "0.0",
+        0.0,
+        48.0,
+        1,
+        MeasurementKind::Inches,
+        1,
+        1,
+        true),
 
     Decimal(
         "KISAK_VR_HUD_SAFE_X",
@@ -430,6 +443,26 @@ const std::vector<SettingDefinition> kCatalog = {
         kisak::vr::hud::kMaximumScale,
         2,
         true),
+    Decimal(
+        "KISAK_VR_HURT_MESSAGE_SCALE",
+        "Hurt-warning scale",
+        "Separate scale for the centered YOU ARE HURT / GET COVER warning.",
+        SettingPage::Hud,
+        "0.25",
+        0.15,
+        1.50,
+        2,
+        true),
+    Decimal(
+        "KISAK_VR_DEATH_QUOTE_SCALE",
+        "Death-quote scale",
+        "Separate scale for the quotation shown after death.",
+        SettingPage::Hud,
+        "0.25",
+        0.15,
+        1.50,
+        2,
+        true),
     Integer(
         "KISAK_VR_OBJECTIVE_MESSAGE_X_OFFSET",
         "Objective/banner horizontal offset",
@@ -541,8 +574,8 @@ const std::vector<SettingDefinition> kCatalog = {
         "Rotate the weapon around weapon-controller-local pitch.",
         SettingPage::Weapons,
         "0.0",
-        -45.0,
-        45.0,
+        -180.0,
+        180.0,
         1),
     Decimal(
         "KISAK_VR_WEAPON_YAW",
@@ -550,8 +583,8 @@ const std::vector<SettingDefinition> kCatalog = {
         "Rotate the weapon around weapon-controller-local yaw.",
         SettingPage::Weapons,
         "0.0",
-        -45.0,
-        45.0,
+        -180.0,
+        180.0,
         1),
     Decimal(
         "KISAK_VR_WEAPON_ROLL",
@@ -559,8 +592,8 @@ const std::vector<SettingDefinition> kCatalog = {
         "Rotate the weapon around weapon-controller-local roll.",
         SettingPage::Weapons,
         "0.0",
-        -45.0,
-        45.0,
+        -180.0,
+        180.0,
         1),
     Toggle(
         "KISAK_VR_WEAPON_PROFILES_ENABLED",
@@ -652,6 +685,69 @@ const std::vector<SettingDefinition> kCatalog = {
         0.0,
         1.0,
         2),
+    PhysicalDecimal(
+        "KISAK_VR_SUPPORT_PIVOT_FORWARD",
+        "Support pivot forward trim",
+        "Move the two-hand steering pivot along the weapon-hand controller's forward axis without moving the visible free hand.",
+        SettingPage::Weapons,
+        "0.0",
+        -6.0,
+        6.0,
+        2,
+        MeasurementKind::Inches,
+        2,
+        2,
+        true),
+    PhysicalDecimal(
+        "KISAK_VR_SUPPORT_PIVOT_LEFT",
+        "Support pivot left trim",
+        "Move the two-hand steering pivot along the weapon-hand controller's left axis.",
+        SettingPage::Weapons,
+        "0.0",
+        -6.0,
+        6.0,
+        2,
+        MeasurementKind::Inches,
+        2,
+        2,
+        true),
+    PhysicalDecimal(
+        "KISAK_VR_SUPPORT_PIVOT_UP",
+        "Support pivot up trim",
+        "Move the two-hand steering pivot along the weapon-hand controller's up axis.",
+        SettingPage::Weapons,
+        "0.0",
+        -6.0,
+        6.0,
+        2,
+        MeasurementKind::Inches,
+        2,
+        2,
+        true),
+    Toggle(
+        "KISAK_VR_POSE_ADS",
+        "Physical shoulder ADS",
+        "Automatically aim down sights after a stable eye-level two-hand pose, not chest carry. Sprint cancels automatic aiming; lower the weapon or release support before shouldering again. Disable this to use only the configured Aim action.",
+        SettingPage::Weapons,
+        true),
+    Integer(
+        "KISAK_VR_POSE_ADS_ENGAGE_MS",
+        "Physical ADS hold time (ms)",
+        "How long a qualifying shouldered pose must remain stable before ADS engages.",
+        SettingPage::Weapons,
+        250,
+        100,
+        1000,
+        true),
+    Integer(
+        "KISAK_VR_POSE_ADS_RELEASE_MS",
+        "Physical ADS release grace (ms)",
+        "How long a pose may leave the shouldered window before ADS releases. Letting go of the support grip still releases immediately.",
+        SettingPage::Weapons,
+        180,
+        80,
+        1000,
+        true),
     Decimal(
         "KISAK_VR_WEAPON_POSITION_RESPONSE",
         "Weapon position response",
@@ -712,6 +808,45 @@ const std::vector<SettingDefinition> kCatalog = {
         SettingPage::Interactions,
         "off_hand",
         {{"off_hand", "Off-hand hip"}, {"left", "Left hip"}, {"right", "Right hip"}}),
+    PhysicalDecimal(
+        "KISAK_VR_MAGAZINE_VISUAL_FORWARD",
+        "Held magazine forward trim",
+        "Move only the visible held magazine along its local forward axis so it can be aligned to the controller hand.",
+        SettingPage::Interactions,
+        "0.0",
+        -6.0,
+        6.0,
+        2,
+        MeasurementKind::Inches,
+        2,
+        2,
+        true),
+    PhysicalDecimal(
+        "KISAK_VR_MAGAZINE_VISUAL_LEFT",
+        "Held magazine left trim",
+        "Move only the visible held magazine along its local left axis.",
+        SettingPage::Interactions,
+        "0.0",
+        -6.0,
+        6.0,
+        2,
+        MeasurementKind::Inches,
+        2,
+        2,
+        true),
+    PhysicalDecimal(
+        "KISAK_VR_MAGAZINE_VISUAL_UP",
+        "Held magazine up trim",
+        "Move only the visible held magazine along its local up axis.",
+        SettingPage::Interactions,
+        "0.0",
+        -6.0,
+        6.0,
+        2,
+        MeasurementKind::Inches,
+        2,
+        2,
+        true),
     Toggle(
         "KISAK_VR_MANUAL_GRENADES",
         "Physical hip grenades",
@@ -1070,6 +1205,10 @@ const std::vector<SettingDefinition> kCatalog = {
     Binding(kisak::vr::input::Action::Offhand, true),
     Binding(kisak::vr::input::Action::SupportGrip, false),
     Binding(kisak::vr::input::Action::SupportGrip, true),
+    Binding(kisak::vr::input::Action::MagazineGrab, false),
+    Binding(kisak::vr::input::Action::MagazineGrab, true),
+    Binding(kisak::vr::input::Action::ThrowBack, false),
+    Binding(kisak::vr::input::Action::ThrowBack, true),
     Binding(kisak::vr::input::Action::PauseMenu, false),
     Binding(kisak::vr::input::Action::PauseMenu, true),
     Binding(kisak::vr::input::Action::MenuConfirm, false),
@@ -1597,38 +1736,29 @@ void UpgradeControllerBindings(SettingsMap* const values)
 
     if (version < 5)
     {
-        const auto migrateDefaultMissionChord =
-            [values](
-                const char* const key,
-                const char* const formerDefault,
-                const char* const safeDefault)
-        {
-            const auto current = values->find(key);
-            if (current != values->end() &&
-                current->second == formerDefault)
-            {
-                current->second = safeDefault;
-            }
-        };
-
         // Issue #52: the V4 defaults used the locomotion stick as the
-        // selection half of three thumbrest chords. A normal left-stick move
+        // selection half of three thumbrest chords. A normal movement
         // could therefore equip mission gear instead of walking. V5 keeps the
         // shortcuts deliberate by moving both halves to the opposite hands.
-        // Only exact former defaults are migrated; user-created chords remain
-        // untouched.
-        migrateDefaultMissionChord(
-            "KISAK_VR_BIND_NIGHT_VISION",
-            "right.thumbrest_touch+left.primary_axis.down",
-            "left.thumbrest_touch+right.primary_axis.down");
-        migrateDefaultMissionChord(
-            "KISAK_VR_BIND_AIRSTRIKE",
-            "right.thumbrest_touch+left.primary_axis.left",
-            "left.thumbrest_touch+right.primary_axis.left");
-        migrateDefaultMissionChord(
-            "KISAK_VR_BIND_C4",
-            "right.thumbrest_touch+left.primary_axis.right",
-            "left.thumbrest_touch+right.primary_axis.right");
+        // Share the runtime's exact-match, handed migration so saving a
+        // left-handed V4 file cannot stamp V5 over an unrepaired old default.
+        const auto dominant = values->find("KISAK_VR_DOMINANT_HAND");
+        const bool leftDominant =
+            dominant != values->end() && dominant->second == "left";
+        for (const input::Action action : {
+                 input::Action::NightVision,
+                 input::Action::Airstrike,
+                 input::Action::C4})
+        {
+            const input::ActionDefinition& definition =
+                input::GetActionDefinition(action);
+            const auto current = values->find(definition.settingKey);
+            if (current != values->end())
+            {
+                current->second = input::MigrateLegacyMissionDefault(
+                    action, false, version, leftDominant, current->second);
+            }
+        }
         (*values)["KISAK_VR_INPUT_BINDINGS_VERSION"] = "5";
     }
 
@@ -2942,6 +3072,32 @@ bool ApplyPreset(
         return true;
     }
 
+    if (presetName == "Valve Index OpenVR controls")
+    {
+        // An explicitly selected controller preset resets controls only.
+        // Keep the user's calibration, handedness, graphics and comfort.
+        const auto dominant = values->find("KISAK_VR_DOMINANT_HAND");
+        const bool leftDominant =
+            dominant != values->end() && dominant->second == "left";
+        Set(values, "KISAK_VR_BACKEND", "openvr");
+        for (const auto& action : kisak::vr::input::ActionDefinitions())
+        {
+            (*values)[action.settingKey] =
+                BindingForDominantHand(action.defaultBinding, leftDominant);
+            (*values)[action.alternateSettingKey] =
+                BindingForDominantHand(action.defaultAlternateBinding, leftDominant);
+        }
+        for (const auto& layout : kisak::vr::input::OpenVrIndexSafeBindingLayout())
+        {
+            const auto& action = kisak::vr::input::GetActionDefinition(layout.action);
+            (*values)[action.settingKey] =
+                BindingForDominantHand(layout.binding, leftDominant);
+            (*values)[action.alternateSettingKey] =
+                BindingForDominantHand(layout.alternateBinding, leftDominant);
+        }
+        return true;
+    }
+
     if (presetName == "Performance")
     {
         *values = BuiltInDefaults();
@@ -3020,6 +3176,7 @@ std::vector<std::string> PresetNames()
     return {
         "Tested Quest 3",
         "OpenVR safe controls",
+        "Valve Index OpenVR controls",
         "Performance",
         "Pimax Crystal Light",
         "Right-handed",

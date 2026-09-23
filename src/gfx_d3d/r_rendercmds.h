@@ -432,6 +432,12 @@ struct __declspec(align(16)) GfxSpotShadow // sizeof=0x1F0
 
 struct GfxBackEndData;
 
+// Surface object IDs store a DWORD offset from the start of GfxBackEndData.
+// Sixteen bits therefore allow the first 0x40000 bytes of the structure to
+// hold per-view surface records.  VR can build three camera views in one
+// frame (scope, left eye, right eye), so use that complete addressable range.
+constexpr uint32_t GFX_SCENE_SURFS_BUFFER_SIZE = 0x40000u;
+
 struct __declspec(align(8)) GfxCmdBufInput // sizeof=0x430
 {                                       // ...
     float consts[58][4];
@@ -513,9 +519,9 @@ const struct GfxViewInfo // sizeof=0x67B0
     // padding byte
     GfxCmdBufInput input;
 };
-const struct __declspec(align(16)) GfxBackEndData // sizeof=0x11E780
+const struct __declspec(align(16)) GfxBackEndData // sizeof=0x13E780
 {                                       // ...
-    uint8_t surfsBuffer[0x20000];
+    uint8_t surfsBuffer[GFX_SCENE_SURFS_BUFFER_SIZE];
     FxCodeMeshData codeMeshes[2048];
     uint32_t primDrawSurfsBuf[65536]; // ...
     GfxViewParms viewParms[28];
@@ -600,6 +606,7 @@ void __cdecl R_BeginSharedCmdList();
 void __cdecl R_AddCmdEndOfList();
 GfxCmdHeader *__cdecl R_GetCommandBuffer(GfxRenderCommand renderCmd, int bytes);
 DebugGlobals *R_ToggleSmpFrame();
+bool R_ReserveSceneSurfBytes(uint32_t byteCount, uint32_t *firstByte);
 GfxViewParms *__cdecl R_AllocViewParms();
 void __cdecl R_AddCmdDrawStretchPic(
     float x,

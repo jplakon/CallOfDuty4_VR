@@ -1712,6 +1712,20 @@ void __cdecl CG_DrawActive(int localClientNum)
     VR_SetFixedScopedTurretState(
         vrFixedScopeActive);
 
+    // KISAK_SP_VR_SCRIPTED_SCOPE_OPTICAL_ZOOM_V119
+    // Script code can change turretScopeZoom without controller input. Push
+    // the live dvar immediately before this frame's dedicated scope camera is
+    // scheduled so OpenXR and OpenVR always render the requested optical FOV
+    // instead of falling back to a crop of an older wide-angle eye image.
+    if (vrFixedScopeActive &&
+        turretScopeZoom != nullptr &&
+        turretScopeZoomMax != nullptr)
+    {
+        VR_SetFixedScopedTurretZoomFov(
+            turretScopeZoom->current.value,
+            turretScopeZoomMax->current.value);
+    }
+
     if (!VR_IsInitialized() ||
         cgArray[0].refdef.width < 2)
     {

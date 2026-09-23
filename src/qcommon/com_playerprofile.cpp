@@ -19,6 +19,15 @@ const dvar_t *sys_gpu;
 const dvar_t *sys_configSum;
 const dvar_t *sys_SSE;
 
+static bool Com_IsOpenXRSimulatorValidation()
+{
+    const char *const validation = getenv("KISAK_VR_SIMULATOR_VALIDATION");
+    const char *const runtime = getenv("XR_RUNTIME_JSON");
+
+    return validation && validation[0] == '1' && validation[1] == '\0'
+        && runtime && I_stristr(runtime, "OpenXR-Simulator");
+}
+
 
 int __cdecl Com_BuildPlayerProfilePath_Internal(
     char *path,
@@ -564,6 +573,17 @@ bool __cdecl Sys_ShouldUpdateForInfoChange()
     char *v2; // [esp-Ch] [ebp-Ch]
     char *v3; // [esp-8h] [ebp-8h]
 
+    // The retail hardware-change prompt is modal and appears before OpenXR is
+    // initialized. That makes unattended simulator validation stop before it
+    // can submit even one frame. Normal player launches keep the prompt.
+    if (Com_IsOpenXRSimulatorValidation())
+    {
+        Com_Printf(16,
+            "[VR][SIMULATOR] Kept the existing graphics settings instead of "
+            "opening the hardware-change prompt.\n");
+        return false;
+    }
+
     Sys_ArchiveInfo(0);
     v3 = Win_LocalizeRef("WIN_COMPUTER_CHANGE_TITLE");
     v2 = Win_LocalizeRef("WIN_COMPUTER_CHANGE_BODY");
@@ -576,6 +596,14 @@ bool __cdecl Sys_ShouldUpdateForConfigChange()
     HWND ActiveWindow; // eax
     char *v2; // [esp-Ch] [ebp-Ch]
     char *v3; // [esp-8h] [ebp-8h]
+
+    if (Com_IsOpenXRSimulatorValidation())
+    {
+        Com_Printf(16,
+            "[VR][SIMULATOR] Kept the existing graphics settings instead of "
+            "opening the configuration-change prompt.\n");
+        return false;
+    }
 
     v3 = Win_LocalizeRef("WIN_CONFIGURE_UPDATED_TITLE");
     v2 = Win_LocalizeRef("WIN_CONFIGURE_UPDATED_BODY");

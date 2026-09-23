@@ -1,15 +1,34 @@
 # Known issues
 
-This list applies to `v0.10.0-beta.18`.
+This list applies to `v0.10.0-beta.19`.
+
+## Beta.19 validation scope
+
+- Focused Quest 3 / VDXR scope alignment and bullet-impact, movement/ADS,
+  physical grenade/F.N.G., and Bog Javelin targeting tests were accepted by
+  the owner before the release rebuild. This is not a full-campaign or
+  long-session test of the final rebuilt package.
+- A D3D9 `D3DERR_DEVICEHUNG` (`0x88760874`) occurred intermittently during
+  development. Numeric diagnostics improve the report but do not fix the
+  underlying failure. Later successful tests do not prove it resolved.
+- Other-headset reports and local diagnostic candidates are not automatically
+  resolved by those Quest 3 passes. In particular, #34's failed AVP/ALVR test
+  preset is not included, #63 has no proven performance repair, and #53 still
+  has a reported control-redraw problem after resizing.
+- Exact natural mission checks for #47/#48, scripted Zakhaev zoom (#91),
+  enemy-grenade throw-back (#82), and air-support handset visibility (#45)
+  remain pending. Owner-waived magazine and shadow checks are not test passes.
 
 ## Setup and compatibility
 
 - The guided installer currently recognizes the complete classic-compatible
   layout and automatically searches Steam's registered and additional library
   folders. The Microsoft/Xbox PC app can expose a different raw layout;
-  automatic normalization is intentionally disabled until a verified
-  before/after map is available. Setup rejects that layout before writing and
-  never guesses, downloads, or moves original COD4 assets.
+  beta.19 adds guarded normalization when the selected Content folder has
+  `iw3sp.exe`, valid localization and `zone/(null)/code_post_gfx.ff`.
+  It copies missing fastfiles into the detected language view, verifies hashes,
+  and does not overwrite or move original files. Actual Xbox-edition campaign
+  loading remains unconfirmed. Setup never downloads original COD4 assets.
 - Release installers are not code-signed yet, so Windows may identify the
   publisher as unknown. Download only from the project's GitHub release (or
   the linked Patreon post) and verify the adjacent `.sha256` file. This is
@@ -100,11 +119,11 @@ This list applies to `v0.10.0-beta.18`.
 
 ## Rendering
 
-- Beta.17 fixes issue #78's continuous cyan/green/blue world corruption by
+- Beta.17 corrected one cause of continuous cyan/green/blue world corruption by
   keeping the Float-Z full-scene depth clear in each installed eye viewport's
   local coordinates. Automated checks, the OpenXR Simulator, and Quest 3 / VDXR
-  hardware validation passed; confirmation on the reporter's original Quest 3S
-  / VDXR configuration is still welcome.
+  hardware validation passed. However, issue #78's reporter still saw the
+  corruption in beta.18; the affected configuration remains unresolved.
 - Synchronized dynamic shadows can have a significant performance cost.
 - V114 isolates COD4's saved-screen shellshock/flash feedback across packed VR
   views. Captures now occur only after the final view, and each eye samples its
@@ -243,10 +262,9 @@ This list applies to `v0.10.0-beta.18`.
 - COD4 contains mission events that use the original flat-screen view ray,
   attack state, or scripted weapon state. Many known cases are bridged, but an
   untested checkpoint can still expose a mission-specific issue.
-- Safehouse and Heat air-support targeting now follows the tracked right
-  controller and is functionally usable. The physical handheld targeting
-  device is still invisible; beta.14 keeps the normal right glove and hides the
-  broken canned arms, so this remains a cosmetic limitation.
+- Safehouse and Heat air-support targeting follows the tracked right
+  controller. Beta.19 contains a handheld-device visibility candidate, but
+  consistent visibility in the actual mission remains unconfirmed (#45).
 - Beta.14 makes mounted-machine-gun visuals follow the right-controller firing
   ray inside the replicated mechanical arc. Automated contracts pass, but the
   Bog emplacement still needs headset confirmation; report whether the model,
@@ -254,10 +272,10 @@ This list applies to `v0.10.0-beta.18`.
 - Native grenade-class `hasDetonator` devices now accept the configured Fire
   action without a rendered firearm pose. Report any remaining scripted device
   that still requires a mouse click or weapon-cycle workaround.
-- Beta.18 centers the Bog Javelin optic per eye and projects its green target
-  lock-on boxes in eye-local HUD coordinates. The complete sight and lock-on
-  path passed a focused Quest 3 / VDXR headset test. Report the checkpoint and
-  runtime if another Javelin sequence still crops the optic or loses markers.
+- Beta.19 repairs Javelin scripted ADS continuity and the owner accepted tank
+  targeting in The Bog on Quest 3 / VDXR. Green target boxes can remain slightly
+  offset; this was accepted as non-blocking. The separate #80 report where the
+  optic never activates on the customer's setup remains open.
 - Bug reports should identify the mission, checkpoint, weapon, headset/runtime,
   and exact source commit from `SOURCE.txt`.
 

@@ -99,6 +99,21 @@ if defined KISAK_VR_USER_SETTINGS if exist "%KISAK_VR_USER_SETTINGS%" (
   set "KISAK_VR_SETTINGS_SOURCE=%KISAK_VR_USER_SETTINGS%"
 )
 
+rem Focused customer-test packages may contain a small final override file.
+rem Public updates must not reactivate an old test preset left on disk.
+rem Explicit diagnostic opt-in applies it after personal settings.
+if "%KISAK_VR_ENABLE_FOCUSED_OVERRIDES%"=="1" if exist "%~dp0FOCUSED-OVERRIDES.bat" (
+  call "%~dp0FOCUSED-OVERRIDES.bat"
+  if errorlevel 1 (
+    echo ERROR: FOCUSED-OVERRIDES.bat could not be loaded.
+    pause
+    exit /b 1
+  )
+  set "KISAK_VR_SETTINGS_PROFILE=Focused customer test"
+  set "KISAK_VR_SETTINGS_REVISION=post-beta18-focused-20260920"
+  set "KISAK_VR_SETTINGS_SOURCE=%~dp0FOCUSED-OVERRIDES.bat"
+)
+
 if not defined KISAK_VR_SETTINGS_PROFILE set "KISAK_VR_SETTINGS_PROFILE=Unknown"
 if not defined KISAK_VR_SETTINGS_REVISION set "KISAK_VR_SETTINGS_REVISION=legacy-unverified"
 
@@ -338,7 +353,6 @@ if "%KISAK_VR_VERBOSE_DIAGNOSTICS%"=="1" (
   +set logfile 2 ^
   +set r_fullscreen 0 ^
   +set r_customMode %VR_CUSTOM_MODE% ^
-  +set r_aaSamples 1 ^
   +set r_scaleViewport 1 ^
   +set r_resampleScene 0 ^
   +set r_vsync 0 ^

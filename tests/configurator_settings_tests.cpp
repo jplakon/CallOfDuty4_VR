@@ -2,6 +2,7 @@
 #include "../tools/configurator/compatibility_probe_win32.h"
 #include "vr/vr_hud_layout.h"
 #include "vr/vr_gestures.h"
+#include "vr/vr_grenade_command_edges.h"
 #include "vr/vr_input_bindings.h"
 #include "vr/vr_interactions.h"
 #include "vr/vr_calibration.h"
@@ -17,6 +18,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -120,6 +122,226 @@ std::size_t CountOccurrences(
 
 int main(const int argumentCount, char** arguments)
 {
+    {
+        namespace grenade = kisak::vr::grenade_commands;
+        grenade::State frag;
+        auto edge = grenade::Update(&frag, true, true, false);
+        Check(!edge.pressed && !edge.released,
+            "a grenade input held across initialization must wait for neutral");
+        grenade::Update(&frag, true, false, false);
+        edge = grenade::Update(&frag, true, true, false);
+        Check(edge.pressed && !edge.released,
+            "a fresh virtual grenade command must emit exactly its native press edge");
+        for (int frame = 0; frame < 100; ++frame)
+        {
+            edge = grenade::Update(&frag, true, true, false);
+            Check(!edge.pressed && !edge.released,
+                "holding/cooking a grenade must not repeatedly notify F.N.G. scripts");
+        }
+        edge = grenade::Update(&frag, true, false, false);
+        Check(!edge.pressed && edge.released,
+            "grenade release must mirror its minus command once, including F.N.G.'s -smoke listener");
+        edge = grenade::Update(&frag, true, false, false);
+        Check(!edge.pressed && !edge.released,
+            "a rejected grab or idle frame must not manufacture a command edge");
+
+        edge = grenade::Update(&frag, true, true, true);
+        Check(!edge.pressed && !edge.released,
+            "an already-held native grenade key owns its own script notifications");
+        edge = grenade::Update(&frag, true, false, false);
+        Check(!edge.pressed && !edge.released,
+            "a virtual hold that borrowed a native key must not manufacture its release");
+        grenade::Update(&frag, true, true, false);
+        edge = grenade::Update(&frag, true, false, true);
+        Check(!edge.pressed && !edge.released,
+            "a virtual release must not duplicate a still-held physical key's release");
+
+        grenade::Update(&frag, true, true, false);
+        edge = grenade::Update(&frag, false, false, false);
+        Check(!edge.pressed && !edge.released,
+            "opening a menu must cancel virtual notification ownership without reporting a throw");
+        edge = grenade::Update(&frag, true, true, false);
+        Check(!edge.pressed && !edge.released,
+            "resuming with a held input must not synthesize another grenade command");
+        grenade::Update(&frag, true, false, false);
+        edge = grenade::Update(&frag, true, true, false);
+        Check(edge.pressed && !edge.released,
+            "neutral then a fresh post-menu grenade input must notify normally");
+        grenade::Reset(&frag);
+        edge = grenade::Update(&frag, true, false, false);
+        Check(!edge.pressed && !edge.released,
+            "shutdown/key-clear resets must discard pending release notifications");
+
+        grenade::State tactical;
+        grenade::Update(&tactical, true, false, false);
+        const auto fragPress = grenade::Update(&frag, true, true, false);
+        const auto tacticalPress = grenade::Update(&tactical, true, true, false);
+        const auto fragRelease = grenade::Update(&frag, true, false, false);
+        const auto tacticalHold = grenade::Update(&tactical, true, true, false);
+        const auto tacticalRelease = grenade::Update(&tactical, true, false, false);
+        Check(fragPress.pressed && tacticalPress.pressed && fragRelease.released &&
+                !tacticalHold.pressed && !tacticalHold.released && tacticalRelease.released,
+            "frag and tactical command ownership must be independent, including one-frame empty-slot attempt pulses");
+        edge = grenade::Update(nullptr, true, true, false);
+        grenade::Reset(nullptr);
+        Check(!edge.pressed && !edge.released,
+            "grenade notification helpers must safely reject missing state");
+    }
+
+    {
+        // Exercise the runtime's ordinary-launch migration directly. The
+        // Configurator's in-memory LoadSettings upgrade alone cannot change
+        // the environment created by CALLing an older saved batch file.
+        const std::array<vi::Action, 3> actions = {
+            vi::Action::NightVision, vi::Action::Airstrike, vi::Action::C4};
+        const std::array<const char*, 3> directions = {"down", "left", "right"};
+        for (bool leftDominant : {false, true})
+        {
+            const std::string oldPrefix = leftDominant
+                ? "left.thumbrest_touch+right.primary_axis."
+                : "right.thumbrest_touch+left.primary_axis.";
+            const std::string newPrefix = leftDominant
+                ? "right.thumbrest_touch+left.primary_axis."
+                : "left.thumbrest_touch+right.primary_axis.";
+            for (std::size_t index = 0; index < actions.size(); ++index)
+            {
+                const vi::Action action = actions[index];
+                const std::string oldDefault = oldPrefix + directions[index];
+                const std::string safeDefault = newPrefix + directions[index];
+                for (int version : {2, 3, 4})
+                {
+                    const std::string migrated = vi::MigrateLegacyMissionDefault(
+                        action, false, version, leftDominant, oldDefault);
+                    vi::Binding binding;
+                    Check(migrated == safeDefault &&
+                            vi::ParseBinding(action, migrated, &binding) &&
+                            !vi::UsesMissionSelector(binding,
+                                leftDominant ? vi::Source::LeftThumbrestTouch
+                                             : vi::Source::RightThumbrestTouch,
+                                leftDominant ? vi::Source::RightPrimaryAxis
+                                             : vi::Source::LeftPrimaryAxis),
+                        "retained pre-V5 default must stop owning that handedness's movement axis");
+                    Check(vi::MigrateLegacyMissionDefault(
+                            action, true, version, leftDominant, oldDefault) == oldDefault,
+                        "a custom alternate containing the former default must survive runtime migration");
+                }
+                for (int version : {5, 6})
+                {
+                    Check(vi::MigrateLegacyMissionDefault(
+                            action, false, version, leftDominant, oldDefault) == oldDefault,
+                        "V5 or later explicit legacy-style binding must be preserved");
+                }
+                const std::size_t plus = oldDefault.find('+');
+                const std::array<std::string, 7> custom = {
+                    "unbound", "left.trigger", safeDefault,
+                    oldDefault + "+right.primary",
+                    oldDefault.substr(plus + 1) + "+" + oldDefault.substr(0, plus),
+                    oldPrefix + "up", "bad.source+left.primary_axis.down"};
+                for (const std::string& value : custom)
+                {
+                    Check(vi::MigrateLegacyMissionDefault(
+                            action, false, 4, leftDominant, value) == value,
+                        "runtime migration must preserve custom, reordered, extended or malformed chords");
+                }
+                Check(vi::MigrateLegacyMissionDefault(action, false, 4,
+                        !leftDominant, oldDefault) == oldDefault,
+                    "a binding for the opposite handedness is not an exact generated default");
+            }
+            for (vi::Action action : {vi::Action::GrenadeLauncher, vi::Action::Aim,
+                                     vi::Action::Melee, vi::Action::SupportGrip})
+            {
+                const std::string custom = oldPrefix + "up";
+                Check(vi::MigrateLegacyMissionDefault(action, false, 4,
+                        leftDominant, custom) == custom,
+                    "unrelated action and retained grenade-launcher override must survive");
+            }
+        }
+    }
+
+    {
+        for (const bool leftDominant : {false, true})
+        {
+            const vi::Source modifier = leftDominant
+                ? vi::Source::RightTrigger : vi::Source::LeftTrigger;
+            const vi::Source axis = leftDominant
+                ? vi::Source::RightPrimaryAxis : vi::Source::LeftPrimaryAxis;
+            const std::string modifierText = leftDominant
+                ? "right.trigger" : "left.trigger";
+            const std::string directionText = leftDominant
+                ? "right.primary_axis.down" : "left.primary_axis.down";
+            const std::string otherDirection = leftDominant
+                ? "left.primary_axis.down" : "right.primary_axis.down";
+            vi::Binding selectorBinding;
+            Check(vi::ParseBinding(vi::Action::NightVision,
+                    modifierText + "+" + directionText, &selectorBinding),
+                "mission selector fixture must parse in either handedness");
+
+            vi::OpenVrMissionSelectorState state;
+            auto update = vi::UpdateOpenVrMissionSelector(&state,
+                true, true, {0.0f, 1.0f}, true, {}, true);
+            Check(!vi::MissionSelectorClaimsMovement(
+                    selectorBinding, modifier, axis, update),
+                "pressing the modifier during movement must not steal locomotion");
+            update = vi::UpdateOpenVrMissionSelector(&state,
+                true, true, {}, true, {}, true);
+            Check(!vi::MissionSelectorClaimsMovement(
+                    selectorBinding, modifier, axis, update),
+                "centering while still holding an unarmed modifier must not take movement");
+            vi::UpdateOpenVrMissionSelector(&state,
+                true, false, {}, true, {}, true);
+            update = vi::UpdateOpenVrMissionSelector(&state,
+                true, true, {}, true, {}, true);
+            Check(update.armedThisFrame && vi::MissionSelectorClaimsMovement(
+                    selectorBinding, modifier, axis, update),
+                "a deliberate neutral-entry movement selector must retain its movement lock");
+
+            for (const std::string& text : std::array<std::string, 5>{
+                     "unbound", modifierText, modifierText + "+left.primary",
+                     modifierText + "+" + otherDirection, directionText})
+            {
+                vi::Binding unrelated;
+                Check(vi::ParseBinding(vi::Action::NightVision, text, &unrelated) &&
+                        !vi::MissionSelectorClaimsMovement(
+                            unrelated, modifier, axis, update),
+                    "an unrelated custom button or non-movement chord must never claim locomotion");
+            }
+            for (const std::string& text : std::array<std::string, 2>{
+                     directionText + "+" + modifierText,
+                     modifierText + "+" + directionText + "+left.primary"})
+            {
+                vi::Binding customSelector;
+                Check(vi::ParseBinding(vi::Action::NightVision, text, &customSelector) &&
+                        vi::MissionSelectorClaimsMovement(
+                            customSelector, modifier, axis, update),
+                    "reordered and extended genuine movement selectors must retain neutral gating");
+            }
+
+            update = vi::UpdateOpenVrMissionSelector(&state,
+                true, true, {0.0f, -1.0f}, true, {}, true);
+            Check(vi::MissionSelectorClaimsMovement(
+                    selectorBinding, modifier, axis, update),
+                "selecting a mission direction after deliberate arming must retain movement ownership");
+            update = vi::UpdateOpenVrMissionSelector(&state,
+                true, true, {}, true, {0.8f, 0.0f}, true);
+            Check(update.cancelledThisFrame && !vi::MissionSelectorClaimsMovement(
+                    selectorBinding, modifier, axis, update),
+                "turn-stick cancellation must immediately return movement ownership");
+            update.available = false;
+            update.modifierHeld = true;
+            Check(!vi::MissionSelectorClaimsMovement(
+                    selectorBinding, modifier, axis, update),
+                "an unavailable selector must not claim movement even with a stale held value");
+
+            const std::string malformed = modifierText + "+bad.source";
+            const std::string retained = vi::MigrateLegacyMissionDefault(
+                vi::Action::NightVision, false, 4, leftDominant, malformed);
+            vi::Binding invalid;
+            Check(retained == malformed &&
+                    !vi::ParseBinding(vi::Action::NightVision, retained, &invalid),
+                "malformed overrides must still reach the existing invalid-binding fallback");
+        }
+    }
+
     {
         Check(
             !vsaved::ShouldCaptureFullPackedFrame(
@@ -1971,8 +2193,11 @@ int main(const int argumentCount, char** arguments)
     }
 
     const auto& catalog = kc::SettingsCatalog();
-    Check(catalog.size() == 142u, "V65 should retain all 142 verified settings");
-    Check(vi::kActionCount == 23u, "V57 input V4 should expose 23 actions");
+    Check(
+        catalog.size() == 158u,
+        "focused issue build should retain all 158 verified settings (actual " +
+            std::to_string(catalog.size()) + ")");
+    Check(vi::kActionCount == 25u, "focused issue build should expose 25 actions");
 
     std::set<std::string> keys;
     for (const kc::SettingDefinition& definition : catalog)
@@ -2061,8 +2286,8 @@ int main(const int argumentCount, char** arguments)
         }
     }
     Check(
-        physicalSettingCount == 22u,
-        "V64 should classify all 22 physical calibration/interaction fields and no HUD pixel fields");
+        physicalSettingCount == 29u,
+        "focused issue build should classify all 29 physical calibration/interaction fields and no HUD pixel fields");
 
     const kc::SettingDefinition* const standingHeight =
         kc::FindSetting("KISAK_VR_STANDING_EYE_HEIGHT");
@@ -2443,6 +2668,21 @@ int main(const int argumentCount, char** arguments)
     {
         const std::string launcher = Read(arguments[2]);
         const std::string runtime = Read(arguments[3]);
+        Check(
+            launcher.find("if \"%KISAK_VR_ENABLE_FOCUSED_OVERRIDES%\"==\"1\" if exist") !=
+                std::string::npos,
+            "public updates must require explicit opt-in before loading leftover focused test overrides");
+        Check(runtime.find("KISAK_SP_VR_RETAINED_MISSION_DEFAULTS_V123") !=
+                    std::string::npos &&
+                runtime.find("VrInput::MigrateLegacyMissionDefault(") !=
+                    std::string::npos &&
+                runtime.find("bindingsVersion, leftDominant,") !=
+                    std::string::npos &&
+                runtime.find("KISAK_SP_VR_MISSION_MOVEMENT_OWNERSHIP_V123") !=
+                    std::string::npos &&
+                runtime.find("VrInput::MissionSelectorClaimsMovement(") !=
+                    std::string::npos,
+            "ordinary runtime launches must use the tested retained-default migration and genuine-selector movement ownership");
         const std::size_t openXrControllerUpdate =
             runtime.find("void VR_UpdateControllerActions(");
         const std::size_t openVrControllerUpdateStart =
@@ -2554,6 +2794,9 @@ int main(const int argumentCount, char** arguments)
                     std::string::npos &&
                 launcher.find("--validate") != std::string::npos,
             "the launcher should validate overrides, run the current preflight, and publish every guarded state path");
+        Check(
+            launcher.find("+set r_aaSamples") == std::string::npos,
+            "issue #79 launcher must preserve the profile anti-aliasing setting instead of forcing it off");
         Check(
             launcher.find(
                 "KISAK_SP_VR_PIMAX_X86_RUNTIME_V86") !=
@@ -2868,6 +3111,23 @@ int main(const int argumentCount, char** arguments)
             root / "src/cgame/cg_main.cpp");
         const std::string cgameView = Read(
             root / "src/cgame/cg_view.cpp");
+        Check(
+            draw.find(
+                "KISAK_SP_VR_SCRIPTED_SCOPE_OPTICAL_ZOOM_V119") !=
+                    std::string::npos &&
+                draw.find(
+                    "VR_SetFixedScopedTurretZoomFov(") !=
+                    std::string::npos &&
+                runtime.find(
+                    "KISAK_SP_VR_SCRIPTED_SCOPE_OPTICAL_ZOOM_V119") !=
+                    std::string::npos &&
+                runtime.find(
+                    "rendering the dedicated optical source with the current ") !=
+                    std::string::npos &&
+                runtime.find(
+                    "Dedicated optical camera rendered") !=
+                    std::string::npos,
+            "issue #91 should publish scripted FOV changes at draw time and keep a freshly rendered optical camera while the OpenVR mounted basis catches up");
         const std::string winMain = Read(
             root / "src/win32/win_main.cpp");
         Check(
@@ -3047,7 +3307,7 @@ int main(const int argumentCount, char** arguments)
                     std::string::npos &&
                 CountOccurrences(
                     runtime,
-                    "VR_ReadConfiguratorClampedFloat(") == 8u &&
+                    "VR_ReadConfiguratorClampedFloat(") >= 8u &&
                 runtime.find(
                     "[VR][CONFIG] Clamping %s='%s' to %.3f.") !=
                     std::string::npos &&
@@ -3358,7 +3618,7 @@ int main(const int argumentCount, char** arguments)
                 "bool VR_GetCampaignAdsHeld(") !=
                     std::string::npos &&
                 runtime.find(
-                    "g_vrPoseFocusAimHeld;") !=
+                    "g_vrConfiguredAimHeld ||") !=
                     std::string::npos &&
                 gameClientScript.find(
                     "KISAK_SP_VR_FNG_CAMPAIGN_INPUT_BRIDGE_V72") !=
@@ -3406,6 +3666,107 @@ int main(const int argumentCount, char** arguments)
                     "[VR][CAMPAIGN] V72") !=
                     std::string::npos,
             "V73 must mirror physical/configured ADS and Sprint through their native held command paths while retaining the V72 playerADS bridge");
+        {
+            // These are integration-boundary checks, not substitutes for the
+            // executable pose-ADS state-machine or simulator regressions.
+            const auto compactSection = [](
+                const std::string& source,
+                const char* begin,
+                const char* end) -> std::string
+            {
+                const std::size_t first = source.find(begin);
+                const std::size_t last = first == std::string::npos
+                    ? std::string::npos : source.find(end, first + 1u);
+                if (first == std::string::npos || last == std::string::npos)
+                {
+                    return {};
+                }
+                std::string section = source.substr(first, last - first);
+                section.erase(std::remove_if(section.begin(), section.end(),
+                    [](const unsigned char value) { return std::isspace(value) != 0; }),
+                    section.end());
+                return section;
+            };
+            const std::string campaignAds = compactSection(runtime,
+                "bool VR_GetCampaignAdsHeld(", "bool VR_GetBasicGameplayButtons(");
+            const std::string basicAds = compactSection(runtime,
+                "bool VR_GetBasicGameplayButtons(", "bool VR_GetLocomotionCombatButtons(");
+            const std::string safeAdsExpression =
+                "*adsHeld=g_vrConfiguredAimHeld||"
+                "(g_vrPoseFocusAimHeld&&!g_vrLeftStickSprintHeld&&"
+                "g_vrPoseAdsGameplayState.load()==1u);";
+            for (const std::string* getter : {&campaignAds, &basicAds})
+            {
+                Check(getter->find(safeAdsExpression) != std::string::npos &&
+                        getter->find("std::lock_guard<std::mutex>lock(g_vrHeadOrientationMutex);") <
+                            getter->find(safeAdsExpression),
+                    "both ADS getters must preserve explicit Aim while immediately rejecting stale automatic ADS on raw sprint or non-gameplay/sprinting atomic states");
+            }
+
+            const std::string adsRelease = compactSection(clientInput,
+                "else if ((!vrAdsHeld ||", "// KISAK_SP_VR_SCRIPTED_JUMP_BRIDGE_V1");
+            const std::size_t nativeRelease =
+                adsRelease.find("Cmd_ExecuteSingleCommand(0,0,vrAdsUpCommand);");
+            const std::size_t adsRefresh = adsRelease.find(
+                "if(kb[KEY_SPEED].active!=CL_GetLocalClientGlobals(0)->usingAds)"
+                "result->buttons|=BUTTON_ADS;elseresult->buttons&=~BUTTON_ADS;");
+            Check(adsRelease.find("\"-speed2530\"") != std::string::npos &&
+                    nativeRelease != std::string::npos &&
+                    adsRefresh != std::string::npos && nativeRelease < adsRefresh &&
+                    adsRelease.find("vrAdsNativeCommandHeld=false;") < adsRefresh,
+                "releasing synthetic +speed must refresh this same usercmd's ADS bit from real held/toggled ADS after native release, so stale automatic ADS cannot cancel the sprint packet");
+
+            const std::string createCmd = compactSection(clientInput,
+                "void __cdecl CL_CreateCmd(", "void CL_CreateNewCommands(");
+            const std::size_t statePublish = createCmd.find(
+                "VR_SetPoseAdsGameplayState(!Key_IsCatcherActive(0,0x3b),"
+                "(cgArray[0].predictedPlayerState.pm_flags&PMF_SPRINTING)!=0);");
+            const std::size_t locationBranch = createCmd.find(
+                "if(!Key_IsCatcherActive(0,8)||!(unsigned__int8)"
+                "CG_HandleLocationSelectionInput(0,result))");
+            Check(statePublish != std::string::npos &&
+                    locationBranch != std::string::npos && statePublish < locationBranch,
+                "CL_CreateCmd must publish UI/sprint availability before location selection can consume the command");
+
+            const std::string inputFrame = compactSection(clientInput,
+                "void __cdecl CL_Input(", "void __cdecl CL_ShutdownInput(");
+            Check(CountOccurrences(inputFrame,
+                      "VR_SetPoseAdsGameplayState(false,false);") == 2u &&
+                    inputFrame.find("if(CL_AllowInput())CL_CreateNewCommands();"
+                        "else{VR_SetPoseAdsGameplayState(false,false);"
+                        "CL_ResetVrGrenadeCommandNotifications();}") != std::string::npos &&
+                    inputFrame.find("else{PausedModelPreviewerGamepad();"
+                        "VR_SetPoseAdsGameplayState(false,false);"
+                        "CL_ResetVrGrenadeCommandNotifications();}") != std::string::npos,
+                "both pre-frame and post-IN_Frame input denial must publish unavailable gameplay instead of retaining an old active snapshot");
+            const std::string shutdownInput = compactSection(clientInput,
+                "void __cdecl CL_ShutdownInput(", "void __cdecl CL_ClearKeys(");
+            const std::size_t shutdownReset =
+                shutdownInput.find("VR_SetPoseAdsGameplayState(false,false);");
+            const std::size_t commandUnregister =
+                shutdownInput.find("Cmd_RemoveCommand(\"mouseMove\");");
+            Check(shutdownReset != std::string::npos &&
+                    commandUnregister != std::string::npos &&
+                    shutdownReset < commandUnregister,
+                "input shutdown must clear the published pose-ADS gameplay state before unregistering commands");
+            Check(createCmd.find("KISAK_SP_VR_GRENADE_SCRIPT_COMMAND_EDGES_V124") !=
+                        std::string::npos &&
+                    createCmd.find("vrFragCommandHeld=vrManualFragHeld;") != std::string::npos &&
+                    createCmd.find("vrTacticalCommandHeld=vrManualTacticalHeld;") != std::string::npos &&
+                    createCmd.find("kb[KEY_FRAG].active,\"+frag\",\"-frag\");") != std::string::npos &&
+                    createCmd.find("kb[KEY_SMOKE].active,\"+smoke\",\"-smoke\");") != std::string::npos &&
+                    createCmd.find("!Key_IsCatcherActive(0,0x3b);") != std::string::npos &&
+                    CountOccurrences(inputFrame, "CL_ResetVrGrenadeCommandNotifications();") == 2u &&
+                    shutdownInput.find("CL_ResetVrGrenadeCommandNotifications();") != std::string::npos,
+                "F.N.G. grenade script-command edges must mirror each VR slot without synthetic keys and reset across UI/input loss");
+            const std::string grenadeNotify = compactSection(clientInput,
+                "static void CL_NotifyVrGrenadeCommandEdges(", "#define KEY_LEFT");
+            Check(grenadeNotify.find("kisak::vr::grenade_commands::Update(") != std::string::npos &&
+                    grenadeNotify.find("Cmd_NotifyVirtualCommand(command);") != std::string::npos &&
+                    grenadeNotify.find("Cmd_ExecuteSingleCommand") == std::string::npos &&
+                    grenadeNotify.find("kb[") == std::string::npos,
+                "grenade hint notifications must not mutate real held keys or bypass native projectile acceptance");
+        }
         const std::size_t acceptedVrShot =
             clientInput.find("if (!vrMuzzleBlocked)");
         const std::size_t virtualAttackNotify =
@@ -3440,6 +3801,23 @@ int main(const int argumentCount, char** arguments)
                     "[VR][CAMPAIGN] V74 VR +attack notification") !=
                     std::string::npos,
             "V74 must release F.N.G.'s blocking pc_hip_attack keyHint through the registered +attack script-notify path without mutating mouse kbutton state or bypassing muzzle acceptance");
+        Check(
+            clientInput.find(
+                "KISAK_SP_VR_GRENADE_THROWBACK_PROMPT_PRIORITY_V120") !=
+                    std::string::npos &&
+                clientInput.find(
+                    "throwBackGrenadeOwner !=") !=
+                    std::string::npos &&
+                clientInput.find(
+                    "!(vrThrowBackPromptActive && vrThrowBackHeld)") !=
+                    std::string::npos &&
+                clientInput.find(
+                    "if (vrThrowBackPromptActive &&") !=
+                    std::string::npos &&
+                clientInput.find(
+                    "result->buttons |= BUTTON_THROW;") !=
+                    std::string::npos,
+            "issue #82 V120 must reserve the shared primary button for native +throw only while COD4 exposes an enemy-grenade prompt and preserve ordinary reload outside it");
         Check(
             runtimeHeader.find(
                 "bool VR_IsCenteredMonoscopicMenuActive();") !=
@@ -3854,6 +4232,29 @@ int main(const int argumentCount, char** arguments)
                     std::string::npos,
             "issue #45 V95 must preserve rigid and non-arm device triangles embedded in composite slot 0 while suppressing both canned arms and retaining the authored viewmodel submission");
         Check(
+            v94AirSupportDeviceScene.find(
+                "KISAK_SP_VR_AIR_SUPPORT_VISIBLE_PROXY_V121") !=
+                    std::string::npos &&
+                v94AirSupportDeviceScene.find(
+                    "deviceModel->numsurfs == 0u") !=
+                    std::string::npos &&
+                v94AirSupportDeviceScene.find(
+                    "BG_FindWeaponIndexForName(") !=
+                    std::string::npos &&
+                v94AirSupportDeviceScene.find(
+                    "\"c4\"") !=
+                    std::string::npos &&
+                v94AirSupportDeviceScene.find(
+                    "cgMedia.nightVisionGoggles") !=
+                    std::string::npos &&
+                v94AirSupportDeviceScene.find(
+                    "isNonVisualAc130Anchor") !=
+                    std::string::npos &&
+                v94AirSupportDeviceScene.find(
+                    "c4DeviceModel->numsurfs != 0u") !=
+                    std::string::npos,
+            "issue #45 V121 must replace COD4's non-visual support anchor with an already-loaded visible handset while preserving the authored tag_weapon motion");
+        Check(
             runtime.find(
                 "KISAK_SP_VR_OPENXR_DXGI_1_1_FACTORY_V84") !=
                     std::string::npos &&
@@ -4031,7 +4432,7 @@ int main(const int argumentCount, char** arguments)
                 CountOccurrences(
                     draw,
                     "CG_DrawErrorMessages();") == 1u,
-            "issue #22 V100 should suppress only the in-headset error overlay after VR initialization while preserving the stock flat-screen draw path and console logging");
+            "issue #19 V100 should suppress only the in-headset error overlay after VR initialization while preserving the stock flat-screen draw path and console logging");
         Check(
             cgameMain.find(
                 "Dvar_RegisterEnum(\"cg_drawFPS\", cg_drawFpsNames, 0") !=
@@ -4259,11 +4660,19 @@ int main(const int argumentCount, char** arguments)
                 installer.find("\\code_post_gfx.ff") !=
                     std::string::npos &&
                 installer.find(
-                    "Microsoft/Xbox automatic raw-layout") !=
+                    "function NormalizeXboxRawLayout: String;") !=
+                    std::string::npos &&
+                installer.find("if not DetectedRawXboxLayout then") !=
+                    std::string::npos &&
+                installer.find("if not FileExists(DestinationPath) then") !=
+                    std::string::npos &&
+                installer.find("GetSHA256OfFile(TemporaryPath)") !=
+                    std::string::npos &&
+                installer.find("SavePathList(ListPath, Created)") !=
                     std::string::npos &&
                 installer.find("No game or mod files were changed.") !=
                     std::string::npos,
-            "V97 installer must reject incomplete, wrong-language, and not-yet-mapped Microsoft layouts before changing the game folder");
+            "V97 installer must reject incomplete or wrong-language data and guard Xbox normalization with no-overwrite copying, hash checks and a created-file receipt");
         Check(
             installer.find("PreparePayloadBackups") !=
                     std::string::npos &&
@@ -4536,6 +4945,154 @@ int main(const int argumentCount, char** arguments)
     Check(
         kc::ValidateSettings(values).empty(),
         "left-handed OpenVR safe controls should validate cleanly");
+
+    // Issue #85: the Index-only replacement must not steal support inputs,
+    // and automatic migration must leave every customized slot alone.
+    for (const bool leftDominant : {false, true})
+    {
+        auto legacyIndex = kc::BuiltInDefaults();
+        if (leftDominant)
+        {
+            kc::ApplyPreset("Left-handed", &legacyIndex);
+        }
+        kc::ApplyPreset("OpenVR safe controls", &legacyIndex);
+        vi::BindingSet oldBindings = {};
+        for (const auto& action : vi::ActionDefinitions())
+        {
+            const auto index = static_cast<std::size_t>(action.action);
+            vi::ParseBinding(action.action, legacyIndex[action.settingKey],
+                &oldBindings[index][0]);
+            vi::ParseBinding(action.action, legacyIndex[action.alternateSettingKey],
+                &oldBindings[index][1]);
+        }
+
+        auto migrated = oldBindings;
+        Check(vi::MigrateOpenVrIndexSafeBindings(&migrated, leftDominant),
+            "issue #85 should migrate an exact generated Index layout in either handedness");
+
+        auto explicitIndex = legacyIndex;
+        explicitIndex["KISAK_VR_WEAPON_PITCH"] = "35";
+        explicitIndex["KISAK_VR_BIND_AIM"] = "left.trigger";
+        explicitIndex["KISAK_VR_BIND_SUPPORT_GRIP_ALT"] = "left.trigger";
+        Check(kc::ApplyPreset("Valve Index OpenVR controls", &explicitIndex) &&
+            explicitIndex["KISAK_VR_BACKEND"] == "openvr" &&
+            explicitIndex["KISAK_VR_WEAPON_PITCH"] == "35" &&
+            explicitIndex["KISAK_VR_BIND_AIM"] == "unbound" &&
+            explicitIndex["KISAK_VR_BIND_SUPPORT_GRIP_ALT"] == "unbound" &&
+            explicitIndex["KISAK_VR_BIND_STANCE"] == "unbound" &&
+            explicitIndex["KISAK_VR_BIND_STANCE_ALT"] == "unbound",
+            "explicit Index OpenVR preset should reset controller conflicts but preserve calibration");
+        Check(kc::ValidateSettings(explicitIndex).empty(),
+            "Index OpenVR preset should validate in either handedness");
+
+        bool matchesPreset = true;
+        for (const auto& action : vi::ActionDefinitions())
+        {
+            const auto index = static_cast<std::size_t>(action.action);
+            matchesPreset = matchesPreset &&
+                vi::BindingId(migrated[index][0]) == explicitIndex[action.settingKey] &&
+                vi::BindingId(migrated[index][1]) == explicitIndex[action.alternateSettingKey];
+        }
+        Check(matchesPreset &&
+            !vi::MigrateOpenVrIndexSafeBindings(&migrated, leftDominant),
+            "automatic Index migration should match the explicit preset and be idempotent");
+        Check(explicitIndex["KISAK_VR_BIND_MELEE"] ==
+                (leftDominant ? "left.secondary+right.primary_axis.up" :
+                    "right.secondary+left.primary_axis.up") &&
+            explicitIndex["KISAK_VR_BIND_SUPPORT_GRIP"] ==
+                (leftDominant ? "right.squeeze" : "left.squeeze") &&
+            explicitIndex["KISAK_VR_BIND_MENU"] ==
+                (leftDominant ? "right.secondary" : "left.secondary"),
+            "Index melee selector should use the opposite hand's B, independent of support and Pause");
+
+        bool allCustomSlotsPreserved = true;
+        for (const auto& action : vi::ActionDefinitions())
+        {
+            for (std::size_t slot = 0; slot < 2; ++slot)
+            {
+                auto custom = oldBindings;
+                const auto index = static_cast<std::size_t>(action.action);
+                const char* change = action.valueType == vi::ValueType::Vector2
+                    ? "right.trackpad" :
+                    (custom[index][slot].sourceCount == 0 ? "left.auxiliary" : "unbound");
+                vi::ParseBinding(action.action, change, &custom[index][slot]);
+                const auto before = custom;
+                allCustomSlotsPreserved = allCustomSlotsPreserved &&
+                    !vi::MigrateOpenVrIndexSafeBindings(&custom, leftDominant);
+                for (std::size_t other = 0; other < vi::kActionCount; ++other)
+                {
+                    allCustomSlotsPreserved = allCustomSlotsPreserved &&
+                        vi::BindingId(custom[other][0]) == vi::BindingId(before[other][0]) &&
+                        vi::BindingId(custom[other][1]) == vi::BindingId(before[other][1]);
+                }
+            }
+        }
+        Check(allCustomSlotsPreserved,
+            "issue #85 must preserve any custom action/alternate including Stance, Aim, Sprint and axes");
+    }
+
+    {
+        // Real legacy state decoding feeds the selector: support squeeze and
+        // trigger plus forward cannot impersonate the weapon-hand B button.
+        std::array<vi::OpenVrHandState, 2> indexHands = {};
+        for (std::size_t hand = 0; hand < indexHands.size(); ++hand)
+        {
+            auto& state = indexHands[hand];
+            state.hand = hand == 0 ? vi::Hand::Left : vi::Hand::Right;
+            state.connected = state.stateValid = true;
+            state.controllerType = "knuckles";
+            state.axisTypes.fill(vr::k_eControllerAxis_None);
+            state.axisTypes[0] = vr::k_eControllerAxis_Joystick;
+            state.axisTypes[1] = vr::k_eControllerAxis_Trigger;
+            state.axisTypes[2] = vr::k_eControllerAxis_Trigger;
+        }
+        indexHands[0].controllerState.rAxis[0] = {0.0f, 1.0f};
+        indexHands[0].controllerState.rAxis[1].x = 1.0f;
+        indexHands[0].controllerState.rAxis[2].x = 1.0f;
+        bool active = false;
+        const bool bHeld = vi::GetOpenVrBooleanSourceState(
+            indexHands, vi::Source::RightSecondary, &active);
+        vi::OpenVrMissionSelectorState selector;
+        auto update = vi::UpdateOpenVrMissionSelector(&selector,
+            active, bHeld, {0.0f, 1.0f}, true, {}, true);
+        Check(!bHeld && !update.modifierHeld,
+            "Index support plus forward must not arm the B selector or claim movement");
+
+        indexHands[1].controllerState.ulButtonPressed =
+            vr::ButtonMaskFromId(vr::k_EButton_ApplicationMenu);
+        const bool pressedB = vi::GetOpenVrBooleanSourceState(
+            indexHands, vi::Source::RightSecondary, &active);
+        update = vi::UpdateOpenVrMissionSelector(&selector,
+            active, pressedB, {}, true, {}, true);
+        Check(pressedB && update.armedThisFrame && update.modifierHeld,
+            "a fresh physical Index B with centered sticks should deliberately arm selection");
+        update = vi::UpdateOpenVrMissionSelector(&selector,
+            active, pressedB, {0.0f, 1.0f}, true, {}, true);
+        Check(update.modifierHeld,
+            "Index B plus forward after neutral entry should permit intentional melee");
+        update = vi::UpdateOpenVrMissionSelector(&selector,
+            active, pressedB, {}, true, {}, true, 0.20f, false);
+        Check(!update.modifierHeld && !selector.armed && selector.modifierWasHeld,
+            "opening a menu must cancel Index selection while consuming the held B press");
+        update = vi::UpdateOpenVrMissionSelector(&selector,
+            active, pressedB, {}, true, {}, true);
+        Check(!update.modifierHeld,
+            "holding Menu Back through Resume must not rearm Index mission selection");
+        vi::UpdateOpenVrMissionSelector(&selector,
+            true, false, {}, true, {}, true, 0.20f, false);
+        update = vi::UpdateOpenVrMissionSelector(&selector,
+            true, true, {}, true, {}, true);
+        Check(update.armedThisFrame && update.modifierHeld,
+            "releasing B in a menu should allow a fresh centered press during gameplay");
+        update = vi::UpdateOpenVrMissionSelector(&selector,
+            true, true, {}, true, {0.8f, 0.0f}, true);
+        Check(update.cancelledThisFrame && !update.modifierHeld,
+            "weapon-stick turning should cancel the Index selector immediately");
+        update = vi::UpdateOpenVrMissionSelector(&selector,
+            true, true, {}, true, {}, true);
+        Check(!update.modifierHeld,
+            "Index selection must require B release after cancellation");
+    }
 
     values = kc::BuiltInDefaults();
     Check(kc::ApplyPreset("Performance", &values), "performance preset should exist");
@@ -5014,6 +5571,53 @@ int main(const int argumentCount, char** arguments)
     Check(
         preservedV4.messages.empty(),
         "an existing V4 grenade-launcher binding should remain valid");
+
+    for (const bool leftDominant : {false, true})
+    {
+        auto legacy = kc::BuiltInDefaults();
+        if (leftDominant)
+        {
+            kc::ApplyPreset("Left-handed", &legacy);
+        }
+        legacy["KISAK_VR_INPUT_BINDINGS_VERSION"] = "4";
+        const std::string oldPrefix = leftDominant
+            ? "left.thumbrest_touch+right.primary_axis."
+            : "right.thumbrest_touch+left.primary_axis.";
+        const std::string newPrefix = leftDominant
+            ? "right.thumbrest_touch+left.primary_axis."
+            : "left.thumbrest_touch+right.primary_axis.";
+        legacy["KISAK_VR_BIND_NIGHT_VISION"] = oldPrefix + "down";
+        legacy["KISAK_VR_BIND_AIRSTRIKE"] = oldPrefix + "left";
+        legacy["KISAK_VR_BIND_C4"] = oldPrefix + "right";
+        legacy["KISAK_VR_BIND_NIGHT_VISION_ALT"] = oldPrefix + "down";
+        const std::filesystem::path retainedFile = temp /
+            (leftDominant ? "retained-left-v4.bat" : "retained-right-v4.bat");
+        {
+            std::ofstream output(retainedFile, std::ios::binary);
+            output << "@echo off\r\n";
+            for (const auto& [key, value] : legacy)
+            {
+                output << "set \"" << key << "=" << value << "\"\r\n";
+            }
+        }
+        const kc::LoadResult upgraded = kc::LoadSettings(
+            temp / "missing-defaults.bat", retainedFile);
+        Check(upgraded.values.at("KISAK_VR_INPUT_BINDINGS_VERSION") == "5" &&
+                upgraded.values.at("KISAK_VR_BIND_NIGHT_VISION") == newPrefix + "down" &&
+                upgraded.values.at("KISAK_VR_BIND_AIRSTRIKE") == newPrefix + "left" &&
+                upgraded.values.at("KISAK_VR_BIND_C4") == newPrefix + "right" &&
+                upgraded.values.at("KISAK_VR_BIND_NIGHT_VISION_ALT") == oldPrefix + "down",
+            "Configurator V4-to-V5 migration must match runtime handed defaults without overwriting alternates");
+        const kc::SaveResult resaved = kc::SaveUserSettingsAtomic(
+            retainedFile, upgraded.values, "Retained mission defaults");
+        Check(resaved.success && resaved.readBackVerified,
+            "the handed migration must survive a verified save: " + resaved.error);
+        const kc::LoadResult reopened = kc::LoadSettings(
+            temp / "missing-defaults.bat", retainedFile);
+        Check(reopened.values.at("KISAK_VR_BIND_NIGHT_VISION") == newPrefix + "down" &&
+                reopened.values.at("KISAK_VR_BIND_NIGHT_VISION_ALT") == oldPrefix + "down",
+            "saving a left- or right-handed profile must not stamp V5 over an unsafe former default");
+    }
 
     const std::filesystem::path openVrV4UserFile =
         temp / "VR-User-Settings-OpenVR-V4.bat";

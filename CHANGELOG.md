@@ -4,6 +4,68 @@
 
 _No changes yet._
 
+## v0.10.0-beta.19
+
+Cumulative post-beta.18 work through V125. Focused scope, movement, grenade,
+and Javelin gameplay was accepted on Quest 3 / Virtual Desktop VDXR before the
+release rebuild; this does not imply acceptance on every reported headset.
+
+### Gameplay improvements
+
+- Further corrects rifle-scope lens geometry, perspective and reticle/aim-ray
+  agreement (#83). Owner testing confirmed clear centered magnification,
+  alignment while moving the eye off-axis, and shots landing at the reticle.
+- Adds shoulder/eye-line gating and time-based engage/release hysteresis to
+  pose-triggered ADS (#39/#60). Sprint takes priority and automatic ADS does
+  not re-arm until the rifle is lowered or support grip is released. Explicit
+  aim input remains separate; custom settings are preserved. Quest 3 movement
+  testing passed; Quest 2 confirmation and #33's exact doorway remain pending.
+- Keeps grenade hip pickup zones gravity-level when looking down or tilting
+  the head. Missing tracking no longer acts like an intentional release or
+  queues an invalid pickup. Preserves hold/toggle behavior and magazine
+  priority, and forwards the native frag/flash command edges used by campaign
+  scripts (#70/#89). Owner throwing and F.N.G. tests passed.
+- Repairs Javelin scripted ADS continuity during sight raising, preventing a
+  partial native ADS fraction from resetting tank-lock progress. Native aim
+  permission, lock timing and missile guidance remain intact. The Bog tank
+  targeting passed owner testing; green boxes can still be slightly offset.
+
+### Additional controls, tools and diagnostic candidates
+
+- Adds a separate magazine/object-grab binding (#28), configurable native
+  grenade throw-back action (#82), pose-ADS controls, separate hurt/death text
+  scales (#75), magazine visual offsets (#61), and wider controller rotation
+  calibration for reverse-mounted hardware (#88). Physical acceptance of
+  these hardware-specific options remains pending where not stated above.
+- Updates the Index/OpenVR grip basis (#35) and Configurator resizing (#53).
+  Index hardware confirmation is pending; the reported Configurator redraw
+  problem after resizing remains open.
+- Adds OpenVR startup-boundary diagnostics (#10), detailed frame-stage timing
+  (#63), and numeric D3D9 failure information. These are diagnostics, not a
+  proven startup, performance, or device-hung fix.
+- Includes local candidates for scripted scope zoom (#91), scoped visibility
+  (#47), flash feedback (#48), and the air-support handset (#45). Exact natural
+  mission sequences and affected-user confirmation remain pending; simulator
+  checks do not constitute a full campaign or headset pass.
+- Adds guarded Microsoft/Xbox raw-layout normalization to Setup (#17): copies
+  missing fastfiles from `zone/(null)` into the detected language folder,
+  checks copied bytes, and retains original files. Actual Xbox-edition loading
+  still requires confirmation. No original game assets are distributed.
+
+### Remaining limitations
+
+- Issue #78's persistent cyan/green corruption remains unresolved on the
+  affected customer's configuration despite earlier local passes.
+- An intermittent D3D9 `D3DERR_DEVICEHUNG` (`0x88760874`) occurred during this
+  development cycle. More precise diagnostics were added; no root-cause fix
+  or final-rebuild long-session stability pass is claimed.
+- The separate #80 customer report where the Javelin optic never activates is
+  not resolved by the owner's successful Bog lock-on test.
+- The failed AVP/ALVR test preset (#34) is not supplied in this release.
+  Hardware-specific alignment, menus, input, shadows and pacing reports remain
+  open. Owner-waived magazine and shadow tests are not recorded as passes.
+- Death From Above remains unsupported and must be skipped.
+
 ## v0.10.0-beta.18
 
 Focused V118 scope, controller, and Javelin repair over `v0.10.0-beta.17`.

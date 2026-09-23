@@ -18,6 +18,8 @@ GUIDED SETUP (RECOMMENDED)
    same release.
 2. Run Setup and confirm the detected COD4 folder, or browse to the folder
    containing iw3sp.exe, localization.txt, main, and zone.
+   Microsoft/Xbox users should select that edition's Content folder; the
+   experimental guarded fallback below handles the recognized raw layout.
 3. Setup validates the language fastfiles before writing, preserves every
    pre-existing file it will replace, and opens the Configurator when done.
 4. Start your OpenXR runtime. On Setup & Compatibility, rescan and resolve
@@ -40,9 +42,24 @@ PORTABLE ZIP (MANUAL ALTERNATIVE)
 3. Extract every file from this ZIP into that folder, beside iw3sp.exe.
 4. Start your OpenXR runtime and run KisakCOD-VR-Configurator.exe.
 
-Microsoft/Xbox automatic raw-layout conversion remains disabled until its
-before/after file map is verified. Setup rejects an unrecognized layout before
-changing anything; it never guesses, downloads, or moves original game data.
+MICROSOFT/XBOX PC LAYOUT (EXPERIMENTAL)
+-------------------------------------
+
+Guided Setup can copy missing .ff files from zone\(null) into the language
+folder named by localization.txt when the normal code_post_gfx.ff is missing.
+It requires the original executable, localization file and main game archives;
+verifies copied files by SHA-256; preserves existing destinations and all raw
+source files; and records created copies for guarded uninstall. Allow extra
+disk space. The portable ZIP does not perform this conversion.
+
+This is an installation candidate, not confirmed Microsoft/Xbox campaign
+support. The affected edition still needs installation and campaign testing.
+Setup rejects missing or unrecognized required files instead of downloading
+or inventing game data. See INSTALL.txt for the exact checks and uninstall
+behavior.
+
+SETTINGS AND UPGRADES
+--------------------
 
 The configurator covers compatibility, comfort, graphics, visual
 HUD/text/compass placement, weapon and hand fit, belt/reload/grenade
@@ -64,6 +81,12 @@ a full game restart; recenter/height actions, the in-headset HUD editor, and
 weapon/gunstock Apply live or guided capture can update a running
 single-player mission.
 
+Updating from a focused customer test build: the public launcher ignores any
+leftover FOCUSED-OVERRIDES.bat unless KISAK_VR_ENABLE_FOCUSED_OVERRIDES=1 is
+explicitly set. Leave this diagnostic opt-in unset for normal play. The old
+file is left untouched; public packages include no focused overrides. Your
+saved personal settings still load normally.
+
 CONFIGURATOR
 ------------
 
@@ -73,6 +96,8 @@ CONFIGURATOR
   personal setting, plus Copy/Open support-report actions.
 - Tested comfort/performance/seated/minimal-HUD presets plus full custom mode.
 - Snap or smooth turning, movement direction and stick deadzones.
+- Optional physical shoulder ADS with configurable engage/release timing;
+  sprint cancels automatic ADS until the weapon is lowered or support released.
 - A draggable desktop HUD canvas plus live in-headset placement for five real
   HUD groups, with snap anchors and per-group resizing.
 - Primary and alternate bindings for every action, using either controller.
@@ -87,17 +112,26 @@ CONFIGURATOR
 - Right- or left-handed weapon control with one-time binding mirroring.
 - Configurable physical support/object grip, reload, belt, melee, haptics, and
   muzzle-obstruction behavior.
+- Independent support-grip and magazine/object-grab bindings, plus a separate
+  enemy-grenade throw-back action.
+- Separate hurt-warning and death-quote text scales.
 - Safe validation, profile import/export, and automatic settings backups.
 - Save & Launch and one-run diagnostic launch buttons.
 
 PHYSICAL INTERACTIONS
 ---------------------
 
-- In the handed belt layout, off-hand grip at the off-hand hip draws a frag.
-- Off-hand grip at the weapon-hand hip draws the equipped tactical grenade.
+- In the handed belt layout, Magazine / object grab at the off-hand hip draws
+  a frag; at the weapon-hand hip it draws the equipped tactical grenade.
+  The default object control is the off-hand grip, independently remappable
+  from Support-hand grip. Looking down does not tilt the belt away from the hips.
 - Supported magazines can eject by button or a guarded physical pull and
   insert on release or contact.
-- Hold/cook normally, physically swing, and release the grip to throw.
+- Hold/cook normally and physically swing. Release the object control to throw
+  in hold mode, or press it again in toggle mode.
+- The Throw back enemy grenade binding defaults to the Reload button. It
+  requests a native grenade return only while COD4's enemy-grenade prompt is
+  active; outside that prompt the same button still reloads.
 - Toggle night vision by gripping with the physical left controller at the
   crown and pulling the visor down, or gripping close to the visor and pulling
   it up, then releasing. Foregrip presses remain normal rifle support input.
@@ -122,9 +156,9 @@ Meta Quest 3, Virtual Desktop OpenXR, and NVIDIA RTX 3080 Ti.
 Additional OpenXR profiles and SteamVR controller compatibility remain
 experimental on native hardware. A community PSVR2/OpenVR test reached
 gameplay but reported weapon-orientation, magazine-visual, and binding issues;
-see KNOWN-ISSUES.txt. Pimax Crystal Light has a dedicated 7684x3128 packed
-layout and guarded 32-bit runtime handling, but real Pimax hardware validation
-is still pending.
+see KNOWN-ISSUES.txt. Pimax Crystal Light has Full FOV and legacy cropped
+render presets and guarded 32-bit runtime handling, but real Pimax hardware
+confirmation of the remaining fixes is still pending.
 
 SUPPORT AND SOURCE
 ------------------
@@ -138,6 +172,7 @@ Source for this exact build:
 Commit:
 @COMMIT@
 
-The complete source is available under GPLv3. See SOURCE.txt and
-LICENSE-GPLv3.txt. This package contains no original COD4 game data or
-proprietary game DLLs.
+The complete KisakCOD VR source is available under GPLv3. See SOURCE.txt,
+LICENSE-GPLv3.txt and THIRD-PARTY-NOTICES.txt. This package contains no original
+COD4 maps, fastfiles or other game content. It includes the matching Steamworks,
+Bink and Miles runtime files required by the rebuilt executable.

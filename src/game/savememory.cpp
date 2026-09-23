@@ -754,4 +754,3 @@ void __cdecl SaveMemory_CleanupSaveMemory()
     if (saveMemoryGlob.demo.saveState)
         SaveMemory_FreeMemory(&saveMemoryGlob.demo);
 }
-

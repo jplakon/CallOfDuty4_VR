@@ -346,9 +346,12 @@ int __cdecl R_SkinXModel(
             surfPos += 28;
         }
     }
-    startSurfPos = InterlockedExchangeAdd(&frontEndDataOut->surfPos, (char*)surfPos - (char*)surfBuf);
-    if ((char*)surfPos - (char*)surfBuf + startSurfPos <= 0x20000)
+    const uint32_t surfBytes =
+        static_cast<uint32_t>((char*)surfPos - (char*)surfBuf);
+    uint32_t reservedSurfPos = 0;
+    if (R_ReserveSceneSurfBytes(surfBytes, &reservedSurfPos))
     {
+        startSurfPos = static_cast<int>(reservedSurfPos);
         iassert(!(startSurfPos & 3));
         modelInfo->surfId = startSurfPos >> 2;
         memcpy(&frontEndDataOut->surfsBuffer[startSurfPos], surfBuf, (char*)surfPos - (char*)surfBuf);

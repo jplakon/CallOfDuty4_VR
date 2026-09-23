@@ -1,4 +1,5 @@
 #include "r_scene.h"
+#include <cstdint>
 #include <cstdlib>
 #include "vr/vr_openxr.h"
 #if defined(XR_USE_GRAPHICS_API_D3D11)
@@ -50,6 +51,240 @@
 //struct GfxScene scene      859c8280     gfx_d3d : r_scene.obj
 GfxViewParms lockPvsViewParms;
 GfxScene scene;
+
+// Same-frame VR builds more than one camera view from the same scene.  If a
+// scene-surface reservation is unavailable, an old 16-bit brush surfId can
+// otherwise survive long enough for a worker to treat unrelated bytes as a
+// GfxSurface pointer.  Validate the compact indirection before dereferencing
+// it; the overflowing brush is already not drawable, so skipping it is the
+// safe retail-equivalent failure mode.
+static bool R_IsValidBModelSurfaceRange(
+    const uint16_t surfId,
+    const uint16_t surfaceCount,
+    const char* const caller)
+{
+    if (frontEndDataOut == nullptr ||
+        rgp.world == nullptr ||
+        rgp.world->dpvs.surfaces == nullptr ||
+        rgp.world->surfaceCount <= 0 ||
+        surfaceCount == 0)
+    {
+        return false;
+    }
+
+    const uint32_t byteOffset =
+        static_cast<uint32_t>(surfId) * 4u;
+    const LONG publishedSurfPos = InterlockedCompareExchange(
+        &frontEndDataOut->surfPos,
+        0,
+        0);
+
+    const uint32_t byteCount =
+        static_cast<uint32_t>(surfaceCount) *
+        static_cast<uint32_t>(sizeof(BModelSurface));
+
+    bool valid =
+        publishedSurfPos >= 0 &&
+        byteOffset >= sizeof(GfxScaledPlacement) &&
+        byteOffset <= GFX_SCENE_SURFS_BUFFER_SIZE &&
+        byteCount <= GFX_SCENE_SURFS_BUFFER_SIZE - byteOffset &&
+        byteOffset + byteCount <=
+            static_cast<uint32_t>(publishedSurfPos);
+
+    const auto* const modelSurfaces =
+        reinterpret_cast<const BModelSurface*>(
+            reinterpret_cast<const uint8_t*>(frontEndDataOut) +
+            byteOffset);
+
+    const std::uintptr_t bufferBegin =
+        reinterpret_cast<std::uintptr_t>(
+            frontEndDataOut->surfsBuffer);
+    const std::uintptr_t bufferEnd =
+        bufferBegin + GFX_SCENE_SURFS_BUFFER_SIZE;
+    const std::uintptr_t worldBegin =
+        reinterpret_cast<std::uintptr_t>(
+            rgp.world->dpvs.surfaces);
+    const std::uintptr_t worldEnd =
+        worldBegin +
+        static_cast<std::uintptr_t>(rgp.world->surfaceCount) *
+            sizeof(GfxSurface);
+
+    for (uint32_t surfaceIndex = 0;
+         valid && surfaceIndex < surfaceCount;
+         ++surfaceIndex)
+    {
+        const std::uintptr_t placement =
+            reinterpret_cast<std::uintptr_t>(
+                modelSurfaces[surfaceIndex].placement);
+        const std::uintptr_t surface =
+            reinterpret_cast<std::uintptr_t>(
+                modelSurfaces[surfaceIndex].surf);
+
+        valid =
+            placement >= bufferBegin &&
+            placement + sizeof(GfxScaledPlacement) <= bufferEnd &&
+            surface >= worldBegin &&
+            surface + sizeof(GfxSurface) <= worldEnd &&
+            ((surface - worldBegin) % sizeof(GfxSurface)) == 0u;
+    }
+
+    if (!valid)
+    {
+        static volatile LONG invalidRangeCount = 0;
+        const LONG invalidIndex =
+            InterlockedIncrement(&invalidRangeCount);
+
+        if (invalidIndex <= 8)
+        {
+            Com_PrintWarning(
+                0,
+                "[VR][RENDER] Rejected invalid brush surface range "
+                "in %s (surfId %u, count %u, published bytes %ld, "
+                "view %u, occurrence %ld).\n",
+                caller,
+                static_cast<unsigned int>(surfId),
+                static_cast<unsigned int>(surfaceCount),
+                publishedSurfPos,
+                frontEndDataOut->viewInfoIndex,
+                invalidIndex);
+        }
+    }
+
+    return valid;
+}
+
+// Draw-surface object IDs are compact references into the per-frame surface
+// buffer.  Same-frame VR keeps three complete camera draw lists alive until
+// the backend consumes them, so a failed or stale allocation must never be
+// allowed to masquerade as an XModel surface record.  Besides checking the
+// published byte range, compare every stored XSurface pointer with the model
+// LOD that produced it.  This keeps a corrupted object ID out of the backend,
+// where it would otherwise become an arbitrary index-buffer memcpy source.
+static bool R_IsValidXModelSurfaceRange(
+    const XModelDrawInfo* const modelInfo,
+    const XModel* const model,
+    const char* const caller)
+{
+    if (frontEndDataOut == nullptr ||
+        modelInfo == nullptr ||
+        model == nullptr)
+    {
+        return false;
+    }
+
+    XSurface* expectedSurfaces = nullptr;
+    int surfaceCount = -1;
+
+    // lodInfo has four entries and all XModel surface accessors index it
+    // directly.  Validate the compact draw record before calling any of
+    // those accessors; a stale record must not turn its 16-bit lod into an
+    // out-of-bounds model read while we are trying to reject it.
+    if (model->numLods > 0 &&
+        model->numLods <= 4 &&
+        modelInfo->lod < static_cast<uint16_t>(model->numLods))
+    {
+        surfaceCount =
+            XModelGetSurfaces(
+                model,
+                &expectedSurfaces,
+                modelInfo->lod);
+    }
+
+    if (surfaceCount <= 0 || expectedSurfaces == nullptr)
+    {
+        return false;
+    }
+
+    const uint32_t firstByte =
+        static_cast<uint32_t>(modelInfo->surfId) * 4u;
+    const LONG publishedSurfPos = InterlockedCompareExchange(
+        &frontEndDataOut->surfPos,
+        0,
+        0);
+
+    bool valid =
+        publishedSurfPos >= 0 &&
+        firstByte < GFX_SCENE_SURFS_BUFFER_SIZE &&
+        firstByte < static_cast<uint32_t>(publishedSurfPos);
+
+    const uint8_t* cursor =
+        reinterpret_cast<const uint8_t*>(frontEndDataOut) +
+        firstByte;
+    const uint8_t* const bufferBegin =
+        frontEndDataOut->surfsBuffer;
+    const uint8_t* const bufferEnd =
+        bufferBegin + GFX_SCENE_SURFS_BUFFER_SIZE;
+    const uint8_t* const publishedEnd =
+        bufferBegin +
+        (publishedSurfPos >= 0
+            ? static_cast<uint32_t>(publishedSurfPos)
+            : 0u);
+
+    for (int surfaceIndex = 0;
+         valid && surfaceIndex < surfaceCount;
+         ++surfaceIndex)
+    {
+        if (cursor < bufferBegin ||
+            cursor + sizeof(int) > bufferEnd ||
+            cursor + sizeof(int) > publishedEnd)
+        {
+            valid = false;
+            break;
+        }
+
+        const int surfaceMarker =
+            *reinterpret_cast<const int*>(cursor);
+
+        if (surfaceMarker == -3)
+        {
+            cursor += sizeof(int);
+            continue;
+        }
+
+        if (cursor + sizeof(GfxModelRigidSurface) > bufferEnd ||
+            cursor + sizeof(GfxModelRigidSurface) > publishedEnd)
+        {
+            valid = false;
+            break;
+        }
+
+        const auto* const modelSurface =
+            reinterpret_cast<const GfxModelRigidSurface*>(cursor);
+
+        valid =
+            (surfaceMarker == -2 || surfaceMarker == -1) &&
+            modelSurface->surf.xsurf ==
+                &expectedSurfaces[surfaceIndex];
+
+        cursor += sizeof(GfxModelRigidSurface);
+    }
+
+    if (!valid)
+    {
+        static volatile LONG invalidRangeCount = 0;
+        const LONG invalidIndex =
+            InterlockedIncrement(&invalidRangeCount);
+
+        if (invalidIndex <= 8)
+        {
+            Com_PrintWarning(
+                0,
+                "[VR][RENDER] Rejected invalid XModel surface range "
+                "in %s for '%s' (surfId %u, lod %u, count %i, "
+                "published bytes %ld, view %u, occurrence %ld).\n",
+                caller,
+                model->name != nullptr ? model->name : "<unnamed>",
+                static_cast<unsigned int>(modelInfo->surfId),
+                static_cast<unsigned int>(modelInfo->lod),
+                surfaceCount,
+                publishedSurfPos,
+                frontEndDataOut->viewInfoIndex,
+                invalidIndex);
+        }
+    }
+
+    return valid;
+}
 
 // KISAK_SP_VR_SCOPE_VISIBILITY_ISOLATION_V116
 static uint8_t
@@ -544,6 +779,13 @@ void __cdecl R_AddBModelSurfacesCamera(
         surfaceCount = bmodel->surfaceCount;
     else
         surfaceCount = bmodel->surfaceCountNoDecal;
+    if (!R_IsValidBModelSurfaceRange(
+            static_cast<uint16_t>(surfId),
+            surfaceCount,
+            "R_AddBModelSurfacesCamera"))
+    {
+        return;
+    }
     for (count = 0; count < surfaceCount; ++count)
     {
         bspSurf = modelSurf->surf;
@@ -604,6 +846,13 @@ GfxDrawSurf *__cdecl R_AddBModelSurfaces(
         surfaceCount = bmodel->surfaceCount;
     else
         surfaceCount = bmodel->surfaceCountNoDecal;
+    if (!R_IsValidBModelSurfaceRange(
+            static_cast<uint16_t>(surfId),
+            surfaceCount,
+            "R_AddBModelSurfaces"))
+    {
+        return drawSurf;
+    }
     for (count = 0; count < surfaceCount; ++count)
     {
         if (drawSurf >= lastDrawSurf)
@@ -670,6 +919,13 @@ void __cdecl R_AddXModelSurfacesCamera(
     surfId = modelInfo->surfId;
     modelSurf = (GfxModelRigidSurface*)((char*)frontEndDataOut + 4 * surfId);
     lod = modelInfo->lod;
+    if (!R_IsValidXModelSurfaceRange(
+            modelInfo,
+            model,
+            "R_AddXModelSurfacesCamera"))
+    {
+        return;
+    }
     numsurfs = XModelGetSurfCount(model, lod);
     material = XModelGetSkins(model, lod);
     iassert( material );
@@ -1704,6 +1960,19 @@ void __cdecl R_GenerateSortedDrawSurfs(
     viewInfo = &frontEndDataOut->viewInfo[viewInfoIndex];
 
 #if defined(XR_USE_GRAPHICS_API_D3D11)
+    // Same-frame VR regenerates decals for each scope/eye camera, while the
+    // retail mark mesh only has capacity for one camera. RB_Draw3D replaces
+    // every earlier view's draw-list references with the final view, so the
+    // earlier mark vertices are no longer addressable. Reclaim that workspace
+    // before generating the next camera instead of exhausting the retail
+    // vertex/index limits on the second or third view.
+    if (VR_D3D9IsSameFrameStereoEnabled() &&
+        viewInfoIndex > 0)
+    {
+        frontEndDataOut->markMeshCount = 0;
+        R_ResetMesh(&frontEndDataOut->markMesh);
+    }
+
     if (VR_D3D9IsSameFrameStereoEnabled() &&
         viewInfoIndex == 1)
     {

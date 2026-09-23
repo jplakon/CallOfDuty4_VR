@@ -27,8 +27,10 @@ main thumbstick, or the trackpad on a Vive wand.
 | Stance | Weapon-hand secondary action; tap changes stance and hold toggles prone |
 | Lower stance | Weapon-hand primary axis down; lowers one step |
 | Next weapon | Off-hand secondary action |
-| Native off-hand action | Unbound; physical grenades use the off-hand grip |
-| Support hand / physical interaction | Off-hand squeeze |
+| Native off-hand action | Unbound; physical grenades use Magazine / object grab |
+| Support-hand grip | Off-hand squeeze; attaches the support hand to the weapon |
+| Magazine / object grab | Off-hand squeeze; independently configurable from support grip |
+| Throw back enemy grenade | Weapon-hand primary action while the native throw-back prompt is active |
 | Pause | Off-hand menu |
 | Menu confirm / back | Weapon-hand primary / weapon-hand secondary |
 | Menu cursor | Off-hand primary axis |
@@ -46,7 +48,7 @@ gestures do not also turn.
 ## Dynamic VR prompt labels
 
 While VR gameplay is active, COD4's normal key prompts use the saved Controller
-Input V4 bindings instead of displaying PC keys such as F, R, Space, Shift, or
+Input V5 bindings instead of displaying PC keys such as F, R, Space, Shift, or
 Ctrl. The resolver reads the actual primary and alternate slots, including
 remaps and chords. With the tested Quest defaults, examples include X for Use,
 A for Reload, Right stick up or Left trigger for Jump/mantle, L3 for Sprint, B
@@ -70,6 +72,23 @@ entering physical/configured VR ADS mirrors a held `+speed` command; and the
 configured Sprint action mirrors `+sprint`. The held bridges use private
 synthetic key identifiers, so real mouse and keyboard buttons remain
 independent.
+
+Physical belt-grenade commands also notify the native frag/flashbang tutorial
+listeners on their press/release edges. This corrects instruction handling;
+the actual grenade throw still follows COD4's ammo and projectile rules.
+
+## Physical shoulder ADS and sprint
+
+Under **Weapons & Hands**, **Physical shoulder ADS** automatically aims after
+a stable, eye-level two-hand pose. Carrying the weapon at chest height is not
+an aiming pose. The default **Physical ADS hold time** is 250 ms; **Physical
+ADS release grace** is 180 ms. Releasing the support grip cancels automatic
+ADS immediately rather than waiting for that grace period.
+
+Sprint cancels automatic ADS. Lower the weapon or release support before
+shouldering again; keeping it raised after sprint does not immediately re-enter
+ADS. To use only a button, disable **Physical shoulder ADS** and assign **Aim /
+ADS override** on **Controls**. That action is unbound by default.
 
 ## Remapping in the configurator
 
@@ -97,7 +116,8 @@ The grenade-launcher shortcut uses the physical **Right grip / squeeze** in a
 fresh/default profile. Night vision, airstrike, and C4 remain visible chord
 bindings and can be replaced with single inputs on controllers that do not
 expose a thumbrest touch sensor. Controller Input V5 migrates only the exact
-former mission defaults; custom profile bindings are preserved.
+former mission defaults both when loading an older profile in the Configurator
+and when launching directly; custom profile bindings are preserved.
 The remaining directional layout is:
 
 | Direction | Action |
@@ -125,6 +145,9 @@ Begin with both sticks centered, hold the off-hand trigger, and then move the
 off-hand stick in the requested direction. Moving the dominant stick cancels
 the selector. The preset and automatic untouched-profile upgrade mirror these
 bindings for left-handed play, including when Automatic falls back to OpenVR.
+
+Only a configured, guarded mission-selector chord owns this movement gate.
+An unrelated one-button mission binding does not reserve the movement stick.
 
 ## Physical night-vision visor gesture
 
@@ -229,6 +252,12 @@ Forward/Left/Up for the final sight and cheek-weld position. The capture is
 explicit and uses the current absolute controller orientation—it does not
 derive a hidden calibration from the pose held at game startup.
 
+Advanced **Support pivot forward/left/up trim** settings adjust the two-hand
+steering pivot separately from the free glove. Global weapon and off-hand
+Pitch/Yaw/Roll accept the full -180 to 180 degree range for unusual controller
+mounts. These are calibration controls, not an automatically calibrated or
+hardware-validated ACE XR preset.
+
 Use **Export gunstock** to share one guarded `.vrstock` profile and **Import
 gunstock** to add it on another installation. Weapon overrides stay local
 because weapon fit can depend on the player's hands and preferred stance.
@@ -285,15 +314,21 @@ Continuous touch-driven finger curling is not implemented, and the authored
 glove/arm geometry is not anatomically mirrored in left-handed mode.
 
 - Supported detachable-magazine weapons can eject with the Reload action or by
-  gripping the loaded magazine and pulling it clear of the well. Draw a fresh
+  using **Magazine / object grab** on the loaded magazine and pulling it clear
+  of the well. Draw a fresh
   magazine from the off-hand or fixed hip, then either release it or touch it
   to the well according to the selected insertion mode.
 - The support grip can require a held squeeze, toggle on each squeeze, or engage
-  by proximity. Object grabs can use hold or toggle behavior independently.
-- With the off hand free, grip inside either hip zone to draw a grenade. The
+  by proximity. **Magazine / object grab** is a separate binding for magazines
+  and belt grenades. Both actions default to the off-hand squeeze, but may be
+  remapped independently. The **Magazine/grenade grabbing** setting selects
+  hold (release the control to let go) or toggle (press again to let go).
+- With the off hand free, use **Magazine / object grab** inside either hip zone
+  to draw a grenade. The
   handed layout places frag on the off-hand side and tactical on the weapon-hand
   side; the fixed layout always keeps frag left and tactical right. Hold/cook,
-  physically swing, and release to throw.
+  physically swing, and release the object control to throw in hold mode, or
+  press it again in toggle mode.
 - Physical melee recognizes a sufficiently fast forward weapon-hand thrust. A
   sideways swing alone is rejected. It can replace or supplement the button.
 - A stationary grenade release deliberately drops it. Release position is
@@ -301,9 +336,20 @@ glove/arm geometry is not anatomically mirrored in left-handed mode.
 - The virtual belt follows headset yaw only. Manual magazine reload takes
   interaction priority over a held grenade, a new hip grab, and the two-hand
   rifle grip.
+- Looking down or tilting the head does not tilt the belt away from the hips.
+  Tracking or input loss is not itself a grenade-release command. If input
+  returns while already pressed, release it and press again before a new grab.
 - Set `KISAK_VR_MANUAL_GRENADES=0` or
   `KISAK_VR_MANUAL_MAGAZINE_RELOAD=0` to restore the corresponding native
   interaction.
+
+**Throw back enemy grenade** is separate from taking your own grenade from the
+belt. Its default intentionally shares the Reload button (A with right-handed
+Quest defaults). While COD4's native enemy-grenade prompt is active, that
+control requests the native throw-back action instead of reloading; outside
+the prompt it remains Reload. It can also be assigned to a separate button or
+chord. The native prompt and an eligible enemy grenade are required; this is
+not a physical hand-grab of an enemy grenade.
 
 Javelin, Stinger, mounted, and vehicle weapons continue to aim from the tracked
 weapon controller. **Death From Above** remains unsupported; follow the skip

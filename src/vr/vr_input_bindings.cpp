@@ -64,7 +64,9 @@ constexpr std::array<ActionDefinition, kActionCount> kActions = {{
     {Action::LowerStance, "KISAK_VR_BIND_LOWER_STANCE", "KISAK_VR_BIND_LOWER_STANCE_ALT", "lower_stance", "Lower stance", "Lower one stance step. The primary default is moving the right stick / trackpad down; release it before triggering another step.", ValueType::Boolean, "right.primary_axis.down", "unbound", true},
     {Action::NextWeapon, "KISAK_VR_BIND_NEXT_WEAPON", "KISAK_VR_BIND_NEXT_WEAPON_ALT", "next_weapon", "Next weapon", "Cycle to the next carried weapon.", ValueType::Boolean, "left.secondary", "unbound", true},
     {Action::Offhand, "KISAK_VR_BIND_OFFHAND", "KISAK_VR_BIND_OFFHAND_ALT", "offhand", "Native off-hand action", "Optional native off-hand grenade or mission-equipment action. Physical grenades use the left grip, so the tested default leaves this unbound.", ValueType::Boolean, "unbound", "unbound", true},
-    {Action::SupportGrip, "KISAK_VR_BIND_SUPPORT_GRIP", "KISAK_VR_BIND_SUPPORT_GRIP_ALT", "support_grip", "Support-hand grip", "Grip a two-handed weapon, grenade, or physical magazine with the support hand.", ValueType::Boolean, "left.squeeze", "unbound", true},
+    {Action::SupportGrip, "KISAK_VR_BIND_SUPPORT_GRIP", "KISAK_VR_BIND_SUPPORT_GRIP_ALT", "support_grip", "Support-hand grip", "Attach the support hand to a two-handed weapon. Physical magazines and belt grenades use Magazine / object grab.", ValueType::Boolean, "left.squeeze", "unbound", true},
+    {Action::MagazineGrab, "KISAK_VR_BIND_MAGAZINE_GRAB", "KISAK_VR_BIND_MAGAZINE_GRAB_ALT", "magazine_grab", "Magazine / object grab", "Grab a physical magazine or belt grenade with the off hand, independently of the support-hand attachment control. Uses the configured object hold/toggle mode.", ValueType::Boolean, "left.squeeze", "unbound", false},
+    {Action::ThrowBack, "KISAK_VR_BIND_THROW_BACK", "KISAK_VR_BIND_THROW_BACK_ALT", "throw_back", "Throw back enemy grenade", "Activate COD4's separate native +throw action while the enemy-grenade prompt is available.", ValueType::Boolean, "right.primary", "unbound", false},
     {Action::PauseMenu, "KISAK_VR_BIND_MENU", "KISAK_VR_BIND_MENU_ALT", "pause_menu", "Pause / Escape", "Open or close COD4 menus.", ValueType::Boolean, "left.menu", "unbound", false},
     {Action::MenuConfirm, "KISAK_VR_BIND_MENU_CONFIRM", "KISAK_VR_BIND_MENU_CONFIRM_ALT", "menu_confirm", "Menu confirm", "Activate the selected menu item.", ValueType::Boolean, "right.primary", "unbound", false},
     {Action::MenuBack, "KISAK_VR_BIND_MENU_BACK", "KISAK_VR_BIND_MENU_BACK_ALT", "menu_back", "Menu back", "Return from the current menu.", ValueType::Boolean, "right.secondary", "unbound", false},
@@ -87,6 +89,22 @@ constexpr std::array<BindingLayoutEntry, kOpenVrSafeBindingCount>
         {Action::NightVision, "left.trigger+left.primary_axis.down", "unbound"},
         {Action::Airstrike, "left.trigger+left.primary_axis.left", "unbound"},
         {Action::C4, "left.trigger+left.primary_axis.right", "unbound"},
+    }};
+
+// Issue #85: Index B is a deliberate selector, separate from the support
+// trigger/squeeze. The opposite stick selects; ordinary support plus forward
+// movement cannot arm melee. Stick up/down still provide stance controls.
+// Keep this device-specific: WMR legacy secondary can alias joystick click.
+constexpr std::array<BindingLayoutEntry, kOpenVrIndexSafeBindingCount>
+    kOpenVrIndexSafeBindings = {{
+        {Action::Jump, "right.primary_axis.up", "unbound"},
+        {Action::Melee, "right.secondary+left.primary_axis.up", "unbound"},
+        {Action::Stance, "unbound", "unbound"},
+        {Action::NextWeapon, "right.thumbstick_click", "unbound"},
+        {Action::PauseMenu, "left.secondary", "unbound"},
+        {Action::NightVision, "right.secondary+left.primary_axis.down", "unbound"},
+        {Action::Airstrike, "right.secondary+left.primary_axis.left", "unbound"},
+        {Action::C4, "right.secondary+left.primary_axis.right", "unbound"},
     }};
 
 bool EqualsIgnoreCase(
@@ -216,6 +234,135 @@ const std::array<BindingLayoutEntry, kOpenVrSafeBindingCount>&
 OpenVrSafeBindingLayout()
 {
     return kOpenVrSafeBindings;
+}
+
+const std::array<BindingLayoutEntry, kOpenVrIndexSafeBindingCount>&
+OpenVrIndexSafeBindingLayout()
+{
+    return kOpenVrIndexSafeBindings;
+}
+
+bool MigrateOpenVrIndexSafeBindings(
+    BindingSet* const bindings,
+    const bool leftDominant)
+{
+    if (bindings == nullptr)
+    {
+        return false;
+    }
+
+    const auto parseHanded = [leftDominant](
+        const Action action, const char* const text, Binding* const result)
+    {
+        if (!ParseBinding(action, text, result))
+        {
+            return false;
+        }
+        if (leftDominant)
+        {
+            for (std::size_t index = 0; index < result->sourceCount; ++index)
+            {
+                const SourceDefinition& source =
+                    GetSourceDefinition(result->sources[index]);
+                std::string mirrored = source.id;
+                if (source.hand == Hand::Left)
+                {
+                    mirrored.replace(0, 5, "right.");
+                }
+                else if (source.hand == Hand::Right)
+                {
+                    mirrored.replace(0, 6, "left.");
+                }
+                if (!ParseSource(mirrored, &result->sources[index]))
+                {
+                    return false;
+                }
+            }
+        }
+        return true;
+    };
+
+    // Require the entire former generated layout, not just its seven changed
+    // actions. In particular, a custom B/Sprint/Aim/alternate must survive.
+    for (const ActionDefinition& action : kActions)
+    {
+        const char* primary = action.defaultBinding;
+        const char* alternate = action.defaultAlternateBinding;
+        for (const BindingLayoutEntry& old : kOpenVrSafeBindings)
+        {
+            if (old.action == action.action)
+            {
+                primary = old.binding;
+                alternate = old.alternateBinding;
+                break;
+            }
+        }
+        const std::array<const char*, 2> expectedText = {primary, alternate};
+        for (std::size_t slot = 0; slot < expectedText.size(); ++slot)
+        {
+            Binding expected;
+            const Binding& actual =
+                (*bindings)[static_cast<std::size_t>(action.action)][slot];
+            if (!parseHanded(action.action, expectedText[slot], &expected) ||
+                actual.sourceCount != expected.sourceCount ||
+                !std::equal(actual.sources.begin(),
+                    actual.sources.begin() + actual.sourceCount,
+                    expected.sources.begin()))
+            {
+                return false;
+            }
+        }
+    }
+
+    BindingSet updated = *bindings;
+    for (const BindingLayoutEntry& layout : kOpenVrIndexSafeBindings)
+    {
+        auto& slots = updated[static_cast<std::size_t>(layout.action)];
+        if (!parseHanded(layout.action, layout.binding, &slots[0]) ||
+            !parseHanded(layout.action, layout.alternateBinding, &slots[1]))
+        {
+            return false;
+        }
+    }
+    *bindings = updated;
+    return true;
+}
+
+std::string MigrateLegacyMissionDefault(
+    const Action action,
+    const bool alternate,
+    const int bindingsVersion,
+    const bool leftDominant,
+    const std::string_view value)
+{
+    if (bindingsVersion >= 5 || alternate)
+    {
+        return std::string(value);
+    }
+
+    const char* direction = nullptr;
+    switch (action)
+    {
+        case Action::NightVision: direction = "down"; break;
+        case Action::Airstrike: direction = "left"; break;
+        case Action::C4: direction = "right"; break;
+        default: return std::string(value);
+    }
+
+    const std::string formerDefault =
+        std::string(leftDominant
+            ? "left.thumbrest_touch+right.primary_axis."
+            : "right.thumbrest_touch+left.primary_axis.") + direction;
+    if (value != formerDefault)
+    {
+        // Do not infer a default from a reordered/extended chord, another
+        // direction, another hand, or an intentionally unbound action.
+        return std::string(value);
+    }
+
+    return std::string(leftDominant
+        ? "right.thumbrest_touch+left.primary_axis."
+        : "left.thumbrest_touch+right.primary_axis.") + direction;
 }
 
 const SourceDefinition& GetSourceDefinition(const Source source)

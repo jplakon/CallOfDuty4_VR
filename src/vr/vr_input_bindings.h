@@ -83,6 +83,8 @@ enum class Action
     NextWeapon,
     Offhand,
     SupportGrip,
+    MagazineGrab,
+    ThrowBack,
     PauseMenu,
     MenuConfirm,
     MenuBack,
@@ -202,6 +204,7 @@ inline GameplayButtonGateUpdate UpdateGameplayButtonGate(
 }
 
 constexpr std::size_t kOpenVrSafeBindingCount = 7u;
+constexpr std::size_t kOpenVrIndexSafeBindingCount = 8u;
 
 // A slot is an AND-chord: every listed source must be active at once. The
 // primary and alternate slots remain OR alternatives for the action.
@@ -211,10 +214,25 @@ struct Binding
     std::size_t sourceCount = 0u;
 };
 
+using BindingSet = std::array<std::array<Binding, 2>, kActionCount>;
+
 const std::array<SourceDefinition, kSourceCount>& SourceDefinitions();
 const std::array<ActionDefinition, kActionCount>& ActionDefinitions();
 const std::array<BindingLayoutEntry, kOpenVrSafeBindingCount>&
 OpenVrSafeBindingLayout();
+const std::array<BindingLayoutEntry, kOpenVrIndexSafeBindingCount>&
+OpenVrIndexSafeBindingLayout();
+// Call only after identifying actual Index controllers. Any custom primary,
+// alternate, or stance binding prevents this whole-layout migration.
+bool MigrateOpenVrIndexSafeBindings(BindingSet* bindings, bool leftDominant);
+
+// Ordinary batch launches may retain a pre-V5 settings file without saving
+// through the Configurator. Upgrade only the three exact generated mission
+// defaults for that handedness; alternate slots and custom chords survive.
+// The caller supplies the canonicalized value, before ParseBinding.
+std::string MigrateLegacyMissionDefault(
+    Action action, bool alternate, int bindingsVersion, bool leftDominant,
+    std::string_view value);
 
 const SourceDefinition& GetSourceDefinition(Source source);
 const ActionDefinition& GetActionDefinition(Action action);

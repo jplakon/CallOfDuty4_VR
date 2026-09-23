@@ -591,6 +591,16 @@ bool UsesMissionSelector(
     return hasModifier && hasSelectionDirection;
 }
 
+bool MissionSelectorClaimsMovement(
+    const Binding& binding,
+    const Source modifier,
+    const Source selectionAxis,
+    const OpenVrMissionSelectorUpdate& update)
+{
+    return update.available && update.modifierHeld &&
+        UsesMissionSelector(binding, modifier, selectionAxis);
+}
+
 OpenVrMissionSelectorUpdate UpdateOpenVrMissionSelector(
     OpenVrMissionSelectorState* const state,
     const bool modifierAvailable,
@@ -599,7 +609,8 @@ OpenVrMissionSelectorUpdate UpdateOpenVrMissionSelector(
     const bool selectionAxisActive,
     const OpenVrVector2 cancelAxis,
     const bool cancelAxisActive,
-    const float neutralThreshold)
+    const float neutralThreshold,
+    const bool allowArming)
 {
     OpenVrMissionSelectorUpdate update;
     if (state == nullptr ||
@@ -621,7 +632,9 @@ OpenVrMissionSelectorUpdate UpdateOpenVrMissionSelector(
     const bool cancelNeutral = cancelAxisActive &&
         AxisIsNeutral(cancelAxis, neutralThreshold);
 
-    if (!contactHeld)
+    // A menu may use the same physical button. Track contact while blocked
+    // so holding it across Resume cannot synthesize a new selector press.
+    if (!contactHeld || !allowArming)
     {
         update.cancelledThisFrame = state->armed;
         state->armed = false;

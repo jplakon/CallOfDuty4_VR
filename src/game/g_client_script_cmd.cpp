@@ -16,6 +16,8 @@
 #include <devgui/devgui.h>
 #include "g_public.h"
 #include "vr/vr_openxr.h"
+#include "vr/vr_javelin_lock.h"
+#include <cstdlib>
 
 struct $1CCC8782424A70CD39BB8AAD8063E797
 {
@@ -1629,6 +1631,73 @@ void __cdecl PlayerCmd_notifyOnCommand(scr_entref_t entref)
     Cmd_RegisterNotification(Scr_GetString(1), Scr_GetString(0));
 }
 
+// Focused, opt-in evidence for the native Bog CLU state machine. Never enable
+// the retired per-frame Javelin/render traces to diagnose a lock failure.
+static void G_VR_LogJavelinLockState(
+    const gentity_s *player, const float scriptAds, const bool adsIntent)
+{
+    static const bool enabled = []() {
+        const char *value = std::getenv("KISAK_VR_JAVELIN_LOCK_DIAGNOSTICS");
+        return value != nullptr && value[0] == '1' && value[1] == '\0';
+    }();
+    if (!enabled)
+        return;
+
+    static unsigned int lastLogTime = 0;
+    static unsigned int logCount = 0;
+    const unsigned int now = static_cast<unsigned int>(Sys_Milliseconds());
+    if (logCount >= 1200u || (logCount != 0u && now - lastLogTime < 500u))
+        return;
+    lastLogTime = now;
+    ++logCount;
+
+    const playerState_s &ps = player->client->ps;
+    // These are the retail maps/_javelin.gsc rectangles, including the
+    // existing VR-only tolerance in Scr_Target_IsInRect. Observe, don't lock.
+    const bool raised = ps.fWeaponPosFrac > 0.0f;
+    const float acquireX = raised ? 150.0f : 60.0f;
+    const float acquireY = raised ? 60.0f : 30.0f;
+    const float retainX = raised ? 225.0f : 90.0f;
+    const float retainY = raised ? 90.0f : 45.0f;
+    unsigned int targets = 0, insideAcquire = 0, insideRetain = 0;
+    int nearestEnt = ENTITYNUM_NONE;
+    float nearestX = 0.0f, nearestY = 0.0f, nearestScore = 1.0e30f;
+    for (const target_t &target : targGlob.targets)
+    {
+        if (target.ent == nullptr)
+            continue;
+        ++targets;
+        const float delta[3] = {
+            target.ent->r.currentOrigin[0] + target.offset[0] - player->r.currentOrigin[0],
+            target.ent->r.currentOrigin[1] + target.offset[1] - player->r.currentOrigin[1],
+            target.ent->r.currentOrigin[2] + target.offset[2] - player->r.currentOrigin[2] - ps.viewHeightCurrent,
+        };
+        float screen[2] = {};
+        if (!G_WorldDirToScreenPos(player, 25.0, delta, screen))
+            continue;
+        const float x = std::fabs(screen[0]), y = std::fabs(screen[1]);
+        insideAcquire += x < acquireX && y < acquireY ? 1u : 0u;
+        insideRetain += x < retainX && y < retainY ? 1u : 0u;
+        const float score = x / acquireX + y / acquireY;
+        if (score < nearestScore)
+        {
+            nearestScore = score;
+            nearestEnt = target.ent->s.number;
+            nearestX = screen[0];
+            nearestY = screen[1];
+        }
+    }
+    Com_Printf(0,
+        "[VR][JAVELIN LOCK][V125] t=%u nativeADS=%.3f scriptADS=%.3f intent=%d "
+        "nativeAim=%d weaponState=%d clip=%d lock=0x%x lockedEnt=%d "
+        "targets=%u acquire=%u retain=%u nearest=%d xy=%.1f,%.1f.\n",
+        now, ps.fWeaponPosFrac, scriptAds, adsIntent ? 1 : 0,
+        (ps.pm_flags & PMF_SIGHT_AIMING) != 0 ? 1 : 0, ps.weaponstate,
+        ps.ammoclip[BG_ClipForWeapon(ps.weapon)], ps.weapLockFlags,
+        ps.weapLockedEntnum, targets, insideAcquire, insideRetain,
+        nearestEnt, nearestX, nearestY);
+}
+
 void __cdecl PlayerCmd_playerADS(scr_entref_t entref)
 {
     gentity_s *v1; // r31
@@ -1662,13 +1731,35 @@ void __cdecl PlayerCmd_playerADS(scr_entref_t entref)
 
     bool vrAdsHeld = false;
 
+    const bool vrAdsAvailable = VR_GetCampaignAdsHeld(&vrAdsHeld);
+    const WeaponDef *vrAdsWeapon = BG_GetWeaponDef(v1->client->ps.weapon);
+    const bool vrJavelin = vrAdsAvailable && vrAdsWeapon != nullptr &&
+        vrAdsWeapon->overlayInterface == WEAPOVERLAYINTERFACE_JAVELIN;
+
+    // KISAK_SP_VR_JAVELIN_SCRIPT_ADS_CONTINUITY_V125
+    // The CLU cancels its two-second acquisition whenever playerADS() < 1.
+    // The F.N.G. bridge below previously returned 1 at fraction <= .5, then
+    // dropped below 1 halfway through the Javelin's 800 ms raising animation.
+    // For this optic alone, keep script intent continuous after native ADS
+    // has actually started. Native permission/reload/damage gates and explicit
+    // lowering still win; no weapon fraction, lock flag or timer is forced.
+    if (vrJavelin)
+    {
+        scriptAdsFraction = kisak::vr::javelin_lock::ResolveScriptAdsFraction(
+            scriptAdsFraction, true, vrAdsHeld,
+            (v1->client->ps.pm_flags & PMF_SIGHT_AIMING) != 0);
+        G_VR_LogJavelinLockState(v1, scriptAdsFraction, vrAdsHeld);
+        Scr_AddFloat(scriptAdsFraction);
+        return;
+    }
+
     // KISAK_SP_VR_FNG_CAMPAIGN_INPUT_BRIDGE_V72
     // F.N.G. advances from the hip-fire targets by polling playerADS() > 0.5.
     // The physical two-hand detector is sampled on the client/render path and
     // can lead the server-side weapon fraction used by this script method.
     // Expose the same live ADS intent to script only; native weapon state and
     // all keyboard/mouse behavior remain untouched.
-    if (VR_GetCampaignAdsHeld(&vrAdsHeld) &&
+    if (vrAdsAvailable &&
         vrAdsHeld &&
         scriptAdsFraction <= 0.5f)
     {

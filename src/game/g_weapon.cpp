@@ -15,6 +15,7 @@
 #include "g_main.h"
 #include "g_local.h"
 #include "vr/vr_openxr.h"
+#include "vr/vr_scope_aim_math.h"
 #endif
 
 
@@ -553,12 +554,10 @@ static bool VR_ConvergePhysicalSniperShot(
     }
 
     float convergedForward[3] = {};
-    Vec3Sub(
-        convergenceTarget,
-        wp->muzzleTrace,
-        convergedForward);
-
-    if (Vec3Normalize(convergedForward) <= 0.0001f)
+    if (!kisak::vr::scope_aim::BuildConvergedForward(
+            wp->muzzleTrace,
+            convergenceTarget,
+            convergedForward))
     {
         return false;
     }

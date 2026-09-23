@@ -324,9 +324,8 @@ int  R_SkinSceneDObjModels(
     }
 
     uint32_t totalSurfSize = ((char *)surfPos - (char *)surfsBuffer);
-    uint32_t startSurfPos = InterlockedExchangeAdd(&frontEndDataOut->surfPos, totalSurfSize);
-
-    if (startSurfPos + totalSurfSize >= 0x20000)
+    uint32_t startSurfPos = 0;
+    if (!R_ReserveSceneSurfBytes(totalSurfSize, &startSurfPos))
     {
         R_WarnOncePerFrame(R_WARN_MAX_SCENE_SURFS_SIZE);
         return 0;

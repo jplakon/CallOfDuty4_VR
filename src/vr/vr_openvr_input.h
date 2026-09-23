@@ -88,6 +88,14 @@ bool UsesMissionSelector(
     Source modifier,
     Source selectionAxis);
 
+// Locomotion belongs to an armed movement-selector chord, never merely to
+// an unrelated action that happens to use the same physical modifier button.
+bool MissionSelectorClaimsMovement(
+    const Binding& binding,
+    Source modifier,
+    Source selectionAxis,
+    const OpenVrMissionSelectorUpdate& update);
+
 OpenVrMissionSelectorUpdate UpdateOpenVrMissionSelector(
     OpenVrMissionSelectorState* state,
     bool modifierAvailable,
@@ -96,7 +104,8 @@ OpenVrMissionSelectorUpdate UpdateOpenVrMissionSelector(
     bool selectionAxisActive,
     OpenVrVector2 cancelAxis,
     bool cancelAxisActive,
-    float neutralThreshold = 0.20f);
+    float neutralThreshold = 0.20f,
+    bool allowArming = true);
 
 std::string OpenVrHandDescription(const OpenVrHandState& state);
 

@@ -6,6 +6,7 @@
 #include "vr/vr_openxr.h"
 #include "vr/vr_input_bindings.h"
 #include "vr/vr_interactions.h"
+#include "vr/vr_grenade_command_edges.h"
 
 void __cdecl CG_NextWeapon_f();
 #include <qcommon/mem_track.h>
@@ -38,6 +39,38 @@ static bool vrStanceHoldConsumed = false;
 static int vrStancePressTime = 0;
 static StanceState vrStancePressPosition =
     CL_STANCE_STAND;
+static kisak::vr::grenade_commands::State vrFragCommandState;
+static kisak::vr::grenade_commands::State vrTacticalCommandState;
+
+static void CL_ResetVrGrenadeCommandNotifications()
+{
+    kisak::vr::grenade_commands::Reset(&vrFragCommandState);
+    kisak::vr::grenade_commands::Reset(&vrTacticalCommandState);
+}
+
+static void CL_NotifyVrGrenadeCommandEdges(
+    kisak::vr::grenade_commands::State* state,
+    const bool gameplayAvailable,
+    const bool virtualHeld,
+    const bool nativeHeld,
+    const char* downCommand,
+    const char* upCommand)
+{
+    const auto edges = kisak::vr::grenade_commands::Update(
+        state, gameplayAvailable, virtualHeld, nativeHeld);
+    const char* command = edges.pressed ? downCommand
+        : edges.released ? upCommand : nullptr;
+    if (command != nullptr)
+    {
+        const int matched = Cmd_NotifyVirtualCommand(command);
+        if (matched > 0 || VR_VerboseDiagnosticsEnabled())
+        {
+            Com_Printf(0,
+                "[VR][GRENADE] Virtual %s input edge matched %d script listener(s).\n",
+                command, matched);
+        }
+    }
+}
 
 #define KEY_LEFT 0
 #define KEY_RIGHT 1
@@ -1533,10 +1566,17 @@ int __cdecl CG_HandleLocationSelectionInput(int localClientNum, usercmd_s *cmd)
 void __cdecl CL_CreateCmd(usercmd_s *result)
 {
     float oldAngles; // fp31
+    bool vrFragCommandHeld = false;
+    bool vrTacticalCommandHeld = false;
 
     oldAngles = clients[0].viewangles[0];
     CL_AdjustAngles();
     memset(result, 0, sizeof(usercmd_s));
+    // Publish even when map/location selection consumes this command. Runtime
+    // polling must not retain the last active-gameplay snapshot behind UI.
+    VR_SetPoseAdsGameplayState(
+        !Key_IsCatcherActive(0, 0x3b),
+        (cgArray[0].predictedPlayerState.pm_flags & PMF_SPRINTING) != 0);
     if (!Key_IsCatcherActive(0, 8) || !(unsigned __int8)CG_HandleLocationSelectionInput(0, result))
     {
         CL_CmdButtons(result);
@@ -1608,6 +1648,18 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
             }
         }
 
+        // KISAK_SP_VR_GRENADE_THROWBACK_PROMPT_PRIORITY_V120
+        // COD4 exposes grenade return as a distinct native +throw bit.  The
+        // portable default intentionally shares the dominant primary button
+        // with reload, so only claim that button for +throw while the native
+        // enemy-grenade prompt is active.  Outside the prompt it remains an
+        // ordinary reload/magazine-eject press.
+        bool vrThrowBackHeld = false;
+        VR_GetThrowBackButton(&vrThrowBackHeld);
+        const bool vrThrowBackPromptActive =
+            cgArray[0].predictedPlayerState.throwBackGrenadeOwner !=
+                ENTITYNUM_NONE;
+
         if (VR_GetBasicGameplayButtons(
                 &vrAdsHeld,
                 &vrJumpHeld,
@@ -1632,7 +1684,8 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
                     BUTTON_USE;
             }
 
-            if (vrReloadHeld)
+            if (vrReloadHeld &&
+                !(vrThrowBackPromptActive && vrThrowBackHeld))
             {
                 result->buttons |=
                     BUTTON_RELOAD;
@@ -1650,6 +1703,35 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
                 loggedVrBasicButtons = true;
             }
         }
+
+        if (vrThrowBackPromptActive &&
+            vrThrowBackHeld)
+        {
+            result->buttons |= BUTTON_THROW;
+
+            static bool loggedVrThrowBack = false;
+            if (!loggedVrThrowBack)
+            {
+                Com_Printf(
+                    0,
+                    "[VR][INPUT] Routed the configured grenade "
+                    "throw-back action to COD4's native +throw bit.\n");
+                loggedVrThrowBack = true;
+            }
+        }
+
+        static bool vrThrowBackPromptWasActive = false;
+        if (vrThrowBackPromptActive &&
+            !vrThrowBackPromptWasActive &&
+            VR_VerboseDiagnosticsEnabled())
+        {
+            Com_Printf(
+                0,
+                "[VR][INPUT] Native enemy-grenade throw-back prompt "
+                "is active; the configured throw-back control now "
+                "takes priority over reload.\n");
+        }
+        vrThrowBackPromptWasActive = vrThrowBackPromptActive;
 
         // KISAK_SP_VR_FNG_NATIVE_ADS_COMMAND_BRIDGE_V73
         // F.N.G.'s post-hip-fire transition is driven by the same native ADS
@@ -1700,6 +1782,13 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
                 vrAdsUpCommand);
 
             vrAdsNativeCommandHeld = false;
+            // CL_KeyMove ran before the synthetic key was released. Refresh
+            // its ADS bit now, preserving real held/toggled ADS, so one stale
+            // automatic-ADS packet cannot cancel this same sprint press.
+            if (kb[KEY_SPEED].active != CL_GetLocalClientGlobals(0)->usingAds)
+                result->buttons |= BUTTON_ADS;
+            else
+                result->buttons &= ~BUTTON_ADS;
         }
 
         // KISAK_SP_VR_SCRIPTED_JUMP_BRIDGE_V1
@@ -1983,6 +2072,9 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
             &vrManualFragHeld,
             &vrManualTacticalHeld);
 
+        vrFragCommandHeld = vrManualFragHeld;
+        vrTacticalCommandHeld = vrManualTacticalHeld;
+
         if (vrManualFragHeld)
         {
             result->buttons |= BUTTON_FRAG;
@@ -2001,6 +2093,7 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
             vrNativeOffhandHeld)
         {
             result->buttons |= BUTTON_SMOKE;
+            vrTacticalCommandHeld = true;
 
             static bool loggedVrTacticalGrenade = false;
 
@@ -2072,6 +2165,7 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
             {
                 result->buttons |=
                     BUTTON_FRAG;
+                vrFragCommandHeld = true;
 
                 static bool loggedVrFragHold = false;
 
@@ -2479,6 +2573,20 @@ void __cdecl CL_CreateCmd(usercmd_s *result)
         vrScriptAttackWasApplied = false;
     }
 
+    // KISAK_SP_VR_GRENADE_SCRIPT_COMMAND_EDGES_V124
+    // F.N.G. keyHint waits on +frag/+smoke; its friendly-fire monitor also
+    // listens for -smoke. Button bits alone do not notify these listeners.
+    // Preserve their native press/release timing without synthetic kbutton
+    // writes. The actual course still requires grenade_fire/projectile hits.
+    const bool vrGrenadeGameplayAvailable =
+        !Key_IsCatcherActive(0, 0x3b);
+    CL_NotifyVrGrenadeCommandEdges(&vrFragCommandState,
+        vrGrenadeGameplayAvailable, vrFragCommandHeld,
+        kb[KEY_FRAG].active, "+frag", "-frag");
+    CL_NotifyVrGrenadeCommandEdges(&vrTacticalCommandState,
+        vrGrenadeGameplayAvailable, vrTacticalCommandHeld,
+        kb[KEY_SMOKE].active, "+smoke", "-smoke");
+
     CL_FinishMove(result);
 }
 
@@ -2617,15 +2725,24 @@ void __cdecl CL_Input(int localClientNum)
         IN_Frame();
         if (CL_AllowInput())
             CL_CreateNewCommands();
+        else
+        {
+            VR_SetPoseAdsGameplayState(false, false);
+            CL_ResetVrGrenadeCommandNotifications();
+        }
     }
     else
     {
         PausedModelPreviewerGamepad();
+        VR_SetPoseAdsGameplayState(false, false);
+        CL_ResetVrGrenadeCommandNotifications();
     }
 }
 
 void __cdecl CL_ShutdownInput()
 {
+    VR_SetPoseAdsGameplayState(false, false);
+    CL_ResetVrGrenadeCommandNotifications();
     Cmd_RemoveCommand("mouseMove");
     Cmd_RemoveCommand("remoteKey");
     Cmd_RemoveCommand("centerview");
@@ -2704,6 +2821,7 @@ void __cdecl CL_ShutdownInput()
 void __cdecl CL_ClearKeys(int localClientNum)
 {
     memset(kb, 0, sizeof(kb));
+    CL_ResetVrGrenadeCommandNotifications();
 }
 
 void IN_MLookUp()
