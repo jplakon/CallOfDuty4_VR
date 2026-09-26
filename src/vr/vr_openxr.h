@@ -492,9 +492,23 @@ bool VR_ApplyOffhandControllerHaptic(
     float durationSeconds);
 
 
-// Publishes and retrieves the latest transformed viewmodel tag_flash world
-// position. The client render path publishes it every frame; the local
-// listen-server weapon path consumes it for authoritative bullet origins.
+// Publishes the complete tag_flash pose from the transformed viewmodel. The
+// client render path publishes it once per frame; the local listen-server and
+// the VR HUD consume the same atomic snapshot so a bullet cannot combine one
+// frame's muzzle position with another frame's direction.
+void VR_PublishRightControllerWeaponFirePose(
+    const float muzzleOrigin[3],
+    const float muzzleAxis[3][3]);
+
+// Retrieves the complete physical weapon fire pose and the configured Attack
+// state under one lock. muzzleAxis[0] is the exact tag_flash forward vector.
+bool VR_GetRightControllerWeaponFirePose(
+    float muzzleOrigin[3],
+    float muzzleAxis[3][3],
+    bool* attackPressed);
+
+// Legacy position-only compatibility API. New firearm paths must use the
+// complete fire-pose API above.
 void VR_PublishRightControllerWeaponMuzzleWorld(
     const float muzzleOrigin[3]);
 

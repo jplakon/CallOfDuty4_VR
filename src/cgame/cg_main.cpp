@@ -85,6 +85,10 @@ const dvar_t *cg_draw2D;
 const dvar_t *cg_gun_x;
 const dvar_t *hud_showStance;
 const dvar_t *cg_crosshairAlpha;
+const dvar_t *vr_crosshairEnabled;
+const dvar_t *vr_crosshairSize;
+const dvar_t *vr_crosshairThickness;
+const dvar_t *vr_crosshairGap;
 const dvar_t *cg_laserLightRadius;
 const dvar_t *hud_missionFailed;
 const dvar_t *cg_objectiveListWrapCountWidescreen;
@@ -348,6 +352,32 @@ void CG_RegisterDvars()
     cg_crosshairAlpha = Dvar_RegisterFloat("cg_crosshairAlpha", 1.0, 0.0, 1.0, DVAR_CHEAT | DVAR_ARCHIVE, "The alpha value of the crosshair");
     cg_crosshairAlphaMin = Dvar_RegisterFloat("cg_crosshairAlphaMin", 0.5, 0.0, 1.0, DVAR_CHEAT | DVAR_ARCHIVE,
         "The minimum alpha value of the crosshair when it fades in");
+    vr_crosshairEnabled = Dvar_RegisterBool(
+        "vr_crosshairEnabled",
+        false,
+        DVAR_ARCHIVE,
+        "Draw the simple hip-fire crosshair while VR is active");
+    vr_crosshairSize = Dvar_RegisterFloat(
+        "vr_crosshairSize",
+        10.0f,
+        2.0f,
+        64.0f,
+        DVAR_ARCHIVE,
+        "Half-length of each VR hip-fire crosshair axis in HUD units");
+    vr_crosshairThickness = Dvar_RegisterFloat(
+        "vr_crosshairThickness",
+        2.0f,
+        0.5f,
+        10.0f,
+        DVAR_ARCHIVE,
+        "Line thickness of the VR hip-fire crosshair in HUD units");
+    vr_crosshairGap = Dvar_RegisterFloat(
+        "vr_crosshairGap",
+        3.0f,
+        0.0f,
+        32.0f,
+        DVAR_ARCHIVE,
+        "Gap around the centre of the VR hip-fire crosshair in HUD units");
     cg_crosshairDynamic = Dvar_RegisterBool("cg_crosshairDynamic", 0, 0x81u, "Crosshair is Dynamic");
     cg_crosshairEnemyColor = Dvar_RegisterBool(
         "cg_crosshairEnemyColor",
